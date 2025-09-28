@@ -2,14 +2,14 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 
 // ---------------------------------------------
-// Rock–Paper–Scissors — Google Doodle–style demo
+// Rock-Paper-Scissors Google Doodle-style demo
 // Single-file React app implementing ModeSelect full-graphic morph
-// + Ensemble AI (Hedge) with Practice → Calibrate → Exploit flow
+// + Ensemble AI (Hedge) with Practice + Calibrate + Exploit flow
 // Notes:
-// • Emoji/SVG baseline; optional Lottie animations (URL-based) with graceful fallback
-// • Framer Motion handles shared-element scene morph + wipe
-// • WebAudio provides simple SFX; audio starts after first user gesture
-// • Keyboard: 1=Rock, 2=Paper, 3=Scissors, Esc=Back
+// - Emoji/SVG baseline; optional Lottie animations (URL-based) with graceful fallback
+// - Framer Motion handles shared-element scene morph + wipe
+// - WebAudio provides simple SFX; audio starts after first user gesture
+// - Keyboard: 1=Rock, 2=Paper, 3=Scissors, Esc=Back
 // ---------------------------------------------
 
 // Utility: seeded PRNG (Mulberry32)
@@ -31,7 +31,7 @@ const MODES: Mode[] = ["streak","speed","practice"];
 export type PredictorLevel = "off" | "basic" | "smart" | "adaptive"; // legacy knob (kept for compat)
 
 // Icons (emoji fallback)
-const moveEmoji: Record<Move, string> = { rock: "✊", paper: "✋", scissors: "✌️" };
+const moveEmoji: Record<Move, string> = { rock: "\u270A", paper: "\u270B", scissors: "\u270C\uFE0F" };
 
 // ---- Core game logic (pure) ----
 export function resolveOutcome(player: Move, ai: Move): "win" | "lose" | "tie" {
@@ -320,7 +320,10 @@ export default function RPSDoodleApp(){
 
   // Settings
   const prefersReduced = useReducedMotion();
-  const [reducedMotion, setReducedMotion] = useState<boolean>(prefersReduced);
+  const [reducedMotion, setReducedMotion] = useState<boolean>(prefersReduced ?? false);
+  useEffect(() => {
+    setReducedMotion(prefersReduced ?? false);
+  }, [prefersReduced]);
   const [audioOn, setAudioOn] = useState(true);
   const [textScale, setTextScale] = useState(1);
   const [predictorMode, setPredictorMode] = useState(false); // master enable for AI mix
@@ -521,10 +524,10 @@ export default function RPSDoodleApp(){
 
   // ---- DEV SELF-TESTS (run once in dev) ----
   useEffect(()=>{
-    if (typeof process !== "undefined" && process.env && process.env.NODE_ENV === "production") return;
+    if (import.meta.env.PROD) return;
     console.groupCollapsed("RPS self-tests");
     const cases: [Move,Move,string][] = [["rock","rock","tie"],["rock","paper","lose"],["rock","scissors","win"],["paper","rock","win"],["paper","paper","tie"],["paper","scissors","lose"],["scissors","rock","lose"],["scissors","paper","win"],["scissors","scissors","tie"]];
-    for (const [p,a,exp] of cases){ console.assert(resolveOutcome(p,a)===exp, `resolveOutcome(${p},${a}) ≠ ${exp}`); }
+    for (const [p,a,exp] of cases){ console.assert(resolveOutcome(p,a)===exp, `resolveOutcome(${p},${a}) !== ${exp}`); }
     console.assert(mostFrequentMove(["rock","rock","paper"]) === "rock", "mostFrequentMove failed");
     console.assert(mostFrequentMove([]) === null, "mostFrequentMove empty failed");
     console.assert(counterMove("rock") === "paper" && counterMove("paper") === "scissors" && counterMove("scissors") === "rock", "counterMove failed");
@@ -612,10 +615,10 @@ export default function RPSDoodleApp(){
           <motion.div key="boot" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }} className="grid place-items-center min-h-screen">
             <div className="flex flex-col items-center gap-4">
               <motion.div initial={{ scale: .95 }} animate={{ scale: 1.05 }} transition={{ repeat: Infinity, repeatType: "reverse", duration: .9 }} className="text-4xl">
-                {lottieOn && lottieSrc.robotIdle ? <LottieHand src={lottieSrc.robotIdle} size={80} loop /> : "🤖"}
+                {lottieOn && lottieSrc.robotIdle ? <LottieHand src={lottieSrc.robotIdle} size={80} loop /> : "\uD83E\uDD16"}
               </motion.div>
               <div className="w-48 h-1 bg-slate-200 rounded overflow-hidden"><motion.div initial={{ width: "10%" }} animate={{ width: "100%" }} transition={{ duration: .9, ease: "easeInOut" }} className="h-full bg-sky-500"/></div>
-              <div className="text-slate-500 text-sm">Booting…</div>
+              <div className="text-slate-500 text-sm">Booting...</div>
             </div>
           </motion.div>
         )}
@@ -636,7 +639,7 @@ export default function RPSDoodleApp(){
                 <motion.div key="fs" className={`fullscreen ${selectedMode}`} layoutId={`card-${selectedMode}`} initial={{ borderRadius: 16 }} animate={{ borderRadius: 0, transition: { duration: 0.44, ease: [0.22,0.61,0.36,1] }}}>
                   <div className="absolute inset-0 grid place-items-center">
                     {lottieOn && lottieSrc[`select_${selectedMode}`] ? (<LottieHand src={lottieSrc[`select_${selectedMode}`]} size={320} />) : (
-                      <motion.div initial={{ scale: .9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: .36 }} className="text-7xl">{selectedMode === 'streak' ? '⚡' : selectedMode === 'speed' ? '⏱️' : '💡'}</motion.div>
+                      <motion.div initial={{ scale: .9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: .36 }} className="text-7xl">{selectedMode === 'streak' ? 'Streak' : selectedMode === 'speed' ? 'Speed' : 'Practice'}</motion.div>
                     )}
                   </div>
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: .74, duration: .28 }} className="absolute bottom-10 left-0 right-0 text-center text-white text-3xl font-black drop-shadow">{modeLabel(selectedMode)}</motion.div>
@@ -772,7 +775,7 @@ export default function RPSDoodleApp(){
       {/* Footer robot idle (personality beat) */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: .4 }} className="fixed bottom-3 right-3 bg-white/70 rounded-2xl shadow px-3 py-2 flex items-center gap-2">
         <motion.span animate={{ y: [0,-1,0] }} transition={{ repeat: Infinity, duration: 2.6, ease: "easeInOut" }}>
-          {lottieOn && lottieSrc.robotIdle ? (<LottieHand src={lottieSrc.robotIdle} size={28} loop />) : (<span>🤖</span>)}
+          {lottieOn && lottieSrc.robotIdle ? (<LottieHand src={lottieSrc.robotIdle} size={28} loop />) : (<span>\uD83E\uDD16</span>)}
         </motion.span>
         <span className="text-sm text-slate-700">Ready!</span>
       </motion.div>
