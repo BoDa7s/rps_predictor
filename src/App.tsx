@@ -6,7 +6,7 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 // Single-file React app implementing ModeSelect full-graphic morph
 // + Ensemble AI (Hedge) with Practice + Calibrate + Exploit flow
 // Notes:
-// - Emoji/SVG baseline; optional Lottie animations (URL-based) with graceful fallback
+// - Emoji-based visuals throughout; no external animation URLs required
 // - Framer Motion handles shared-element scene morph + wipe
 // - WebAudio provides simple SFX; audio starts after first user gesture
 // - Keyboard: 1=Rock, 2=Paper, 3=Scissors, Esc=Back
@@ -24,10 +24,10 @@ function mulberry32(a:number){
 
 // Types
 export type Move = "rock" | "paper" | "scissors";
-export type Mode = "streak" | "speed" | "practice";
+export type Mode = "speed" | "practice";
 export type AIMode = "fair" | "normal" | "ruthless";
 const MOVES: Move[] = ["rock", "paper", "scissors"];
-const MODES: Mode[] = ["streak","speed","practice"];
+const MODES: Mode[] = ["speed","practice"];
 export type PredictorLevel = "off" | "basic" | "smart" | "adaptive"; // legacy knob (kept for compat)
 
 // Icons (emoji fallback)
@@ -268,26 +268,17 @@ function Confetti({count=18}:{count?:number}){
   )
 }
 
-// Lottie wrapper (dynamic import; failsafe to null)
-function LottieHand({ src, size=96, loop=false }:{ src?:string, size?:number, loop?:boolean }){
-  const [Player, setPlayer] = useState<any>(null);
-  useEffect(()=>{ let mounted = true; import("@lottiefiles/react-lottie-player").then(mod=>{ if(mounted) setPlayer(()=>mod.Player); }).catch(()=>{}); return ()=>{ mounted = false }; },[]);
-  if (!src || !Player) return null;
-  return <Player autoplay keepLastFrame={!loop} loop={loop} src={src} style={{ width: size, height: size }} />
-}
-
 // Accessibility live region
 function LiveRegion({message}:{message:string}){ return <div aria-live="polite" className="sr-only" role="status">{message}</div> }
 
 // Mode card component
-function ModeCard({ mode, onSelect, isDimmed }: { mode: Mode, onSelect: (m:Mode)=>void, isDimmed:boolean }){
+function ModeCard({ mode, onSelect, isDimmed, disabled = false }: { mode: Mode, onSelect: (m:Mode)=>void, isDimmed:boolean, disabled?: boolean }){
   const label = mode.charAt(0).toUpperCase()+mode.slice(1);
   return (
-    <motion.button className={`mode-card ${mode} ${isDimmed ? "dim" : ""} bg-white/80 rounded-2xl shadow relative overflow-hidden px-5 py-6 text-left`}
-      layoutId={`card-${mode}`} onClick={()=> onSelect(mode)} whileTap={{ scale: 0.98 }} whileHover={{ y: -4 }} aria-label={`${label} mode`}>
+    <motion.button className={`mode-card ${mode} ${isDimmed ? "dim" : ""} ${disabled ? "opacity-60 cursor-not-allowed" : ""} bg-white/80 rounded-2xl shadow relative overflow-hidden px-5 py-6 text-left`}
+      layoutId={`card-${mode}`} onClick={() => { if (!disabled) onSelect(mode); }} disabled={disabled} whileTap={{ scale: disabled ? 1 : 0.98 }} whileHover={{ y: disabled ? 0 : -4 }} aria-label={`${label} mode`}>
       <div className="text-lg font-bold text-slate-800">{label}</div>
       <div className="text-sm text-slate-600 mt-1">
-        {mode === "streak" && "Win consecutive rounds to build a streak."}
         {mode === "speed" && "Beat the countdown—fast decisions!"}
         {mode === "practice" && "No score; experiment and learn."}
       </div>
@@ -300,13 +291,12 @@ function ModeCard({ mode, onSelect, isDimmed }: { mode: Mode, onSelect: (m:Mode)
 export default function RPSDoodleApp(){
   // Inject brand CSS and wipe animation
   const style = `
-  :root{ --streak:#33EECC; --speed:#FF77AA; --practice:#88AA66; }
-  .mode-grid{ display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:12px; width:min(92vw,720px); }
+  :root{ --speed:#FF77AA; --practice:#88AA66; }
+  .mode-grid{ display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:12px; width:min(92vw,640px); }
   .mode-card.dim{ filter: blur(2px) brightness(.85); }
   .ink-pop{ position:absolute; inset:0; background: radial-gradient(600px circle at var(--x,50%) var(--y,50%), rgba(255,255,255,.6), transparent 40%); opacity:0; transition:opacity .22s; }
   .mode-card:active .ink-pop{ opacity:1; }
   .fullscreen{ position:fixed; inset:0; z-index:50; will-change:transform; }
-  .fullscreen.streak{ background: var(--streak); }
   .fullscreen.speed{ background: var(--speed); }
   .fullscreen.practice{ background: var(--practice); }
   .wipe{ position:fixed; inset:0; pointer-events:none; z-index:60; transform:translateX(110%); will-change:transform; background:linear-gradient(12deg, rgba(255,255,255,.9), rgba(255,255,255,1)); }
@@ -329,10 +319,39 @@ export default function RPSDoodleApp(){
   const [predictorMode, setPredictorMode] = useState(false); // master enable for AI mix
   const [aiMode, setAiMode] = useState<AIMode>("normal"); // Fair/Normal/Ruthless
   const [predictorLevel, setPredictorLevel] = useState<PredictorLevel>("smart"); // legacy knob
-  const [lottieOn, setLottieOn] = useState<boolean>(true);
-  const [lottieSrc, setLottieSrc] = useState<Record<string,string>>({ rock: "", paper: "", scissors: "", robotIdle: "", select_streak: "", select_speed: "", select_practice: "" });
+  const TRAIN_ROUNDS = 15;
+  const TRAIN_KEY = "rps_trained";
+  const TRAIN_COUNT_KEY = "rps_training_count";
+  const [isTrained, setIsTrained] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem(TRAIN_KEY) === "1";
+  });
+  const [trainingCount, setTrainingCount] = useState<number>(() => {
+    if (typeof window === "undefined") return 0;
+    const stored = parseInt(localStorage.getItem(TRAIN_COUNT_KEY) ?? "0", 10);
+    if (Number.isNaN(stored)) return 0;
+    return Math.min(Math.max(stored, 0), TRAIN_ROUNDS);
+  });
+  const [trainingActive, setTrainingActive] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    const trained = localStorage.getItem(TRAIN_KEY) === "1";
+    if (trained) return false;
+    const stored = parseInt(localStorage.getItem(TRAIN_COUNT_KEY) ?? "0", 10);
+    if (Number.isNaN(stored)) return false;
+    return stored > 0 && stored < TRAIN_ROUNDS;
+  });
 
   // Game state
+  const trainingComplete = trainingCount >= TRAIN_ROUNDS;
+  const needsTraining = !isTrained && !trainingComplete;
+  const shouldAutoResumeTraining = needsTraining && trainingActive;
+  const shouldGateTraining = needsTraining && !trainingActive;
+  const bootNeedsTraining = useRef(needsTraining);
+  const bootAutoResumeTraining = useRef(shouldAutoResumeTraining);
+  const bootInitialTrainingActive = useRef(trainingActive);
+  const modesDisabled = trainingActive || needsTraining;
+  const trainingDisplayCount = Math.min(trainingCount, TRAIN_ROUNDS);
+  const trainingProgress = Math.min(trainingDisplayCount / TRAIN_ROUNDS, 1);
   const [seed] = useState(()=>Math.floor(Math.random()*1e9));
   const rng = useMemo(()=>mulberry32(seed), [seed]);
   const [bestOf, setBestOf] = useState<3|5|7>(5);
@@ -354,6 +373,7 @@ export default function RPSDoodleApp(){
   const [live, setLive] = useState("");
   // countdown timer ref + helpers (prevents stale closure freezes)
   const countdownRef = useRef<number | null>(null);
+  const trainingAnnouncementsRef = useRef<Set<number>>(new Set());
   const clearCountdown = ()=>{ if (countdownRef.current!==null){ clearInterval(countdownRef.current); countdownRef.current=null; } };
   const startCountdown = ()=>{ setPhase("countdown"); setCount(3); clearCountdown(); countdownRef.current = window.setInterval(()=>{ setCount(prev=>{ const next = prev - 1; audio.tick(); if (!reducedMotion) tryVibrate(6); if (next <= 0){ clearCountdown(); reveal(); } return next; }); }, 300); };
 
@@ -365,28 +385,58 @@ export default function RPSDoodleApp(){
   // Calibration overlay (Practice → Calibrate)
   const [showCal, setShowCal] = useState(false);
   const [calText, setCalText] = useState<string>("");
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem(TRAIN_KEY, isTrained ? "1" : "0");
+  }, [isTrained]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const value = Math.min(trainingCount, TRAIN_ROUNDS);
+    localStorage.setItem(TRAIN_COUNT_KEY, String(value));
+  }, [trainingCount]);
+
+  useEffect(() => {
+    if (!needsTraining && !trainingActive) return;
+    if (predictorMode) setPredictorMode(false);
+    if (aiMode !== "fair") setAiMode("fair");
+  }, [needsTraining, trainingActive, predictorMode, aiMode]);
 
   // Create audio context on first interaction
   const armedRef = useRef(false);
   const armAudio = () => { if (!armedRef.current){ audio.ensureCtx(); audio.setEnabled(audioOn); armedRef.current = true; } };
   useEffect(()=>{ audio.setEnabled(audioOn); }, [audioOn]);
 
-  // Boot → Mode animation
-  useEffect(()=>{ const t = setTimeout(()=> setScene("MODE"), 900); return ()=> clearTimeout(t); },[]);
+  // Boot → initial scene routing
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (bootNeedsTraining.current) {
+        startMatch("practice", { silent: true });
+        if (!bootInitialTrainingActive.current && bootAutoResumeTraining.current) {
+          setTrainingActive(true);
+        }
+      } else {
+        setScene("MODE");
+      }
+    }, 900);
+    return () => clearTimeout(t);
+  }, []);
 
   // Keyboard controls for MATCH
-  useEffect(()=>{
-    const onKey = (e: KeyboardEvent)=>{
-      if (scene === "MATCH" && phase === "idle"){
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (scene === "MATCH" && phase === "idle" && !shouldGateTraining) {
         if (e.key === "1") onSelect("rock");
         if (e.key === "2") onSelect("paper");
         if (e.key === "3") onSelect("scissors");
       }
-      if (e.key === "Escape"){ if (scene === "MATCH") goToMode(); }
+      if (e.key === "Escape") {
+        if (scene === "MATCH" && !trainingActive && !needsTraining) goToMode();
+      }
     };
     window.addEventListener("keydown", onKey);
-    return ()=> window.removeEventListener("keydown", onKey);
-  },[scene, phase]);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [scene, phase, shouldGateTraining, trainingActive, needsTraining]);
 
   // Mixer setup (once)
   const mixerRef = useRef<HedgeMixer | null>(null);
@@ -424,7 +474,7 @@ export default function RPSDoodleApp(){
 
   function aiChoose(): Move {
     // Practice mode uses soft/none exploit unless user enabled predictorMode
-    const useMix = predictorMode && aiMode !== "fair";
+    const useMix = isTrained && !trainingActive && predictorMode && aiMode !== "fair";
     if (!useMix || lastMoves.length === 0){
       // fallback to light heuristics until we have signal
       const { move: predicted, conf } = predictNext(lastMoves, rng);
@@ -442,7 +492,37 @@ export default function RPSDoodleApp(){
     setPhase("idle"); setResultBanner(null);
   }
 
-  function startMatch(){ armAudio(); audio.whoosh(); resetMatch(); setScene("MATCH"); }
+  function startMatch(mode?: Mode, opts: { silent?: boolean } = {}){
+    const { silent = false } = opts;
+    if (!silent) {
+      armAudio();
+      audio.whoosh();
+    }
+    resetMatch();
+    if (mode) setSelectedMode(mode);
+    setScene("MATCH");
+  }
+
+  function resetTraining(){
+    if (typeof window !== "undefined") {
+      localStorage.setItem(TRAIN_KEY, "0");
+      localStorage.setItem(TRAIN_COUNT_KEY, "0");
+    }
+    trainingAnnouncementsRef.current.clear();
+    setShowCal(false);
+    setIsTrained(false);
+    setPredictorMode(false);
+    setAiMode("fair");
+    setTrainingCount(0);
+    setTrainingActive(false);
+    startMatch("practice", { silent: true });
+  }
+
+  function beginTrainingSession(){
+    setSelectedMode('practice');
+    resetMatch();
+    setTrainingActive(true);
+  }
 
   function onSelect(m: Move){ if (phase !== "idle") return; setPlayerPick(m); setPhase("selected"); setLive(`You selected ${m}.`); audio.pop(); setTimeout(startCountdown, 140); }
 
@@ -457,12 +537,42 @@ export default function RPSDoodleApp(){
       setOutcomesHist(o=>[...o, res]);
       setLive(`AI chose ${ai}. ${res === 'win' ? 'You win this round.' : res === 'lose' ? 'You lose this round.' : 'Tie.'}`);
       if (res === "win") audio.thud(); else if (res === "lose") audio.snare(); else audio.tie();
-      setTimeout(()=>{ setPhase("feedback"); setLastMoves(prev=>[...prev, player]); }, 150);
+      setTimeout(()=>{ if (trainingActive) setTrainingCount(count=> Math.min(TRAIN_ROUNDS, count + 1)); setPhase("feedback"); setLastMoves(prev=>[...prev, player]); }, 150);
     }, 240);
   }
 
   // Commit score once when outcome resolved
-  useEffect(()=>{ if (phase !== "resolve" || outcome == null) return; if (outcome === "win") setPlayerScore(s=>s+1); if (outcome === "lose") setAiScore(s=>s+1); }, [phase, outcome]);
+  useEffect(() => {
+    if (phase !== "resolve" || outcome == null) return;
+    if (trainingActive) return;
+    if (outcome === "win") setPlayerScore(s => s + 1);
+    if (outcome === "lose") setAiScore(s => s + 1);
+  }, [phase, outcome, trainingActive]);
+
+  // Training progress announcements + completion
+  useEffect(() => {
+    if (!trainingActive) {
+      if (!needsTraining) trainingAnnouncementsRef.current.clear();
+      return;
+    }
+    const progress = Math.min(trainingCount / TRAIN_ROUNDS, 1);
+    const thresholds = [0.25, 0.5, 0.75, 1];
+    thresholds.forEach(threshold => {
+      if (progress >= threshold && !trainingAnnouncementsRef.current.has(threshold)) {
+        trainingAnnouncementsRef.current.add(threshold);
+        setLive(`AI training ${Math.round(threshold * 100)} percent complete.`);
+      }
+    });
+  }, [trainingActive, trainingCount, needsTraining]);
+
+  useEffect(() => {
+    if (!trainingActive) return;
+    if (trainingCount < TRAIN_ROUNDS) return;
+    setTrainingActive(false);
+    if (!isTrained) setIsTrained(true);
+    trainingAnnouncementsRef.current.clear();
+    computeCalibration();
+  }, [trainingActive, trainingCount, isTrained]);
 
   // Failsafes: if something stalls, advance automatically
   useEffect(()=>{ if (phase === "selected"){ const t = setTimeout(()=>{ if (phase === "selected") startCountdown(); }, 500); return ()=> clearTimeout(t); } }, [phase]);
@@ -470,21 +580,37 @@ export default function RPSDoodleApp(){
   useEffect(()=>{ return ()=> clearCountdown(); },[]);
 
   // Next round or end match
-  useEffect(()=>{
+  useEffect(() => {
     if (phase !== "feedback") return;
-    const totalNeeded = Math.ceil(bestOf/2);
-    const someoneWon = playerScore >= totalNeeded || aiScore >= totalNeeded;
-    const t = setTimeout(()=>{
-      if (someoneWon){
+    const delay = trainingActive ? 260 : (reducedMotion ? 300 : 520);
+    const t = setTimeout(() => {
+      if (trainingActive) {
+        setRound(r => r + 1);
+        setPlayerPick(undefined);
+        setAiPick(undefined);
+        setOutcome(undefined);
+        setPhase("idle");
+        return;
+      }
+      const totalNeeded = Math.ceil(bestOf / 2);
+      const someoneWon = playerScore >= totalNeeded || aiScore >= totalNeeded;
+      if (someoneWon) {
         const banner = playerScore > aiScore ? "Victory" : playerScore < aiScore ? "Defeat" : "Tie";
         setResultBanner(banner);
-        if (banner === "Victory") audio.win(); else if (banner === "Defeat") audio.lose(); else audio.tie();
-        setScene("RESULTS"); return;
+        if (banner === "Victory") audio.win();
+        else if (banner === "Defeat") audio.lose();
+        else audio.tie();
+        setScene("RESULTS");
+        return;
       }
-      setRound(r=>r+1); setPlayerPick(undefined); setAiPick(undefined); setOutcome(undefined); setPhase("idle");
-    }, reducedMotion ? 300 : 520);
-    return ()=> clearTimeout(t);
-  }, [phase, playerScore, aiScore, bestOf, reducedMotion]);
+      setRound(r => r + 1);
+      setPlayerPick(undefined);
+      setAiPick(undefined);
+      setOutcome(undefined);
+      setPhase("idle");
+    }, delay);
+    return () => clearTimeout(t);
+  }, [phase, trainingActive, playerScore, aiScore, bestOf, reducedMotion]);
 
   // Helpers
   function tryVibrate(ms:number){ if ((navigator as any).vibrate) (navigator as any).vibrate(ms); }
@@ -494,7 +620,7 @@ export default function RPSDoodleApp(){
   const addT = (fn:()=>void, ms:number)=>{ const id = window.setTimeout(fn, ms); timersRef.current.push(id); return id; };
   const clearTimers = ()=>{ timersRef.current.forEach(id=> clearTimeout(id)); timersRef.current = []; };
   function goToMode(){ clearCountdown(); clearTimers(); setWipeRun(false); setSelectedMode(null); setScene("MODE"); }
-  function goToMatch(){ clearTimers(); startMatch(); }
+  function goToMatch(){ clearTimers(); startMatch(selectedMode ?? "practice"); }
 
   // ---- Practice → Calibrate overlay ----
   function computeCalibration(){
@@ -515,12 +641,13 @@ export default function RPSDoodleApp(){
 
   // ---- Mode selection flow ----
   function handleModeSelect(mode: Mode){
+    if (needsTraining && mode !== "practice") return;
     armAudio(); audio.cardSelect(); setSelectedMode(mode); setLive(`${modeLabel(mode)} mode selected. Loading match.`);
-    if (reducedMotion){ setTimeout(()=>{ startMatch(); }, 200); return; }
+    if (reducedMotion){ setTimeout(()=>{ startMatch(mode); }, 200); return; }
     addT(()=>{ audio.whooshShort(); }, 140); // morph start cue
     const graphicBudget = 1400; addT(()=>{ startSceneWipe(mode); }, graphicBudget);
   }
-  function startSceneWipe(_mode: Mode){ setWipeRun(true); audio.crossFadeMusic(0.3); addT(()=>{ setWipeRun(false); goToMatch(); }, 400); }
+  function startSceneWipe(mode: Mode){ setWipeRun(true); audio.crossFadeMusic(0.3); addT(()=>{ setWipeRun(false); startMatch(mode); }, 400); }
 
   // ---- DEV SELF-TESTS (run once in dev) ----
   useEffect(()=>{
@@ -561,7 +688,7 @@ export default function RPSDoodleApp(){
       <div className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between">
         <motion.h1 layout className="text-2xl font-extrabold tracking-tight text-sky-700 drop-shadow-sm">RPS Lab</motion.h1>
         <div className="flex items-center gap-2">
-          <button onClick={()=> goToMode()} className="px-3 py-1.5 rounded-xl bg-white/70 hover:bg-white shadow text-sky-900 text-sm">Modes</button>
+          <button onClick={() => goToMode()} disabled={modesDisabled} className={`px-3 py-1.5 rounded-xl shadow text-sm ${modesDisabled ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900"}`}>Modes</button>
           <details className="bg-white/70 rounded-xl shadow group">
             <summary className="list-none px-3 py-1.5 cursor-pointer text-sm text-slate-900">Settings ⚙️</summary>
             <div className="p-3 pt-0 space-y-2 text-sm">
@@ -569,9 +696,9 @@ export default function RPSDoodleApp(){
               <label className="flex items-center justify-between gap-4"><span>Reduced motion</span><input type="checkbox" checked={reducedMotion} onChange={e=> setReducedMotion(e.target.checked)} /></label>
               <label className="flex items-center justify-between gap-4"><span>Text size</span><input type="range" min={0.9} max={1.4} step={0.05} value={textScale} onChange={e=> setTextScale(parseFloat(e.target.value))} /></label>
               <hr className="my-2" />
-              <label className="flex items-center justify-between gap-4"><span>AI Predictor</span><input type="checkbox" checked={predictorMode} onChange={e=> setPredictorMode(e.target.checked)} /></label>
+              <label className="flex items-center justify-between gap-4"><span>AI Predictor</span><input type="checkbox" checked={predictorMode} onChange={e=> setPredictorMode(e.target.checked)} disabled={!isTrained} /></label>
               <label className="flex items-center justify-between gap-4"><span>AI Difficulty</span>
-                <select value={aiMode} onChange={e=> setAiMode(e.target.value as AIMode)} disabled={!predictorMode} className="px-2 py-1 rounded bg-white shadow-inner">
+                <select value={aiMode} onChange={e=> setAiMode(e.target.value as AIMode)} disabled={!isTrained || !predictorMode} className="px-2 py-1 rounded bg-white shadow-inner">
                   <option value="fair">Fair</option>
                   <option value="normal">Normal</option>
                   <option value="ruthless">Ruthless</option>
@@ -585,25 +712,13 @@ export default function RPSDoodleApp(){
                   <option value="adaptive">Adaptive</option>
                 </select>
               </label>
-              <label className="flex items-center justify-between gap-4"><span>Lottie animations</span><input type="checkbox" checked={lottieOn} onChange={e=> setLottieOn(e.target.checked)} /></label>
-              {lottieOn && (
-                <div className="grid grid-cols-1 gap-2">
-                  <label className="flex items-center gap-2"><span className="w-28">Rock hand</span><input className="flex-1 px-2 py-1 rounded border border-slate-200" placeholder="https://...rock.json" value={lottieSrc.rock} onChange={e=> setLottieSrc(s=>({...s, rock: e.target.value}))} /></label>
-                  <label className="flex items-center gap-2"><span className="w-28">Paper hand</span><input className="flex-1 px-2 py-1 rounded border border-slate-200" placeholder="https://...paper.json" value={lottieSrc.paper} onChange={e=> setLottieSrc(s=>({...s, paper: e.target.value}))} /></label>
-                  <label className="flex items-center gap-2"><span className="w-28">Scissors hand</span><input className="flex-1 px-2 py-1 rounded border border-slate-200" placeholder="https://...scissors.json" value={lottieSrc.scissors} onChange={e=> setLottieSrc(s=>({...s, scissors: e.target.value}))} /></label>
-                  <label className="flex items-center gap-2"><span className="w-28">Robot idle</span><input className="flex-1 px-2 py-1 rounded border border-slate-200" placeholder="https://...robot.json" value={lottieSrc.robotIdle} onChange={e=> setLottieSrc(s=>({...s, robotIdle: e.target.value}))} /></label>
-                  <label className="flex items-center gap-2"><span className="w-28">Select: Streak</span><input className="flex-1 px-2 py-1 rounded border border-slate-200" placeholder="/anim/select_streak.json" value={lottieSrc.select_streak} onChange={e=> setLottieSrc(s=>({...s, select_streak: e.target.value}))} /></label>
-                  <label className="flex items-center gap-2"><span className="w-28">Select: Speed</span><input className="flex-1 px-2 py-1 rounded border border-slate-200" placeholder="/anim/select_speed.json" value={lottieSrc.select_speed} onChange={e=> setLottieSrc(s=>({...s, select_speed: e.target.value}))} /></label>
-                  <label className="flex items-center gap-2"><span className="w-28">Select: Practice</span><input className="flex-1 px-2 py-1 rounded border border-slate-200" placeholder="/anim/select_practice.json" value={lottieSrc.select_practice} onChange={e=> setLottieSrc(s=>({...s, select_practice: e.target.value}))} /></label>
-                  <p className="text-[12px] text-slate-500">Paste Lottie JSON URLs (e.g., from lottiefiles.com). Emoji/CSS fallback is used if empty.</p>
-                </div>
-              )}
               <hr className="my-2" />
               <label className="flex items-center justify-between gap-4"><span>Best of</span>
                 <select value={bestOf} onChange={e=> setBestOf(Number(e.target.value) as any)} className="px-2 py-1 rounded bg-white shadow-inner">
                   <option value={3}>3</option><option value={5}>5</option><option value={7}>7</option>
                 </select>
               </label>
+              <button className="px-2 py-1 rounded bg-white shadow" onClick={resetTraining}>Reset AI training</button>
             </div>
           </details>
         </div>
@@ -615,7 +730,7 @@ export default function RPSDoodleApp(){
           <motion.div key="boot" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }} className="grid place-items-center min-h-screen">
             <div className="flex flex-col items-center gap-4">
               <motion.div initial={{ scale: .95 }} animate={{ scale: 1.05 }} transition={{ repeat: Infinity, repeatType: "reverse", duration: .9 }} className="text-4xl">
-                {lottieOn && lottieSrc.robotIdle ? <LottieHand src={lottieSrc.robotIdle} size={80} loop /> : "\uD83E\uDD16"}
+                <span>🤖</span>
               </motion.div>
               <div className="w-48 h-1 bg-slate-200 rounded overflow-hidden"><motion.div initial={{ width: "10%" }} animate={{ width: "100%" }} transition={{ duration: .9, ease: "easeInOut" }} className="h-full bg-sky-500"/></div>
               <div className="text-slate-500 text-sm">Booting...</div>
@@ -629,7 +744,7 @@ export default function RPSDoodleApp(){
             <motion.div layout className="text-4xl font-black text-sky-700">Choose Your Mode</motion.div>
             <div className="mode-grid">
               {MODES.map(m => (
-                <ModeCard key={m} mode={m} onSelect={handleModeSelect} isDimmed={!!selectedMode && selectedMode!==m} />
+                <ModeCard key={m} mode={m} onSelect={handleModeSelect} isDimmed={!!selectedMode && selectedMode!==m} disabled={m === "speed" && needsTraining} />
               ))}
             </div>
 
@@ -638,10 +753,11 @@ export default function RPSDoodleApp(){
               {selectedMode && (
                 <motion.div key="fs" className={`fullscreen ${selectedMode}`} layoutId={`card-${selectedMode}`} initial={{ borderRadius: 16 }} animate={{ borderRadius: 0, transition: { duration: 0.44, ease: [0.22,0.61,0.36,1] }}}>
                   <div className="absolute inset-0 grid place-items-center">
-                    {lottieOn && lottieSrc[`select_${selectedMode}`] ? (<LottieHand src={lottieSrc[`select_${selectedMode}`]} size={320} />) : (
-                      <motion.div initial={{ scale: .9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: .36 }} className="text-7xl">{selectedMode === 'streak' ? 'Streak' : selectedMode === 'speed' ? 'Speed' : 'Practice'}</motion.div>
-                    )}
+                    <motion.div initial={{ scale: .9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: .36 }} className="text-7xl">
+                      {selectedMode === 'speed' ? '⏱️' : '💡'}
+                    </motion.div>
                   </div>
+
                   <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: .74, duration: .28 }} className="absolute bottom-10 left-0 right-0 text-center text-white text-3xl font-black drop-shadow">{modeLabel(selectedMode)}</motion.div>
                 </motion.div>
               )}
@@ -652,20 +768,64 @@ export default function RPSDoodleApp(){
         {/* MATCH */}
         {scene === "MATCH" && (
           <motion.section key="match" initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -20, opacity: 0 }} transition={{ duration: .36 }} className="min-h-screen pt-24 pb-20 flex flex-col items-center">
-            {/* HUD */}
-            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .05 }} className="w-[min(92vw,680px)] flex items-center justify-between bg-white/70 rounded-2xl shadow px-4 py-2">
-              <div className="text-sm text-slate-700">Round <strong>{round}</strong> / Best of {bestOf}</div>
-              <div className="flex items-center gap-6 text-xl">
-                <div className="flex items-center gap-2"><span className="text-slate-500 text-sm">You</span><strong>{playerScore}</strong></div>
-                <div className="flex items-center gap-2"><span className="text-slate-500 text-sm">AI</span><strong>{aiScore}</strong></div>
+            {shouldGateTraining && !showCal && (
+              <div className="fixed inset-0 z-[70] grid place-items-center bg-white/90">
+                <div className="bg-white rounded-2xl shadow-xl p-6 w-[min(92vw,520px)] text-center space-y-4">
+                  <div className="text-2xl font-black">Train the AI</div>
+                  <p className="text-slate-700">We'll learn your patterns in a quick practice ({TRAIN_ROUNDS} rounds).</p>
+                  <button
+                    className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white shadow"
+                    onClick={beginTrainingSession}
+                    aria-label="Start AI training"
+                  >
+                    Start AI training
+                  </button>
+                </div>
               </div>
+            )}
+            {/* HUD */}
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .05 }} className="w-[min(92vw,680px)] bg-white/70 rounded-2xl shadow px-4 py-3">
+              {(needsTraining || trainingActive) ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm text-slate-700">
+                    <span>Training the AI on your moves…</span>
+                    <span>{trainingDisplayCount} / {TRAIN_ROUNDS}</span>
+                  </div>
+                  <div className="h-2 bg-slate-200 rounded">
+                    <div className="h-full bg-sky-500 rounded" style={{ width: `${Math.min(100, trainingProgress * 100)}%` }} />
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-slate-700">Round <strong>{round}</strong> / Best of {bestOf}</div>
+                  <div className="flex items-center gap-6 text-xl">
+                    <div className="flex items-center gap-2"><span className="text-slate-500 text-sm">You</span><strong>{playerScore}</strong></div>
+                    <div className="flex items-center gap-2"><span className="text-slate-500 text-sm">AI</span><strong>{aiScore}</strong></div>
+                  </div>
+                </div>
+              )}
             </motion.div>
 
-            {/* Practice tools */}
+            {trainingActive && (
+              <div className="mt-3 w-[min(92vw,680px)] flex items-center justify-between text-sm text-slate-600">
+                <span>Keep playing to finish training.</span>
+                <span className="text-slate-500">Calibration unlocks at {TRAIN_ROUNDS} rounds.</span>
+              </div>
+            )}
             {selectedMode === 'practice' && (
-              <div className="mt-3 w-[min(92vw,680px)] flex items-center gap-8 text-sm">
-                <button className="px-3 py-1.5 rounded-xl bg-white shadow hover:bg-slate-50" disabled={lastMoves.length<10} onClick={computeCalibration}>Calibrate</button>
-                <div className="text-slate-600">Play ~10+ rounds, then calibrate. Toggle <strong>AI Predictor</strong> + set <strong>AI Difficulty</strong> to switch to exploit.</div>
+              <div className="mt-3 w-[min(92vw,680px)] flex flex-col gap-3 text-sm sm:flex-row sm:items-center sm:gap-8">
+                <button
+                  className="px-3 py-1.5 rounded-xl bg-white shadow hover:bg-slate-50"
+                  disabled={trainingActive || needsTraining || lastMoves.length<10}
+                  onClick={computeCalibration}
+                >
+                  Calibrate
+                </button>
+                <div className="text-slate-600">
+                  {(trainingActive || needsTraining)
+                    ? 'Finish training to unlock calibration statistics.'
+                    : <>Play ~10+ rounds, then calibrate. Toggle <strong>AI Predictor</strong> + set <strong>AI Difficulty</strong> to switch to exploit.</>}
+                </div>
               </div>
             )}
 
@@ -676,7 +836,7 @@ export default function RPSDoodleApp(){
                   <AnimatePresence mode="popLayout">
                     {aiPick && (
                       <motion.div key={aiPick} initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
-                        {lottieOn && lottieSrc[aiPick] ? <LottieHand src={lottieSrc[aiPick]} /> : <span>{moveEmoji[aiPick]}</span>}
+                        <span>{moveEmoji[aiPick]}</span>
                       </motion.div>
                     )}
                   </AnimatePresence>
@@ -697,7 +857,7 @@ export default function RPSDoodleApp(){
                   <AnimatePresence mode="popLayout">
                     {playerPick && (
                       <motion.div key={playerPick} initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
-                        {lottieOn && lottieSrc[playerPick] ? <LottieHand src={lottieSrc[playerPick]} /> : <span>{moveEmoji[playerPick]}</span>}
+                        <span>{moveEmoji[playerPick]}</span>
                       </motion.div>
                     )}
                   </AnimatePresence>
@@ -763,9 +923,29 @@ export default function RPSDoodleApp(){
             <motion.div initial={{ y:20, opacity:0 }} animate={{ y:0, opacity:1 }} exit={{ y:20, opacity:0 }} className="bg-white rounded-2xl shadow-xl w-[min(92vw,520px)] p-4">
               <div className="text-xl font-black mb-1">Calibration</div>
               <p className="text-slate-700 text-sm mb-2">{calText}</p>
-              <div className="flex items-center gap-3 mt-2">
-                <button className="px-3 py-1.5 rounded-xl bg-sky-600 text-white shadow" onClick={()=>{ setShowCal(false); setPredictorMode(true); setAiMode('ruthless'); setLive('Exploit mode ON'); }}>Play the AI (Ruthless)</button>
-                <button className="px-3 py-1.5 rounded-xl bg-white shadow" onClick={()=> setShowCal(false)}>Close</button>
+              <div className="flex items-center justify-end gap-3 mt-3">
+                <select
+                  className="px-2 py-1 rounded bg-white shadow-inner mr-1"
+                  value={aiMode}
+                  onChange={e=> setAiMode(e.target.value as AIMode)}
+                >
+                  <option value="fair">Fair</option>
+                  <option value="normal">Normal</option>
+                  <option value="ruthless">Ruthless</option>
+                </select>
+                <button
+                  className="px-3 py-1.5 rounded-xl bg-sky-600 text-white shadow"
+                  onClick={()=>{
+                    setShowCal(false);
+                    setPredictorMode(true);
+                    setIsTrained(true);
+                    resetMatch();
+                    setScene("MATCH");
+                  }}
+                >
+                  Start Match
+                </button>
+                <button className="px-3 py-1.5 rounded-xl bg-white shadow" onClick={()=> setShowCal(false)}>Keep practicing</button>
               </div>
             </motion.div>
           </motion.div>
@@ -775,7 +955,7 @@ export default function RPSDoodleApp(){
       {/* Footer robot idle (personality beat) */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: .4 }} className="fixed bottom-3 right-3 bg-white/70 rounded-2xl shadow px-3 py-2 flex items-center gap-2">
         <motion.span animate={{ y: [0,-1,0] }} transition={{ repeat: Infinity, duration: 2.6, ease: "easeInOut" }}>
-          {lottieOn && lottieSrc.robotIdle ? (<LottieHand src={lottieSrc.robotIdle} size={28} loop />) : (<span>\uD83E\uDD16</span>)}
+          <span>🤖</span>
         </motion.span>
         <span className="text-sm text-slate-700">Ready!</span>
       </motion.div>
