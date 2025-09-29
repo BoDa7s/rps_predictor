@@ -1,5 +1,7 @@
-# rps_predictor
+## [Releases History](../../releases)
 
+Explore previous versions, changelogs, and downloadable artifacts on the project's Releases page.
+# rps_predictor
 Interactive Rock-Paper-Scissors predictor built with React, Framer Motion, and a collection of ensemble AI forecasters.
 
 ## Local development
