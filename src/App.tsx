@@ -1,5 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
+import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
+import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, DecisionPolicy } from "./stats";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -23,18 +25,15 @@ function mulberry32(a:number){
 }
 
 // Types
-export type Move = "rock" | "paper" | "scissors";
-export type Mode = "speed" | "practice";
-export type AIMode = "fair" | "normal" | "ruthless";
 const MOVES: Move[] = ["rock", "paper", "scissors"];
-const MODES: Mode[] = ["speed","practice"];
+const MODES: Mode[] = ["challenge","practice"];
 export type PredictorLevel = "off" | "basic" | "smart" | "adaptive"; // legacy knob (kept for compat)
 
 // Icons (emoji fallback)
 const moveEmoji: Record<Move, string> = { rock: "\u270A", paper: "\u270B", scissors: "\u270C\uFE0F" };
 
 // ---- Core game logic (pure) ----
-export function resolveOutcome(player: Move, ai: Move): "win" | "lose" | "tie" {
+export function resolveOutcome(player: Move, ai: Move): Outcome {
   if (player === ai) return "tie";
   if ((player === "rock" && ai === "scissors") ||
       (player === "paper" && ai === "rock") ||
@@ -64,7 +63,6 @@ function normalize(d: Dist): Dist { const s = d.rock + d.paper + d.scissors; ret
 function fromCounts(c: Record<Move, number>, alpha=1): Dist { return normalize({ rock: (c.rock||0)+alpha, paper:(c.paper||0)+alpha, scissors:(c.scissors||0)+alpha }); }
 
 // Context passed to experts
-type Outcome = "win"|"lose"|"tie"; // player's perspective
 interface Ctx { playerMoves: Move[]; aiMoves: Move[]; outcomes: Outcome[]; rng: ()=>number; }
 
 interface Expert { predict(ctx: Ctx): Dist; update(ctx: Ctx, actual: Move): void }
@@ -189,23 +187,151 @@ class BaitResponseExpert implements Expert{
 
 // Hedge (multiplicative weights) mixer
 class HedgeMixer{
-  w: number[]; experts: Expert[]; eta: number;
-  constructor(experts: Expert[], eta=1.6){ this.experts = experts; this.eta = eta; this.w = experts.map(()=>1); }
+  w: number[];
+  experts: Expert[];
+  eta: number;
+  labels: string[];
+  private lastPreds: Dist[] = [];
+  private lastMix: Dist = { ...UNIFORM };
+  constructor(experts: Expert[], labels: string[], eta=1.6){
+    this.experts = experts;
+    this.labels = labels;
+    this.eta = eta;
+    this.w = experts.map(()=>1);
+  }
   predict(ctx: Ctx): Dist{
-    const preds = this.experts.map(e=> e.predict(ctx));
-    const W = this.w.reduce((a,b)=>a+b,0);
+    this.lastPreds = this.experts.map(e=> e.predict(ctx));
+    const W = this.w.reduce((a,b)=>a+b,0) || 1;
     const mix: Dist = { rock:0, paper:0, scissors:0 };
-    preds.forEach((p,i)=>{ (Object.keys(mix) as Move[]).forEach(m=>{ mix[m] += (this.w[i]/W) * p[m]; }); });
-    return normalize(mix);
+    this.lastPreds.forEach((p,i)=>{
+      (Object.keys(mix) as Move[]).forEach(m=>{ mix[m] += (this.w[i]/W) * p[m]; });
+    });
+    this.lastMix = normalize(mix);
+    return this.lastMix;
   }
   update(ctx: Ctx, actual: Move){
-    const preds = this.experts.map(e=> e.predict(ctx));
+    const preds = this.lastPreds.length ? this.lastPreds : this.experts.map(e=> e.predict(ctx));
     const losses = preds.map(p=> 1 - Math.max(1e-6, p[actual] || 0));
     this.w = this.w.map((w,i)=> w * Math.exp(-this.eta * losses[i]));
-    // online update experts
     this.experts.forEach(e=> e.update(ctx, actual));
   }
+  snapshot(){
+    const W = this.w.reduce((a,b)=>a+b,0) || 1;
+    return {
+      dist: { ...this.lastMix },
+      experts: this.experts.map((_,i)=>({
+        name: i < this.labels.length ? this.labels[i] : ('Expert ' + (i+1)),
+        weight: this.w[i]/W,
+        dist: this.lastPreds[i] ?? { ...UNIFORM }
+      }))
+    };
+  }
 }
+
+type RoundFilterMode = Mode | "all";
+type RoundFilterDifficulty = AIMode | "all";
+type RoundFilterOutcome = Outcome | "all";
+
+interface PendingDecision {
+  policy: DecisionPolicy;
+  mixer?: {
+    dist: Dist;
+    experts: { name: string; weight: number; dist: Dist }[];
+    counter: Move;
+    confidence: number;
+  };
+  heuristic?: HeuristicTrace;
+  confidence: number;
+}
+
+function prettyMove(move: Move){
+  return move.charAt(0).toUpperCase() + move.slice(1);
+}
+
+function confidenceBucket(value: number): "low" | "medium" | "high" {
+  if (value >= 0.7) return "high";
+  if (value >= 0.45) return "medium";
+  return "low";
+}
+
+function expertReasonText(name: string, move: Move, percent: number){
+  const pretty = prettyMove(move);
+  const pct = Math.round(percent * 100);
+  switch(name){
+    case "FrequencyExpert":
+      return "Frequency expert estimated " + pct + "% chance you play " + pretty + ".";
+    case "RecencyExpert":
+      return "Recency expert weighted " + pct + "% toward " + pretty + " from your latest moves.";
+    case "MarkovExpert(k=1)":
+      return "Markov order-1 expert projected " + pretty + " (" + pct + "%).";
+    case "MarkovExpert(k=2)":
+      return "Markov order-2 expert leaned " + pct + "% toward " + pretty + ".";
+    case "OutcomeExpert":
+      return "Outcome expert saw " + pct + "% likelihood after that result for " + pretty + ".";
+    case "WinStayLoseShiftExpert":
+      return "Win/Stay-Lose/Switch expert assigned " + pct + "% to " + pretty + ".";
+    case "PeriodicExpert":
+      return "Periodic expert detected a loop pointing " + pct + "% to " + pretty + ".";
+    case "BaitResponseExpert":
+      return "Bait response expert predicted " + pretty + " with " + pct + "% weight.";
+    default:
+      return name + " estimated " + pct + "% on " + pretty + ".";
+  }
+}
+
+function describeDecision(policy: DecisionPolicy, mixer: MixerTrace | undefined, heuristic: HeuristicTrace | undefined, player: Move, ai: Move){
+  const playerPretty = prettyMove(player);
+  const aiPretty = prettyMove(ai);
+  if (policy === "mixer" && mixer){
+    const top = mixer.topExperts[0];
+    if (top){
+      return expertReasonText(top.name, player, top.pActual ?? 0) + " AI played " + aiPretty + " to counter.";
+    }
+    return "Mixer blended experts and countered " + playerPretty + " with " + aiPretty + ".";
+  }
+  if (heuristic){
+    const parts: string[] = [];
+    if (heuristic.reason) parts.push(heuristic.reason);
+    if (heuristic.predicted){
+      const pct = heuristic.conf ? Math.round((heuristic.conf || 0) * 100) : null;
+      let detail = "Predicted " + prettyMove(heuristic.predicted);
+      if (pct !== null) detail += " (" + pct + "%)";
+      detail += ".";
+      parts.push(detail);
+    }
+    parts.push("Countered with " + aiPretty + ".");
+    return parts.join(' ');
+  }
+  return "AI played " + aiPretty + " against " + playerPretty + ".";
+}
+
+function computeSwitchRate(moves: Move[]): number{
+  if (moves.length <= 1) return 0;
+  let switches = 0;
+  for (let i=1;i<moves.length;i++) if (moves[i] !== moves[i-1]) switches++;
+  return switches / moves.length;
+}
+
+function outcomeBadgeClass(outcome: Outcome){
+  if (outcome === "win") return "bg-green-100 text-green-700";
+  if (outcome === "lose") return "bg-rose-100 text-rose-700";
+  return "bg-amber-100 text-amber-700";
+}
+
+function makeLocalId(prefix: string){
+  return prefix + "-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2,6);
+}
+
+const EXPERT_LABELS = [
+  "FrequencyExpert",
+  "RecencyExpert",
+  "MarkovExpert(k=1)",
+  "MarkovExpert(k=2)",
+  "OutcomeExpert",
+  "WinStayLoseShiftExpert",
+  "PeriodicExpert",
+  "BaitResponseExpert",
+];
 
 // --- Light heuristics (kept for fallback) -------------------------------
 function markovNext(moves: Move[]): { move: Move | null; conf: number } {
@@ -220,18 +346,44 @@ function markovNext(moves: Move[]): { move: Move | null; conf: number } {
   let best: Move = "rock"; let max = -1; (Object.keys(row) as Move[]).forEach(k => { if (row[k] > max) { best = k; max = row[k]; } });
   return { move: best, conf: max / sum };
 }
-function detectPatternNext(moves: Move[]): Move | null {
-  const n = moves.length; if (n >= 3 && moves[n-1] === moves[n-2] && moves[n-2] === moves[n-3]) return moves[n-1];
-  if (n >= 6) { const a = moves.slice(n-6, n-3).join("-"); const b = moves.slice(n-3).join("-"); if (a === b) return moves[n-3]; }
-  if (n >= 4) { const a = moves[n-4], b = moves[n-3], c = moves[n-2], d = moves[n-1]; if (a === c && b === d && a !== b) return a; }
-  return null;
+function detectPatternNext(moves: Move[]): { move: Move | null; reason?: string } {
+  const n = moves.length;
+  if (n >= 3 && moves[n-1] === moves[n-2] && moves[n-2] === moves[n-3]) {
+    return { move: moves[n-1], reason: "Recent triple repeat detected" };
+  }
+  if (n >= 6) {
+    const a = moves.slice(n-6, n-3).join("-");
+    const b = moves.slice(n-3).join("-");
+    if (a === b) return { move: moves[n-3], reason: "Repeating three-beat pattern spotted" };
+  }
+  if (n >= 4) {
+    const a = moves[n-4], b = moves[n-3], c = moves[n-2], d = moves[n-1];
+    if (a === c && b === d && a !== b) return { move: a, reason: "Alternating two-step pattern detected" };
+  }
+  return { move: null };
 }
-function predictNext(moves: Move[], rng: () => number): { move: Move | null; conf: number } {
-  const mk = markovNext(moves); const pat = detectPatternNext(moves);
-  if (mk.move && pat && mk.move === pat) return { move: mk.move, conf: Math.max(0.8, mk.conf) };
-  if (pat && (!mk.move || mk.conf < 0.6)) return { move: pat, conf: 0.75 };
-  if (mk.move && pat && mk.conf >= 0.6) return { move: (rng() < 0.6 ? pat : mk.move)!, conf: 0.7 };
-  return { move: mk.move || pat || null, conf: mk.move ? mk.conf * 0.65 : (pat ? 0.6 : 0) };
+function predictNext(moves: Move[], rng: () => number): { move: Move | null; conf: number; reason?: string } {
+  const mk = markovNext(moves);
+  const patRes = detectPatternNext(moves);
+  const pat = patRes.move;
+  if (mk.move && pat && mk.move === pat) {
+    return { move: mk.move, conf: Math.max(0.8, mk.conf), reason: "Markov and pattern consensus" };
+  }
+  if (pat && (!mk.move || mk.conf < 0.6)) {
+    return { move: pat, conf: 0.75, reason: patRes.reason || "Pattern repetition heuristic" };
+  }
+  if (mk.move && pat && mk.conf >= 0.6) {
+    const choice = rng() < 0.6 ? pat : mk.move;
+    const baseReason = choice === pat ? (patRes.reason || "Pattern repetition heuristic") : "Markov transition preference";
+    return { move: choice, conf: 0.7, reason: baseReason };
+  }
+  if (mk.move) {
+    return { move: mk.move, conf: mk.conf * 0.65, reason: "Markov transition heuristic" };
+  }
+  if (pat) {
+    return { move: pat, conf: 0.6, reason: patRes.reason || "Pattern repetition heuristic" };
+  }
+  return { move: null, conf: 0, reason: "Insufficient signal" };
 }
 
 // Simple Audio Manager using WebAudio
@@ -279,7 +431,7 @@ function ModeCard({ mode, onSelect, isDimmed, disabled = false }: { mode: Mode, 
       layoutId={`card-${mode}`} onClick={() => { if (!disabled) onSelect(mode); }} disabled={disabled} whileTap={{ scale: disabled ? 1 : 0.98 }} whileHover={{ y: disabled ? 0 : -4 }} aria-label={`${label} mode`}>
       <div className="text-lg font-bold text-slate-800">{label}</div>
       <div className="text-sm text-slate-600 mt-1">
-        {mode === "speed" && "Beat the countdown—fast decisions!"}
+        {mode === "challenge" && "Timed rounds, high stakes—can you outsmart the AI?"}
         {mode === "practice" && "No score; experiment and learn."}
       </div>
       <span className="ink-pop" />
@@ -288,16 +440,30 @@ function ModeCard({ mode, onSelect, isDimmed, disabled = false }: { mode: Mode, 
 }
 
 // Main component
-export default function RPSDoodleApp(){
+function RPSDoodleAppInner(){
+  const { rounds, matches, logRound, logMatch, resetAll, eraseLastSession, exportJson, exportRoundsCsv } = useStats();
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [statsTab, setStatsTab] = useState<"overview" | "matches" | "rounds" | "insights">("overview");
+  const statsModalRef = useRef<HTMLDivElement | null>(null);
+  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
+  const [roundPage, setRoundPage] = useState(0);
+  const [liveAiConfidence, setLiveAiConfidence] = useState<number | null>(null);
+  const decisionTraceRef = useRef<PendingDecision | null>(null);
+  const aiStreakRef = useRef(0);
+  const youStreakRef = useRef(0);
+  const matchStartRef = useRef<string>(new Date().toISOString());
+  const currentMatchIdRef = useRef<string>(makeLocalId("match"));
+  const [roundFilters, setRoundFilters] = useState<{ mode: RoundFilterMode; difficulty: RoundFilterDifficulty; outcome: RoundFilterOutcome; from: string; to: string }>({ mode: "all", difficulty: "all", outcome: "all", from: "", to: "" });
+  useEffect(() => { setRoundPage(0); }, [roundFilters]);
   // Inject brand CSS and wipe animation
   const style = `
-  :root{ --speed:#FF77AA; --practice:#88AA66; }
+  :root{ --challenge:#FF77AA; --practice:#88AA66; }
   .mode-grid{ display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:12px; width:min(92vw,640px); }
   .mode-card.dim{ filter: blur(2px) brightness(.85); }
   .ink-pop{ position:absolute; inset:0; background: radial-gradient(600px circle at var(--x,50%) var(--y,50%), rgba(255,255,255,.6), transparent 40%); opacity:0; transition:opacity .22s; }
   .mode-card:active .ink-pop{ opacity:1; }
   .fullscreen{ position:fixed; inset:0; z-index:50; will-change:transform; }
-  .fullscreen.speed{ background: var(--speed); }
+  .fullscreen.challenge{ background: var(--challenge); }
   .fullscreen.practice{ background: var(--practice); }
   .wipe{ position:fixed; inset:0; pointer-events:none; z-index:60; transform:translateX(110%); will-change:transform; background:linear-gradient(12deg, rgba(255,255,255,.9), rgba(255,255,255,1)); }
   .wipe.run{ animation: wipeIn 400ms cubic-bezier(.22,.61,.36,1) forwards; }
@@ -316,6 +482,7 @@ export default function RPSDoodleApp(){
   }, [prefersReduced]);
   const [audioOn, setAudioOn] = useState(true);
   const [textScale, setTextScale] = useState(1);
+
   const [predictorMode, setPredictorMode] = useState(false); // master enable for AI mix
   const [aiMode, setAiMode] = useState<AIMode>("normal"); // Fair/Normal/Ruthless
   const [predictorLevel, setPredictorLevel] = useState<PredictorLevel>("smart"); // legacy knob
@@ -354,7 +521,7 @@ export default function RPSDoodleApp(){
   const trainingProgress = Math.min(trainingDisplayCount / TRAIN_ROUNDS, 1);
   const [seed] = useState(()=>Math.floor(Math.random()*1e9));
   const rng = useMemo(()=>mulberry32(seed), [seed]);
-  const [bestOf, setBestOf] = useState<3|5|7>(5);
+  const [bestOf, setBestOf] = useState<BestOf>(5);
   const [playerScore, setPlayerScore] = useState(0);
   const [aiScore, setAiScore] = useState(0);
   const [round, setRound] = useState(1);
@@ -381,6 +548,55 @@ export default function RPSDoodleApp(){
   const [selectedMode, setSelectedMode] = useState<Mode|null>(null);
   const [wipeRun, setWipeRun] = useState(false);
   const modeLabel = (m:Mode)=> m.charAt(0).toUpperCase()+m.slice(1);
+
+  const recordRound = useCallback((playerMove: Move, aiMove: Move, outcomeForPlayer: Outcome) => {
+    const trace = decisionTraceRef.current;
+    const policy: DecisionPolicy = trace?.policy ?? "heuristic";
+    let mixerTrace: MixerTrace | undefined = undefined;
+    let heuristicTrace: HeuristicTrace | undefined = trace?.heuristic;
+    let confidence = trace?.confidence ?? 0;
+    if (trace?.mixer){
+      const topExperts = trace.mixer.experts
+        .map(e => ({ name: e.name, weight: e.weight, pActual: e.dist[playerMove] ?? 0 }))
+        .sort((a,b)=> b.weight - a.weight)
+        .slice(0,3);
+      mixerTrace = {
+        dist: trace.mixer.dist,
+        counter: trace.mixer.counter,
+        topExperts,
+        confidence: trace.mixer.confidence,
+      };
+      confidence = trace.mixer.confidence;
+    } else if (trace?.heuristic){
+      confidence = trace.confidence;
+    }
+    const now = new Date().toISOString();
+    const aiStreak = outcomeForPlayer === "lose" ? aiStreakRef.current + 1 : 0;
+    const youStreak = outcomeForPlayer === "win" ? youStreakRef.current + 1 : 0;
+    aiStreakRef.current = aiStreak;
+    youStreakRef.current = youStreak;
+    const reason = describeDecision(policy, mixerTrace, heuristicTrace, playerMove, aiMove);
+    const confBucket = confidenceBucket(confidence);
+    logRound({
+      t: now,
+      mode: selectedMode ?? "practice",
+      matchId: currentMatchIdRef.current,
+      bestOf,
+      difficulty: aiMode,
+      player: playerMove,
+      ai: aiMove,
+      outcome: outcomeForPlayer,
+      policy,
+      mixer: mixerTrace,
+      heuristic: heuristicTrace,
+      streakAI: aiStreak,
+      streakYou: youStreak,
+      reason,
+      confidence,
+      confidenceBucket: confBucket,
+    });
+    decisionTraceRef.current = null;
+  }, [selectedMode, bestOf, aiMode, logRound]);
 
   // Calibration overlay (Practice → Calibrate)
   const [showCal, setShowCal] = useState(false);
@@ -422,6 +638,234 @@ export default function RPSDoodleApp(){
     return () => clearTimeout(t);
   }, []);
 
+  const statsTabs = [
+    { key: "overview", label: "Overview" },
+    { key: "matches", label: "Matches" },
+    { key: "rounds", label: "Rounds" },
+    { key: "insights", label: "Insights" },
+  ] as const;
+
+  const matchesSorted = useMemo(() => {
+    return [...matches].sort((a, b) => (b.endedAt || b.startedAt).localeCompare(a.endedAt || a.startedAt));
+  }, [matches]);
+
+  const filteredRounds = useMemo(() => {
+    const items = [...rounds].sort((a, b) => b.t.localeCompare(a.t));
+    return items.filter(r => {
+      if (roundFilters.mode !== "all" && r.mode !== roundFilters.mode) return false;
+      if (roundFilters.difficulty !== "all" && r.difficulty !== roundFilters.difficulty) return false;
+      if (roundFilters.outcome !== "all" && r.outcome !== roundFilters.outcome) return false;
+      if (roundFilters.from){
+        if (r.t < roundFilters.from) return false;
+      }
+      if (roundFilters.to){
+        if (r.t > roundFilters.to + "T23:59:59") return false;
+      }
+      return true;
+    });
+  }, [rounds, roundFilters]);
+
+  const pageSize = 200;
+  const totalRoundPages = Math.max(1, Math.ceil(filteredRounds.length / pageSize));
+  useEffect(() => {
+    if (roundPage >= totalRoundPages) {
+      setRoundPage(Math.max(0, totalRoundPages - 1));
+    }
+  }, [roundPage, totalRoundPages]);
+  const roundsPageSlice = filteredRounds.slice(roundPage * pageSize, (roundPage + 1) * pageSize);
+  const roundPageStartIndex = roundPage * pageSize;
+
+  const totalMatches = matches.length;
+  const totalRounds = rounds.length;
+  const playerWins = matches.reduce((acc, m) => acc + (m.score.you > m.score.ai ? 1 : 0), 0);
+  const overallWinRate = totalMatches ? playerWins / totalMatches : 0;
+
+  const difficultySummary = useMemo(() => {
+    const base = {
+      fair: { wins: 0, total: 0, confidence: 0 },
+      normal: { wins: 0, total: 0, confidence: 0 },
+      ruthless: { wins: 0, total: 0, confidence: 0 },
+    } as Record<AIMode, { wins: number; total: number; confidence: number }>;
+    matches.forEach(m => {
+      base[m.difficulty].total += 1;
+      if (m.score.you > m.score.ai) base[m.difficulty].wins += 1;
+    });
+    rounds.forEach(r => {
+      base[r.difficulty].confidence += r.confidence;
+    });
+    return (Object.keys(base) as AIMode[]).map(key => {
+      const entry = base[key];
+      const totalConfRounds = rounds.filter(r => r.difficulty === key).length;
+      const avgConf = totalConfRounds ? entry.confidence / totalConfRounds : 0;
+      return { difficulty: key, winRate: entry.total ? entry.wins / entry.total : 0, avgConfidence: avgConf };
+    });
+  }, [matches, rounds]);
+
+  const behaviorStats = useMemo(() => {
+    if (rounds.length === 0) {
+      return { repeatAfterWin: 0, switchAfterLoss: 0, favoriteMove: null as Move | null, favoritePct: 0 };
+    }
+    let repeatWins = 0; let winCases = 0;
+    let switchLoss = 0; let lossCases = 0;
+    for (let i=1;i<rounds.length;i++){
+      const prev = rounds[i-1];
+      const curr = rounds[i];
+      if (prev.outcome === "win"){
+        winCases++; if (curr.player === prev.player) repeatWins++;
+      }
+      if (prev.outcome === "lose"){
+        lossCases++; if (curr.player !== prev.player) switchLoss++;
+      }
+    }
+    const counts: Record<Move, number> = { rock:0, paper:0, scissors:0 };
+    rounds.forEach(r => { counts[r.player] += 1; });
+    let favorite: Move = "rock";
+    let favoriteCount = 0;
+    (Object.keys(counts) as Move[]).forEach(m => { if (counts[m] > favoriteCount){ favorite = m; favoriteCount = counts[m]; } });
+    return {
+      repeatAfterWin: winCases ? repeatWins / winCases : 0,
+      switchAfterLoss: lossCases ? switchLoss / lossCases : 0,
+      favoriteMove: favoriteCount ? favorite : null,
+      favoritePct: totalRounds ? favoriteCount / totalRounds : 0,
+    };
+  }, [rounds, totalRounds]);
+  const repeatAfterWinPct = Math.round(behaviorStats.repeatAfterWin * 100);
+  const switchAfterLossPct = Math.round(behaviorStats.switchAfterLoss * 100);
+
+  const topTransition = useMemo(() => {
+    const map = new Map<string, number>();
+    for (let i=1;i<rounds.length;i++){
+      const key = rounds[i-1].player + "→" + rounds[i].player;
+      map.set(key, (map.get(key) || 0) + 1);
+    }
+    const sorted = [...map.entries()].sort((a,b)=> b[1]-a[1]);
+    return sorted.length ? { pair: sorted[0][0], count: sorted[0][1] } : null;
+  }, [rounds]);
+  const topTransitionLabel = topTransition
+  ? `${topTransition.pair} (${topTransition.count})`
+  : "Not enough data";
+
+  const recentTrend = useMemo(() => {
+    const slice = rounds.slice(-20);
+    if (!slice.length) return [] as { x: number; y: number; value: number }[];
+    const width = 220;
+    const height = 60;
+    const step = slice.length > 1 ? (width - 20) / (slice.length - 1) : 0;
+    return slice.map((r, idx) => {
+      const winValue = r.outcome === "win" ? 1 : r.outcome === "tie" ? 0.5 : 0;
+      const x = 10 + step * idx;
+      const y = height - 10 - winValue * (height - 20);
+      return { x, y, value: winValue };
+    });
+  }, [rounds]);
+  const sparklinePoints = useMemo(() => recentTrend.map(p => `${p.x},${p.y}`).join(" "), [recentTrend]);
+  const lastTrendPercent = recentTrend.length ? Math.round(recentTrend[recentTrend.length - 1].value * 100) : 0;
+
+  const confidenceBuckets = useMemo(() => {
+    const buckets = [
+      { label: "0-33%", wins: 0, total: 0 },
+      { label: "34-66%", wins: 0, total: 0 },
+      { label: "67-100%", wins: 0, total: 0 },
+    ];
+    rounds.forEach(r => {
+      const conf = r.confidence;
+      const idx = conf < 0.34 ? 0 : conf < 0.67 ? 1 : 2;
+      const bucket = buckets[idx];
+      bucket.total += 1;
+      if (r.outcome === "lose") bucket.wins += 1;
+    });
+    return buckets.map(b => ({ ...b, winRate: b.total ? b.wins / b.total : 0 }));
+  }, [rounds]);
+
+  const expertContribution = useMemo(() => {
+    const counts = new Map<string, number>();
+    rounds.forEach(r => {
+      const top = r.mixer?.topExperts?.[0];
+      if (top){
+        counts.set(top.name, (counts.get(top.name) || 0) + 1);
+      }
+    });
+    return [...counts.entries()].sort((a,b)=> b[1]-a[1]);
+  }, [rounds]);
+
+  const averageYouStreak = totalRounds ? (rounds.reduce((acc, r) => acc + r.streakYou, 0) / totalRounds).toFixed(2) : "0.00";
+  const averageAiStreak = totalRounds ? (rounds.reduce((acc, r) => acc + r.streakAI, 0) / totalRounds).toFixed(2) : "0.00";
+  const selectedMatch = useMemo(() => matches.find(m => m.id === selectedMatchId) || null, [matches, selectedMatchId]);
+  const selectedMatchKey = selectedMatch ? (selectedMatch.clientId || selectedMatch.id) : null;
+  const selectedMatchResult = selectedMatch ? (selectedMatch.score.you > selectedMatch.score.ai ? "Win" : selectedMatch.score.you === selectedMatch.score.ai ? "Tie" : "Loss") : "";
+  const selectedMatchDate = selectedMatch ? new Date(selectedMatch.endedAt || selectedMatch.startedAt).toLocaleString() : "";
+  const selectedMatchRounds = useMemo(() => {
+    if (!selectedMatchKey) return [] as RoundLog[];
+    return rounds.filter(r => r.matchId === selectedMatchKey);
+  }, [rounds, selectedMatchKey]);
+
+  const matchExpertBreakdown = useMemo(() => {
+    if (!selectedMatchRounds.length) return [] as { name: string; count: number }[];
+    const map = new Map<string, number>();
+    selectedMatchRounds.forEach(r => {
+      const top = r.mixer?.topExperts?.[0];
+      if (top) map.set(top.name, (map.get(top.name) || 0) + 1);
+    });
+    return [...map.entries()].sort((a,b)=> b[1]-a[1]).map(([name,count])=>({ name, count }));
+  }, [selectedMatchRounds]);
+
+  const matchAiWins = selectedMatchRounds.filter(r => r.outcome === "lose");
+
+  const favoriteMoveText = behaviorStats.favoriteMove ? prettyMove(behaviorStats.favoriteMove) + " (" + Math.round(behaviorStats.favoritePct * 100) + "%)" : "None yet";
+
+  const patternHint = useMemo(() => {
+    if (rounds.length < 6) return null;
+    const sequence = rounds.map(r => r.player);
+    const info = detectPatternNext(sequence);
+    if (info.move && info.reason) {
+      return info.reason;
+    }
+    return null;
+  }, [rounds]);
+
+  const handleExportJson = useCallback(() => {
+    const blob = new Blob([exportJson()], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "rps-stats.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [exportJson]);
+
+  const handleExportCsv = useCallback(() => {
+    const blob = new Blob([exportRoundsCsv()], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "rps-rounds.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [exportRoundsCsv]);
+
+  const handleResetAll = useCallback(() => {
+    resetAll();
+    setSelectedMatchId(null);
+  }, [resetAll]);
+
+  const handleEraseLastSession = useCallback(() => {
+    eraseLastSession();
+    setSelectedMatchId(null);
+  }, [eraseLastSession]);
+
+  useEffect(() => {
+    if (!statsOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setStatsOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    const node = statsModalRef.current;
+    if (node){
+      const first = node.querySelector<HTMLElement>("[data-focus-first]");
+      if (first) first.focus();
+    }
+    return () => window.removeEventListener("keydown", onKey);
+  }, [statsOpen]);
   // Keyboard controls for MATCH
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -442,7 +886,7 @@ export default function RPSDoodleApp(){
   const mixerRef = useRef<HedgeMixer | null>(null);
   function getMixer(){
     if (!mixerRef.current){
-      const experts: Expert[] = [
+      const expertInstances: Expert[] = [
         new FrequencyExpert(20, 1),
         new RecencyExpert(0.85, 1),
         new MarkovExpert(1, 1),
@@ -452,7 +896,7 @@ export default function RPSDoodleApp(){
         new PeriodicExpert(5,2,18,0.65),
         new BaitResponseExpert(1),
       ];
-      mixerRef.current = new HedgeMixer(experts, 1.6);
+      mixerRef.current = new HedgeMixer(expertInstances, EXPERT_LABELS, 1.6);
     }
     return mixerRef.current!;
   }
@@ -473,17 +917,52 @@ export default function RPSDoodleApp(){
   }
 
   function aiChoose(): Move {
+    decisionTraceRef.current = null;
     // Practice mode uses soft/none exploit unless user enabled predictorMode
     const useMix = isTrained && !trainingActive && predictorMode && aiMode !== "fair";
     if (!useMix || lastMoves.length === 0){
       // fallback to light heuristics until we have signal
-      const { move: predicted, conf } = predictNext(lastMoves, rng);
-      if (!predicted || conf < 0.34) return MOVES[Math.floor(rng()*3)] as Move;
-      return policyCounterFromDist(({rock:0,paper:0,scissors:0, [predicted]:1} as any), aiMode);
+      const heur = predictNext(lastMoves, rng);
+      if (!heur.move || (heur.conf ?? 0) < 0.34) {
+        const fallbackMove = MOVES[Math.floor(rng()*3)] as Move;
+        decisionTraceRef.current = {
+          policy: "heuristic",
+          heuristic: { predicted: heur.move, conf: heur.conf, reason: heur.reason || "Low confidence – random choice" },
+          confidence: heur.conf ?? 0.33,
+        };
+        setLiveAiConfidence(heur.conf ?? null);
+        return fallbackMove;
+      }
+      const predicted = heur.move as Move;
+      const heuristicDist: Dist = { rock:0, paper:0, scissors:0 };
+      heuristicDist[predicted] = 1;
+      const move = policyCounterFromDist(heuristicDist, aiMode);
+      const heurConf = heur.conf ?? 0.5;
+      decisionTraceRef.current = {
+        policy: "heuristic",
+        heuristic: { predicted: heur.move, conf: heur.conf, reason: heur.reason },
+        confidence: heurConf,
+      };
+      setLiveAiConfidence(heurConf);
+      return move;
     }
     const ctx: Ctx = { playerMoves: lastMoves, aiMoves: aiHistory, outcomes: outcomesHist, rng };
     const dist = getMixer().predict(ctx);
-    return policyCounterFromDist(dist, aiMode);
+    const snapshot = getMixer().snapshot();
+    const move = policyCounterFromDist(dist, aiMode);
+    const confidence = Math.max(dist.rock, dist.paper, dist.scissors);
+    decisionTraceRef.current = {
+      policy: "mixer",
+      mixer: {
+        dist,
+        experts: snapshot.experts,
+        counter: move,
+        confidence,
+      },
+      confidence,
+    };
+    setLiveAiConfidence(confidence);
+    return move;
   }
 
   function resetMatch(){
@@ -499,6 +978,10 @@ export default function RPSDoodleApp(){
       audio.whoosh();
     }
     resetMatch();
+    aiStreakRef.current = 0;
+    youStreakRef.current = 0;
+    matchStartRef.current = new Date().toISOString();
+    currentMatchIdRef.current = makeLocalId("match");
     if (mode) setSelectedMode(mode);
     setScene("MATCH");
   }
@@ -537,7 +1020,12 @@ export default function RPSDoodleApp(){
       setOutcomesHist(o=>[...o, res]);
       setLive(`AI chose ${ai}. ${res === 'win' ? 'You win this round.' : res === 'lose' ? 'You lose this round.' : 'Tie.'}`);
       if (res === "win") audio.thud(); else if (res === "lose") audio.snare(); else audio.tie();
-      setTimeout(()=>{ if (trainingActive) setTrainingCount(count=> Math.min(TRAIN_ROUNDS, count + 1)); setPhase("feedback"); setLastMoves(prev=>[...prev, player]); }, 150);
+      setTimeout(()=>{
+        recordRound(player, ai, res);
+        if (trainingActive) setTrainingCount(count=> Math.min(TRAIN_ROUNDS, count + 1));
+        setPhase("feedback");
+        setLastMoves(prev=>[...prev, player]);
+      }, 150);
     }, 240);
   }
 
@@ -596,6 +1084,25 @@ export default function RPSDoodleApp(){
       const someoneWon = playerScore >= totalNeeded || aiScore >= totalNeeded;
       if (someoneWon) {
         const banner = playerScore > aiScore ? "Victory" : playerScore < aiScore ? "Defeat" : "Tie";
+        const endedAt = new Date().toISOString();
+        const totalRounds = outcomesHist.length;
+        const aiWins = outcomesHist.filter(o => o === "lose").length;
+        const switchRate = computeSwitchRate(lastMoves);
+        logMatch({
+          clientId: currentMatchIdRef.current,
+          startedAt: matchStartRef.current,
+          endedAt,
+          mode: selectedMode ?? "practice",
+          bestOf,
+          difficulty: aiMode,
+          score: { you: playerScore, ai: aiScore },
+          rounds: totalRounds,
+          aiWinRate: totalRounds ? aiWins / totalRounds : 0,
+          youSwitchedRate: switchRate,
+          notes: undefined,
+        });
+        matchStartRef.current = new Date().toISOString();
+        currentMatchIdRef.current = makeLocalId("match");
         setResultBanner(banner);
         if (banner === "Victory") audio.win();
         else if (banner === "Defeat") audio.lose();
@@ -660,9 +1167,9 @@ export default function RPSDoodleApp(){
     console.assert(counterMove("rock") === "paper" && counterMove("paper") === "scissors" && counterMove("scissors") === "rock", "counterMove failed");
     const cycle = (m:Move)=>counterMove(counterMove(counterMove(m))); console.assert(cycle("rock") === "rock" && cycle("paper") === "paper" && cycle("scissors") === "scissors", "counterMove cycle failed");
     const hist1: Move[] = ["rock","paper","rock","paper","rock"]; console.assert(markovNext(hist1).move === "paper", "markovNext failed");
-    const hist2: Move[] = ["rock","paper","rock","paper"]; console.assert(detectPatternNext(hist2) === "rock", "detectPatternNext L2 failed");
+    const hist2: Move[] = ["rock","paper","rock","paper"]; console.assert(detectPatternNext(hist2).move === "rock", "detectPatternNext L2 failed");
     // Mixer sanity: expert that predicts constant 'rock' should win on rock-heavy stream
-    const mix = new HedgeMixer([new FrequencyExpert(20,1)], 1.6);
+    const mix = new HedgeMixer([new FrequencyExpert(20,1)], ["FrequencyExpert"], 1.6);
     let ctx: Ctx = { playerMoves: [], aiMoves: [], outcomes: [], rng: ()=>Math.random() };
     ["rock","rock","paper","rock","rock"].forEach((m,i)=>{ const d = mix.predict(ctx); const top = (Object.keys(d) as Move[]).reduce((a,b)=> d[a]>d[b]?a:b); console.assert(["rock","paper","scissors"].includes(top), "dist valid"); mix.update(ctx, m as Move); ctx = { ...ctx, playerMoves:[...ctx.playerMoves, m as Move] } });
     console.groupEnd();
@@ -688,7 +1195,10 @@ export default function RPSDoodleApp(){
       <div className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between">
         <motion.h1 layout className="text-2xl font-extrabold tracking-tight text-sky-700 drop-shadow-sm">RPS Lab</motion.h1>
         <div className="flex items-center gap-2">
-          <button onClick={() => goToMode()} disabled={modesDisabled} className={`px-3 py-1.5 rounded-xl shadow text-sm ${modesDisabled ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900"}`}>Modes</button>
+          {trainingActive && <span className="px-2 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-700">Training</span>}
+          {liveAiConfidence !== null && <span className="px-2 py-1 text-xs font-semibold rounded-full bg-sky-100 text-sky-700">AI conf: {Math.round((liveAiConfidence ?? 0) * 100)}%</span>}
+          <button onClick={() => setStatsOpen(true)} className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900">Statistics</button>
+          <button onClick={() => goToMode()} disabled={modesDisabled} className={"px-3 py-1.5 rounded-xl shadow text-sm " + (modesDisabled ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900")}>Modes</button>
           <details className="bg-white/70 rounded-xl shadow group">
             <summary className="list-none px-3 py-1.5 cursor-pointer text-sm text-slate-900">Settings ⚙️</summary>
             <div className="p-3 pt-0 space-y-2 text-sm">
@@ -714,7 +1224,7 @@ export default function RPSDoodleApp(){
               </label>
               <hr className="my-2" />
               <label className="flex items-center justify-between gap-4"><span>Best of</span>
-                <select value={bestOf} onChange={e=> setBestOf(Number(e.target.value) as any)} className="px-2 py-1 rounded bg-white shadow-inner">
+                <select value={bestOf} onChange={e=> setBestOf(Number(e.target.value) as BestOf)} className="px-2 py-1 rounded bg-white shadow-inner">
                   <option value={3}>3</option><option value={5}>5</option><option value={7}>7</option>
                 </select>
               </label>
@@ -744,7 +1254,7 @@ export default function RPSDoodleApp(){
             <motion.div layout className="text-4xl font-black text-sky-700">Choose Your Mode</motion.div>
             <div className="mode-grid">
               {MODES.map(m => (
-                <ModeCard key={m} mode={m} onSelect={handleModeSelect} isDimmed={!!selectedMode && selectedMode!==m} disabled={m === "speed" && needsTraining} />
+                <ModeCard key={m} mode={m} onSelect={handleModeSelect} isDimmed={!!selectedMode && selectedMode!==m} disabled={m === "challenge" && needsTraining} />
               ))}
             </div>
 
@@ -754,7 +1264,7 @@ export default function RPSDoodleApp(){
                 <motion.div key="fs" className={`fullscreen ${selectedMode}`} layoutId={`card-${selectedMode}`} initial={{ borderRadius: 16 }} animate={{ borderRadius: 0, transition: { duration: 0.44, ease: [0.22,0.61,0.36,1] }}}>
                   <div className="absolute inset-0 grid place-items-center">
                     <motion.div initial={{ scale: .9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: .36 }} className="text-7xl">
-                      {selectedMode === 'speed' ? '⏱️' : '💡'}
+                      {selectedMode === 'challenge' ? '🎯' : '💡'}
                     </motion.div>
                   </div>
 
@@ -952,6 +1462,271 @@ export default function RPSDoodleApp(){
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {statsOpen && (
+          <motion.div className="fixed inset-0 z-[80] grid place-items-center bg-black/40" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setStatsOpen(false)}>
+            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} transition={{ duration: 0.2 }} className="bg-white rounded-2xl shadow-2xl w-[min(95vw,900px)] max-h-[85vh] overflow-hidden" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" ref={statsModalRef}>
+              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
+                <h2 className="text-lg font-semibold text-slate-800">Statistics</h2>
+                <button onClick={() => setStatsOpen(false)} className="text-slate-500 hover:text-slate-700 text-sm">Close ✕</button>
+              </div>
+              <div className="px-4 pt-3 flex flex-wrap gap-2" role="tablist" aria-label="Statistics tabs">
+                {statsTabs.map(tab => (
+                  <button
+                    key={tab.key}
+                    role="tab"
+                    aria-selected={statsTab === tab.key}
+                    data-focus-first={tab.key === statsTabs[0].key ? true : undefined}
+                    onClick={() => setStatsTab(tab.key)}
+                    className={"px-3 py-1.5 rounded-full text-sm " + (statsTab === tab.key ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200")}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              <div className="px-4 pb-4 pt-3 overflow-y-auto space-y-4" style={{ maxHeight: "65vh" }}>
+                {statsTab === "overview" && (
+                  <div className="space-y-4">
+                    <div className="grid gap-3 sm:grid-cols-4">
+                      <div className="rounded-xl bg-sky-50 p-3">
+                        <div className="text-xs uppercase text-slate-500">Matches</div>
+                        <div className="text-2xl font-semibold text-sky-700">{totalMatches}</div>
+                      </div>
+                      <div className="rounded-xl bg-sky-50 p-3">
+                        <div className="text-xs uppercase text-slate-500">Rounds</div>
+                        <div className="text-2xl font-semibold text-sky-700">{totalRounds}</div>
+                      </div>
+                      <div className="rounded-xl bg-sky-50 p-3">
+                        <div className="text-xs uppercase text-slate-500">Win rate</div>
+                        <div className="text-2xl font-semibold text-sky-700">{Math.round(overallWinRate * 100)}%</div>
+                      </div>
+                      <div className="rounded-xl bg-sky-50 p-3">
+                        <div className="text-xs uppercase text-slate-500">Favorite move</div>
+                        <div className="text-2xl font-semibold text-sky-700">{favoriteMoveText}</div>
+                      </div>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-3">
+                      {difficultySummary.map(card => (
+                        <div key={card.difficulty} className="rounded-xl border border-slate-200 p-3">
+                          <div className="text-xs uppercase text-slate-500">{card.difficulty}</div>
+                          <div className="text-lg font-semibold text-slate-800">Win {Math.round(card.winRate * 100)}%</div>
+                          <div className="text-xs text-slate-500">Avg AI confidence {Math.round(card.avgConfidence * 100)}%</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="rounded-xl border border-slate-200 p-3">
+                      <div className="flex items-center justify-between text-sm text-slate-600">
+                        <span>Recent 20-round trend</span>
+                        <span>{lastTrendPercent}% last round win chance</span>
+                      </div>
+                      <svg width="240" height="60" className="mt-2">
+                        <polyline fill="none" stroke="#0ea5e9" strokeWidth="2" points={sparklinePoints} />
+                      </svg>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-xl border border-slate-200 p-3">
+                        <div className="text-xs uppercase text-slate-500">Repeat after win</div>
+                        <div className="text-lg font-semibold text-slate-800">{repeatAfterWinPct}%</div>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 p-3">
+                        <div className="text-xs uppercase text-slate-500">Switch after loss</div>
+                        <div className="text-lg font-semibold text-slate-800">{switchAfterLossPct}%</div>
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-slate-200 p-3 text-sm text-slate-600">
+                      <div>Top transition: {topTransition ? topTransitionLabel : "Not enough data"}</div>
+                      <div>Periodicity hint: {patternHint || 'No strong cycle detected yet.'}</div>
+                    </div>
+                  </div>
+                )}
+
+                {statsTab === "matches" && (
+                  <div className="space-y-4">
+                    <div className="overflow-auto">
+                      <table className="w-full text-sm">
+                        <thead className="text-left text-slate-500 border-b border-slate-200">
+                          <tr>
+                            <th className="py-2 pr-3">Date</th>
+                            <th className="py-2 pr-3">Mode</th>
+                            <th className="py-2 pr-3">Best of</th>
+                            <th className="py-2 pr-3">Difficulty</th>
+                            <th className="py-2 pr-3">Score</th>
+                            <th className="py-2 pr-3">Result</th>
+                            <th className="py-2 pr-3">Rounds</th>
+                            <th className="py-2">View</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {matchesSorted.map(m => {
+                            const result = m.score.you > m.score.ai ? 'Win' : m.score.you === m.score.ai ? 'Tie' : 'Loss';
+                            return (
+                              <tr key={m.id} className="border-b border-slate-100 last:border-none">
+                                <td className="py-2 pr-3">{new Date(m.endedAt || m.startedAt).toLocaleString()}</td>
+                                <td className="py-2 pr-3 capitalize">{m.mode}</td>
+                                <td className="py-2 pr-3">{m.bestOf}</td>
+                                <td className="py-2 pr-3 capitalize">{m.difficulty}</td>
+                                <td className="py-2 pr-3">{m.score.you} – {m.score.ai}</td>
+                                <td className="py-2 pr-3">{result}</td>
+                                <td className="py-2 pr-3">{m.rounds}</td>
+                                <td className="py-2"><button className="px-2 py-1 rounded bg-sky-100 text-sky-700 text-xs" onClick={() => setSelectedMatchId(m.id)}>View</button></td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    {selectedMatch && (
+                      <div className="border border-slate-200 rounded-xl p-3 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <div className="text-sm text-slate-500">Match detail</div>
+                            <div className="text-lg font-semibold text-slate-800">{selectedMatchDate}</div>
+                            <div className="text-xs text-slate-500">Result: {selectedMatchResult}</div>
+                          </div>
+                          <button className="text-xs text-slate-500" onClick={() => setSelectedMatchId(null)}>Clear</button>
+                        </div>
+                        <div className="overflow-x-auto flex gap-1 text-xs">
+                          {selectedMatchRounds.map((r, idx) => (
+                            <span key={r.id} className={"px-2 py-1 rounded-full text-xs " + outcomeBadgeClass(r.outcome)}>{idx+1}</span>
+                          ))}
+                        </div>
+                        <div>
+                          <div className="font-semibold text-sm text-slate-700 mb-1">Why the AI won</div>
+                          {matchAiWins.length ? (
+                            <ul className="space-y-1 text-sm text-slate-600">
+                              {matchAiWins.map(r => (
+                                <li key={r.id}>Round reason: {r.reason}</li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <div className="text-sm text-slate-500">No AI wins to explain in this match.</div>
+                          )}
+                        </div>
+                        <div>
+                          <div className="font-semibold text-sm text-slate-700 mb-1">Top experts this match</div>
+                          <div className="flex flex-wrap gap-2 text-sm text-slate-600">
+                            {matchExpertBreakdown.length ? matchExpertBreakdown.map(item => (
+                              <span key={item.name} className="px-2 py-1 rounded-full bg-slate-100">{item.name}: {item.count}</span>
+                            )) : <span className="text-slate-500">No expert data.</span>}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {statsTab === "rounds" && (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap gap-2 text-sm">
+                      <label className="flex items-center gap-1">Mode
+                        <select value={roundFilters.mode} onChange={e=> setRoundFilters(f => ({ ...f, mode: e.target.value as RoundFilterMode }))} className="ml-1 border rounded px-2 py-1">
+                          <option value="all">All</option>
+                          <option value="practice">Practice</option>
+                          <option value="challenge">Challenge</option>
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-1">Difficulty
+                        <select value={roundFilters.difficulty} onChange={e=> setRoundFilters(f => ({ ...f, difficulty: e.target.value as RoundFilterDifficulty }))} className="ml-1 border rounded px-2 py-1">
+                          <option value="all">All</option>
+                          <option value="fair">Fair</option>
+                          <option value="normal">Normal</option>
+                          <option value="ruthless">Ruthless</option>
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-1">Outcome
+                        <select value={roundFilters.outcome} onChange={e=> setRoundFilters(f => ({ ...f, outcome: e.target.value as RoundFilterOutcome }))} className="ml-1 border rounded px-2 py-1">
+                          <option value="all">All</option>
+                          <option value="win">Win</option>
+                          <option value="lose">Lose</option>
+                          <option value="tie">Tie</option>
+                        </select>
+                      </label>
+                      <label className="flex items-center gap-1">From
+                        <input type="date" value={roundFilters.from} onChange={e=> setRoundFilters(f => ({ ...f, from: e.target.value }))} className="ml-1 border rounded px-2 py-1" />
+                      </label>
+                      <label className="flex items-center gap-1">To
+                        <input type="date" value={roundFilters.to} onChange={e=> setRoundFilters(f => ({ ...f, to: e.target.value }))} className="ml-1 border rounded px-2 py-1" />
+                      </label>
+                    </div>
+                    <div className="overflow-auto">
+                      <table className="w-full text-sm">
+                        <thead className="text-left text-slate-500 border-b border-slate-200">
+                          <tr>
+                            <th className="py-2 pr-3">#</th>
+                            <th className="py-2 pr-3">Player</th>
+                            <th className="py-2 pr-3">AI</th>
+                            <th className="py-2 pr-3">Outcome</th>
+                            <th className="py-2 pr-3">Confidence</th>
+                            <th className="py-2 pr-3">Top expert</th>
+                            <th className="py-2 pr-3">Reason</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {roundsPageSlice.map((r, idx) => (
+                            <tr key={r.id} className="border-b border-slate-100 last:border-none">
+                              <td className="py-2 pr-3">{roundPageStartIndex + idx + 1}</td>
+                              <td className="py-2 pr-3">{prettyMove(r.player)}</td>
+                              <td className="py-2 pr-3">{prettyMove(r.ai)}</td>
+                              <td className="py-2 pr-3 capitalize">{r.outcome}</td>
+                              <td className="py-2 pr-3">{Math.round(r.confidence * 100)}% ({r.confidenceBucket})</td>
+                              <td className="py-2 pr-3">{r.mixer?.topExperts?.[0]?.name || (r.policy === 'heuristic' ? 'Heuristic' : 'N/A')}</td>
+                              <td className="py-2 pr-3 text-slate-600">{r.reason}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="flex items-center justify-between text-sm text-slate-600">
+                      <span>Page {roundPage + 1} of {totalRoundPages}</span>
+                      <div className="flex gap-2">
+                        <button disabled={roundPage === 0} onClick={()=> setRoundPage(p=> Math.max(0, p-1))} className="px-2 py-1 rounded bg-slate-100 disabled:opacity-50">Prev</button>
+                        <button disabled={roundPage + 1 >= totalRoundPages} onClick={()=> setRoundPage(p=> Math.min(totalRoundPages-1, p+1))} className="px-2 py-1 rounded bg-slate-100 disabled:opacity-50">Next</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {statsTab === "insights" && (
+                  <div className="space-y-3 text-sm text-slate-600">
+                    <div className="font-semibold text-slate-700">Things we've learned</div>
+                    <ul className="list-disc pl-5 space-y-1">
+                      <li>Favorite move: {favoriteMoveText}</li>
+                      <li>Repeat after win: {repeatAfterWinPct}%</li>
+                      <li>Switch after loss: {switchAfterLossPct}%</li>
+                      <li>Top transition: {topTransition ? topTransitionLabel : 'Not enough data yet.'}</li>
+                      <li>{patternHint || 'No strong periodic pattern detected yet.'}</li>
+                    </ul>
+                    <div className="font-semibold text-slate-700">Against you, the AI excels when…</div>
+                    <div className="space-y-1">
+                      {confidenceBuckets.map(bucket => (
+                        <div key={bucket.label}>Confidence {bucket.label}: {bucket.total} rounds, AI win rate {bucket.total ? Math.round(bucket.winRate * 100) : 0}%</div>
+                      ))}
+                    </div>
+                    <div className="font-semibold text-slate-700">Expert contributions</div>
+                    <div className="flex flex-wrap gap-2">
+                      {expertContribution.length ? expertContribution.map(([name, count]) => (
+                        <span key={name} className="px-2 py-1 rounded-full bg-slate-100 text-slate-700">{name}: {count}</span>
+                      )) : <span className="text-slate-500">Not enough mixer data yet.</span>}
+                    </div>
+                    <div className="text-xs text-slate-500">Average streaks — You: {averageYouStreak} | AI: {averageAiStreak}. Reveal timing currently not tracked.</div>
+                  </div>
+                )}
+              </div>
+              <div className="px-4 py-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-sm">
+                <div className="flex gap-2">
+                  <button onClick={handleExportJson} className="px-3 py-1.5 rounded bg-sky-100 text-sky-700">Export JSON</button>
+                  <button onClick={handleExportCsv} className="px-3 py-1.5 rounded bg-sky-100 text-sky-700">Export CSV</button>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={handleEraseLastSession} className="px-3 py-1.5 rounded bg-amber-100 text-amber-700">Erase last session</button>
+                  <button onClick={handleResetAll} className="px-3 py-1.5 rounded bg-rose-100 text-rose-700">Erase all data</button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Footer robot idle (personality beat) */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: .4 }} className="fixed bottom-3 right-3 bg-white/70 rounded-2xl shadow px-3 py-2 flex items-center gap-2">
         <motion.span animate={{ y: [0,-1,0] }} transition={{ repeat: Infinity, duration: 2.6, ease: "easeInOut" }}>
@@ -961,5 +1736,13 @@ export default function RPSDoodleApp(){
       </motion.div>
 
     </div>
+  );
+}
+
+export default function RPSDoodleApp(){
+  return (
+    <StatsProvider>
+      <RPSDoodleAppInner />
+    </StatsProvider>
   );
 }
