@@ -28,6 +28,7 @@ export interface RoundLog {
   sessionId: string;
   matchId?: string;
   playerId: string;
+  profileId: string;
   t: string;
   mode: Mode;
   bestOf: BestOf;
@@ -50,6 +51,7 @@ export interface MatchSummary {
   sessionId: string;
   clientId?: string;
   playerId: string;
+  profileId: string;
   startedAt: string;
   endedAt: string;
   mode: Mode;
@@ -62,25 +64,39 @@ export interface MatchSummary {
   notes?: string;
 }
 
+export interface StatsProfile {
+  id: string;
+  playerId: string;
+  name: string;
+  createdAt: string;
+  trainingCount: number;
+  trained: boolean;
+}
+
+type StatsProfileUpdate = Partial<Pick<StatsProfile, "name" | "trainingCount" | "trained">>;
+
 interface StatsContextValue {
   rounds: RoundLog[];
   matches: MatchSummary[];
   sessionId: string;
-  logRound: (round: Omit<RoundLog, "id" | "sessionId" | "playerId">) => RoundLog | null;
-  logMatch: (match: Omit<MatchSummary, "id" | "sessionId" | "playerId">) => MatchSummary | null;
-  resetAll: () => void;
-  eraseLastSession: () => void;
+  currentProfileId: string | null;
+  currentProfile: StatsProfile | null;
+  profiles: StatsProfile[];
+  logRound: (round: Omit<RoundLog, "id" | "sessionId" | "playerId" | "profileId">) => RoundLog | null;
+  logMatch: (match: Omit<MatchSummary, "id" | "sessionId" | "playerId" | "profileId">) => MatchSummary | null;
+  selectProfile: (id: string) => void;
+  createProfile: (name: string) => StatsProfile | null;
+  updateProfile: (id: string, patch: StatsProfileUpdate) => void;
   exportJson: () => string;
   exportRoundsCsv: () => string;
-  eraseDataForPlayer: (playerId: string) => void;
-  exportJsonForPlayer: (playerId: string) => string;
-  exportRoundsCsvForPlayer: (playerId: string) => string;
 }
 
 const StatsContext = createContext<StatsContextValue | null>(null);
 
 const ROUND_KEY = "rps_stats_rounds_v1";
 const MATCH_KEY = "rps_stats_matches_v1";
+const PROFILE_KEY = "rps_stats_profiles_v1";
+const CURRENT_PROFILE_KEY = "rps_current_stats_profile_v1";
 const MAX_ROUNDS = 1000;
 
 function loadFromStorage<T>(key: string): T[] {
@@ -105,6 +121,56 @@ function saveToStorage(key: string, value: unknown) {
   }
 }
 
+function loadProfiles(): StatsProfile[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(PROFILE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((item: StatsProfile | any) => ({
+      id: typeof item?.id === "string" ? item.id : makeId("profile"),
+      playerId: typeof item?.playerId === "string" ? item.playerId : "",
+      name: typeof item?.name === "string" ? item.name : "Profile",
+      createdAt: typeof item?.createdAt === "string" ? item.createdAt : new Date().toISOString(),
+      trainingCount: typeof item?.trainingCount === "number" ? item.trainingCount : 0,
+      trained: Boolean(item?.trained),
+    }));
+  } catch (err) {
+    console.warn("Failed to read stats profiles", err);
+    return [];
+  }
+}
+
+function saveProfiles(profiles: StatsProfile[]) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(profiles));
+  } catch (err) {
+    console.warn("Failed to persist stats profiles", err);
+  }
+}
+
+function loadCurrentProfileId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return localStorage.getItem(CURRENT_PROFILE_KEY);
+  } catch (err) {
+    console.warn("Failed to read current stats profile", err);
+    return null;
+  }
+}
+
+function saveCurrentProfileId(id: string | null) {
+  if (typeof window === "undefined") return;
+  try {
+    if (id) localStorage.setItem(CURRENT_PROFILE_KEY, id);
+    else localStorage.removeItem(CURRENT_PROFILE_KEY);
+  } catch (err) {
+    console.warn("Failed to persist current stats profile", err);
+  }
+}
+
 function makeId(prefix: string) {
   if (typeof crypto !== "undefined" && (crypto as any).randomUUID) {
     return prefix + "-" + (crypto as any).randomUUID();
@@ -113,111 +179,235 @@ function makeId(prefix: string) {
 }
 
 export function StatsProvider({ children }: { children: React.ReactNode }) {
-  const [rounds, setRounds] = useState<RoundLog[]>(() => loadFromStorage<RoundLog>(ROUND_KEY));
-  const [matches, setMatches] = useState<MatchSummary[]>(() => loadFromStorage<MatchSummary>(MATCH_KEY));
+  const [allRounds, setAllRounds] = useState<RoundLog[]>(() => loadFromStorage<RoundLog>(ROUND_KEY));
+  const [allMatches, setAllMatches] = useState<MatchSummary[]>(() => loadFromStorage<MatchSummary>(MATCH_KEY));
+  const [profiles, setProfiles] = useState<StatsProfile[]>(() => loadProfiles());
+  const [currentProfileId, setCurrentProfileId] = useState<string | null>(() => loadCurrentProfileId());
   const [roundsDirty, setRoundsDirty] = useState(false);
   const [matchesDirty, setMatchesDirty] = useState(false);
+  const [profilesDirty, setProfilesDirty] = useState(false);
   const sessionIdRef = useRef<string>("");
-  const { currentPlayerId, players } = usePlayers();
+  const { currentPlayerId, currentPlayer } = usePlayers();
 
   if (!sessionIdRef.current) {
     sessionIdRef.current = makeId("sess");
   }
 
   const sessionId = sessionIdRef.current;
+  const playerProfiles = useMemo(() => {
+    if (!currentPlayerId) return [] as StatsProfile[];
+    return profiles.filter(p => p.playerId === currentPlayerId);
+  }, [profiles, currentPlayerId]);
 
-  const logRound = useCallback((round: Omit<RoundLog, "id" | "sessionId" | "playerId">) => {
+  useEffect(() => {
+    if (!currentPlayerId) {
+      if (currentProfileId) {
+        setCurrentProfileId(null);
+        saveCurrentProfileId(null);
+      }
+      return;
+    }
+    if (playerProfiles.length === 0) {
+      const defaultProfile: StatsProfile = {
+        id: makeId("profile"),
+        playerId: currentPlayerId,
+        name: "Primary",
+        createdAt: new Date().toISOString(),
+        trainingCount: 0,
+        trained: false,
+      };
+      setProfiles(prev => prev.concat(defaultProfile));
+      setProfilesDirty(true);
+      setCurrentProfileId(defaultProfile.id);
+      saveCurrentProfileId(defaultProfile.id);
+      return;
+    }
+    const belongs = currentProfileId && playerProfiles.some(p => p.id === currentProfileId);
+    if (!belongs) {
+      const fallback = playerProfiles[0];
+      if (fallback && fallback.id !== currentProfileId) {
+        setCurrentProfileId(fallback.id);
+        saveCurrentProfileId(fallback.id);
+      }
+    }
+  }, [currentPlayerId, currentProfileId, playerProfiles]);
+
+  const currentProfile = useMemo(() => {
+    if (!currentProfileId) return playerProfiles[0] ?? null;
+    return playerProfiles.find(p => p.id === currentProfileId) ?? playerProfiles[0] ?? null;
+  }, [currentProfileId, playerProfiles]);
+
+  useEffect(() => {
+    if (!roundsDirty) return;
+    const timer = window.setTimeout(() => {
+      saveToStorage(ROUND_KEY, allRounds);
+      setRoundsDirty(false);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [roundsDirty, allRounds]);
+
+  useEffect(() => {
+    if (!matchesDirty) return;
+    const timer = window.setTimeout(() => {
+      saveToStorage(MATCH_KEY, allMatches);
+      setMatchesDirty(false);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [matchesDirty, allMatches]);
+
+  useEffect(() => {
+    if (!profilesDirty) return;
+    const timer = window.setTimeout(() => {
+      saveProfiles(profiles);
+      setProfilesDirty(false);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [profilesDirty, profiles]);
+
+  useEffect(() => {
+    if (!currentPlayerId) return;
+    const fallbackProfile = playerProfiles[0];
+    if (!fallbackProfile) return;
+    if (allRounds.some(r => r.playerId === currentPlayerId && !r.profileId)) {
+      setAllRounds(prev => prev.map(r => {
+        if (r.playerId === currentPlayerId && !r.profileId) {
+          return { ...r, profileId: fallbackProfile.id };
+        }
+        return r;
+      }));
+      setRoundsDirty(true);
+    }
+    if (allMatches.some(m => m.playerId === currentPlayerId && !m.profileId)) {
+      setAllMatches(prev => prev.map(m => {
+        if (m.playerId === currentPlayerId && !m.profileId) {
+          return { ...m, profileId: fallbackProfile.id };
+        }
+        return m;
+      }));
+      setMatchesDirty(true);
+    }
+  }, [currentPlayerId, playerProfiles, allRounds, allMatches]);
+
+  const selectProfile = useCallback((id: string) => {
+    if (!playerProfiles.some(p => p.id === id)) return;
+    setCurrentProfileId(id);
+    saveCurrentProfileId(id);
+  }, [playerProfiles]);
+
+  const createProfile = useCallback((name: string) => {
     if (!currentPlayerId) return null;
+    const profile: StatsProfile = {
+      id: makeId("profile"),
+      playerId: currentPlayerId,
+      name,
+      createdAt: new Date().toISOString(),
+      trainingCount: 0,
+      trained: false,
+    };
+    setProfiles(prev => prev.concat(profile));
+    setProfilesDirty(true);
+    setCurrentProfileId(profile.id);
+    saveCurrentProfileId(profile.id);
+    return profile;
+  }, [currentPlayerId]);
+
+  const updateProfile = useCallback((id: string, patch: StatsProfileUpdate) => {
+    setProfiles(prev => prev.map(p => {
+      if (p.id !== id) return p;
+      return { ...p, ...patch };
+    }));
+    setProfilesDirty(true);
+  }, []);
+
+  const logRound = useCallback((round: Omit<RoundLog, "id" | "sessionId" | "playerId" | "profileId">) => {
+    if (!currentPlayerId || !currentProfile) return null;
     const entry: RoundLog = {
       ...round,
       id: makeId("r"),
       sessionId,
       playerId: currentPlayerId,
+      profileId: currentProfile.id,
     };
-    setRounds(prev => {
+    setAllRounds(prev => {
       const next = prev.concat(entry);
       const trimStart = Math.max(0, next.length - MAX_ROUNDS);
       return trimStart ? next.slice(trimStart) : next;
     });
     setRoundsDirty(true);
     return entry;
-  }, [sessionId, currentPlayerId]);
+  }, [sessionId, currentPlayerId, currentProfile]);
 
-  const logMatch = useCallback((match: Omit<MatchSummary, "id" | "sessionId" | "playerId">) => {
-    if (!currentPlayerId) return null;
+  const logMatch = useCallback((match: Omit<MatchSummary, "id" | "sessionId" | "playerId" | "profileId">) => {
+    if (!currentPlayerId || !currentProfile) return null;
     const entry: MatchSummary = {
       ...match,
       id: makeId("m"),
       sessionId,
       playerId: currentPlayerId,
+      profileId: currentProfile.id,
     };
-    setMatches(prev => prev.concat(entry));
+    setAllMatches(prev => prev.concat(entry));
     setMatchesDirty(true);
     return entry;
-  }, [sessionId, currentPlayerId]);
+  }, [sessionId, currentPlayerId, currentProfile]);
 
-  useEffect(() => {
-    if (!roundsDirty) return;
-    const timer = window.setTimeout(() => {
-      saveToStorage(ROUND_KEY, rounds);
-      setRoundsDirty(false);
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [roundsDirty, rounds]);
+  const rounds = useMemo(() => {
+    if (!currentPlayerId || !currentProfile) return [] as RoundLog[];
+    return allRounds.filter(r => r.playerId === currentPlayerId && (r.profileId ?? currentProfile.id) === currentProfile.id);
+  }, [allRounds, currentPlayerId, currentProfile]);
 
-  useEffect(() => {
-    if (!matchesDirty) return;
-    const timer = window.setTimeout(() => {
-      saveToStorage(MATCH_KEY, matches);
-      setMatchesDirty(false);
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [matchesDirty, matches]);
-
-  const resetAll = useCallback(() => {
-    setRounds([]);
-    setMatches([]);
-    setRoundsDirty(true);
-    setMatchesDirty(true);
-    if (typeof window !== "undefined") {
-      localStorage.removeItem(ROUND_KEY);
-      localStorage.removeItem(MATCH_KEY);
-    }
-  }, []);
-
-  const eraseLastSession = useCallback(() => {
-    if (!rounds.length && !matches.length) return;
-    const idsInOrder: string[] = [];
-    rounds.forEach(r => {
-      if (!idsInOrder.includes(r.sessionId)) idsInOrder.push(r.sessionId);
-    });
-    matches.forEach(m => {
-      if (!idsInOrder.includes(m.sessionId)) idsInOrder.push(m.sessionId);
-    });
-    const target = idsInOrder[idsInOrder.length - 1];
-    if (!target) return;
-    setRounds(prev => prev.filter(r => r.sessionId !== target));
-    setMatches(prev => prev.filter(m => m.sessionId !== target));
-    setRoundsDirty(true);
-    setMatchesDirty(true);
-  }, [rounds, matches]);
+  const matches = useMemo(() => {
+    if (!currentPlayerId || !currentProfile) return [] as MatchSummary[];
+    return allMatches.filter(m => m.playerId === currentPlayerId && (m.profileId ?? currentProfile.id) === currentProfile.id);
+  }, [allMatches, currentPlayerId, currentProfile]);
 
   const exportJson = useCallback(() => {
-    const payload = { rounds, matches };
+    const payload = {
+      player: currentPlayer ?? null,
+      profile: currentProfile ?? null,
+      rounds,
+      matches,
+    };
     return JSON.stringify(payload, null, 2);
-  }, [rounds, matches]);
+  }, [currentPlayer, currentProfile, rounds, matches]);
 
   const exportRoundsCsv = useCallback(() => {
-    const headers = ["playerId","playerName","gradeBand","timestamp","mode","bestOf","difficulty","player","ai","outcome","policy","confidence","streakAI","streakYou"];
+    const headers = [
+      "playerId",
+      "playerName",
+      "gradeBand",
+      "ageBand",
+      "gender",
+      "priorExperience",
+      "profileName",
+      "timestamp",
+      "mode",
+      "bestOf",
+      "difficulty",
+      "player",
+      "ai",
+      "outcome",
+      "policy",
+      "confidence",
+      "streakAI",
+      "streakYou",
+    ];
     const lines = [headers.join(",")];
+    const playerName = currentPlayer?.displayName ?? "";
+    const grade = currentPlayer?.gradeBand ?? "";
+    const age = currentPlayer?.ageBand ?? "";
+    const gender = currentPlayer?.gender ?? "";
+    const prior = currentPlayer?.priorExperience ?? "";
+    const profileName = currentProfile?.name ?? "";
     rounds.forEach(r => {
-      const prof = players.find(p => p.id === r.playerId) || null;
-      const playerName = prof?.displayName ?? "";
-      const grade = prof?.gradeBand ?? "";
       lines.push([
         r.playerId,
         JSON.stringify(playerName),
         grade,
+        JSON.stringify(age ?? ""),
+        JSON.stringify(gender ?? ""),
+        JSON.stringify(prior ?? ""),
+        JSON.stringify(profileName),
         r.t,
         r.mode,
         r.bestOf,
@@ -228,69 +418,27 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         r.policy,
         r.confidence.toFixed(2),
         r.streakAI,
-        r.streakYou
+        r.streakYou,
       ].join(","));
     });
-    return lines.join('\n');
-
-  }, [rounds, players]);
-
-  const eraseDataForPlayer = useCallback((playerId: string) => {
-    setRounds(prev => prev.filter(r => r.playerId !== playerId));
-    setMatches(prev => prev.filter(m => m.playerId !== playerId));
-    setRoundsDirty(true);
-    setMatchesDirty(true);
-  }, []);
-
-  const exportJsonForPlayer = useCallback((playerId: string) => {
-    const r = rounds.filter(x => x.playerId === playerId);
-    const m = matches.filter(x => x.playerId === playerId);
-    const prof = players.find(p => p.id === playerId) || null;
-    const payload = { profile: prof, rounds: r, matches: m };
-    return JSON.stringify(payload, null, 2);
-  }, [rounds, matches, players]);
-
-  const exportRoundsCsvForPlayer = useCallback((playerId: string) => {
-    const headers = ["playerId","playerName","gradeBand","timestamp","mode","bestOf","difficulty","player","ai","outcome","policy","confidence","streakAI","streakYou"];
-    const lines = [headers.join(",")];
-    const prof = players.find(p => p.id === playerId) || null;
-    const playerName = prof?.displayName ?? "";
-    const grade = prof?.gradeBand ?? "";
-    rounds.filter(r => r.playerId === playerId).forEach(r => {
-      lines.push([
-        r.playerId,
-        JSON.stringify(playerName),
-        grade,
-        r.t,
-        r.mode,
-        r.bestOf,
-        r.difficulty,
-        r.player,
-        r.ai,
-        r.outcome,
-        r.policy,
-        r.confidence.toFixed(2),
-        r.streakAI,
-        r.streakYou
-      ].join(","));
-    });
-    return lines.join('\n');
-  }, [rounds, players]);
+    return lines.join("\n");
+  }, [rounds, currentPlayer, currentProfile]);
 
   const value = useMemo<StatsContextValue>(() => ({
     rounds,
     matches,
     sessionId,
+    currentProfileId: currentProfile?.id ?? null,
+    currentProfile: currentProfile ?? null,
+    profiles: playerProfiles,
     logRound,
     logMatch,
-    resetAll,
-    eraseLastSession,
+    selectProfile,
+    createProfile,
+    updateProfile,
     exportJson,
     exportRoundsCsv,
-    eraseDataForPlayer,
-    exportJsonForPlayer,
-    exportRoundsCsvForPlayer,
-  }), [rounds, matches, sessionId, logRound, logMatch, resetAll, eraseLastSession, exportJson, exportRoundsCsv, eraseDataForPlayer, exportJsonForPlayer, exportRoundsCsvForPlayer]);
+  }), [rounds, matches, sessionId, currentProfile, playerProfiles, logRound, logMatch, selectProfile, createProfile, updateProfile, exportJson, exportRoundsCsv]);
 
   return <StatsContext.Provider value={value}>{children}</StatsContext.Provider>;
 }

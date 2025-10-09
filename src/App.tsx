@@ -442,8 +442,20 @@ function ModeCard({ mode, onSelect, isDimmed, disabled = false }: { mode: Mode, 
 
 // Main component
 function RPSDoodleAppInner(){
-  const { rounds: allRounds, matches: allMatches, logRound, logMatch, resetAll, eraseLastSession, exportJson, exportRoundsCsv, eraseDataForPlayer, exportJsonForPlayer, exportRoundsCsvForPlayer } = useStats();
-  const { players, currentPlayer, currentPlayerId, hasConsented, setCurrentPlayer, createPlayer, updatePlayer, deletePlayer } = usePlayers();
+  const {
+    rounds: profileRounds,
+    matches: profileMatches,
+    logRound,
+    logMatch,
+    exportJson,
+    exportRoundsCsv,
+    profiles: statsProfiles,
+    currentProfile,
+    createProfile: createStatsProfile,
+    selectProfile,
+    updateProfile: updateStatsProfile,
+  } = useStats();
+  const { currentPlayer, hasConsented, createPlayer, updatePlayer } = usePlayers();
   const [statsOpen, setStatsOpen] = useState(false);
   const [statsTab, setStatsTab] = useState<"overview" | "matches" | "rounds" | "insights">("overview");
   const statsModalRef = useRef<HTMLDivElement | null>(null);
@@ -456,14 +468,10 @@ function RPSDoodleAppInner(){
   const matchStartRef = useRef<string>(new Date().toISOString());
   const currentMatchIdRef = useRef<string>(makeLocalId("match"));
   const [roundFilters, setRoundFilters] = useState<{ mode: RoundFilterMode; difficulty: RoundFilterDifficulty; outcome: RoundFilterOutcome; from: string; to: string }>({ mode: "all", difficulty: "all", outcome: "all", from: "", to: "" });
-  const [selectedPlayerFilterId, setSelectedPlayerFilterId] = useState<string | "all">(currentPlayerId || "all");
-  useEffect(() => { setSelectedPlayerFilterId(currentPlayerId || "all"); }, [currentPlayerId]);
-  useEffect(() => { setRoundPage(0); }, [roundFilters]);
-  const playerFilterId = selectedPlayerFilterId === "all" ? null : selectedPlayerFilterId;
-  const rounds = useMemo(() => (playerFilterId ? allRounds.filter(r => r.playerId === playerFilterId) : allRounds), [allRounds, playerFilterId]);
-  const matches = useMemo(() => (playerFilterId ? allMatches.filter(m => m.playerId === playerFilterId) : allMatches), [allMatches, playerFilterId]);
+  useEffect(() => { setRoundPage(0); }, [roundFilters, profileRounds]);
+  const rounds = useMemo(() => profileRounds, [profileRounds]);
+  const matches = useMemo(() => profileMatches, [profileMatches]);
   const [showPlayerModal, setShowPlayerModal] = useState(false);
-  const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
   useEffect(() => { if (!hasConsented) setShowPlayerModal(true); }, [hasConsented]);
 
   const style = `
@@ -495,26 +503,9 @@ function RPSDoodleAppInner(){
   const [aiMode, setAiMode] = useState<AIMode>("normal");
   const [predictorLevel, setPredictorLevel] = useState<PredictorLevel>("smart");
   const TRAIN_ROUNDS = 10;
-  const TRAIN_KEY = "rps_trained";
-  const TRAIN_COUNT_KEY = "rps_training_count";
-  const [isTrained, setIsTrained] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem(TRAIN_KEY) === "1";
-  });
-  const [trainingCount, setTrainingCount] = useState<number>(() => {
-    if (typeof window === "undefined") return 0;
-    const stored = parseInt(localStorage.getItem(TRAIN_COUNT_KEY) ?? "0", 10);
-    if (Number.isNaN(stored)) return 0;
-    return Math.min(Math.max(stored, 0), TRAIN_ROUNDS);
-  });
-  const [trainingActive, setTrainingActive] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    const trained = localStorage.getItem(TRAIN_KEY) === "1";
-    if (trained) return false;
-    const stored = parseInt(localStorage.getItem(TRAIN_COUNT_KEY) ?? "0", 10);
-    if (Number.isNaN(stored)) return false;
-    return stored > 0 && stored < TRAIN_ROUNDS;
-  });
+  const trainingCount = currentProfile?.trainingCount ?? 0;
+  const isTrained = currentProfile?.trained ?? false;
+  const [trainingActive, setTrainingActive] = useState<boolean>(false);
 
   const trainingComplete = trainingCount >= TRAIN_ROUNDS;
   const needsTraining = !isTrained && !trainingComplete;
@@ -526,6 +517,13 @@ function RPSDoodleAppInner(){
   const modesDisabled = trainingActive || needsTraining;
   const trainingDisplayCount = Math.min(trainingCount, TRAIN_ROUNDS);
   const trainingProgress = Math.min(trainingDisplayCount / TRAIN_ROUNDS, 1);
+
+  useEffect(() => {
+    bootNeedsTraining.current = needsTraining;
+    bootAutoResumeTraining.current = shouldAutoResumeTraining;
+    bootInitialTrainingActive.current = trainingActive;
+  }, [needsTraining, shouldAutoResumeTraining, trainingActive]);
+
   const [seed] = useState(()=>Math.floor(Math.random()*1e9));
   const rng = useMemo(()=>mulberry32(seed), [seed]);
   const [bestOf, setBestOf] = useState<BestOf>(5);
@@ -546,6 +544,10 @@ function RPSDoodleAppInner(){
   const [live, setLive] = useState("");
   const countdownRef = useRef<number | null>(null);
   const trainingAnnouncementsRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    setTrainingActive(false);
+    trainingAnnouncementsRef.current.clear();
+  }, [currentProfile?.id]);
   const clearCountdown = ()=>{ if (countdownRef.current!==null){ clearInterval(countdownRef.current); countdownRef.current=null; } };
   const startCountdown = ()=>{ setPhase("countdown"); setCount(3); clearCountdown(); countdownRef.current = window.setInterval(()=>{
     setCount(prev=>{
@@ -607,17 +609,6 @@ function RPSDoodleAppInner(){
     });
     decisionTraceRef.current = null;
   }, [logRound, selectedMode, bestOf, aiMode]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    localStorage.setItem(TRAIN_KEY, isTrained ? "1" : "0");
-  }, [isTrained]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const value = Math.min(trainingCount, TRAIN_ROUNDS);
-    localStorage.setItem(TRAIN_COUNT_KEY, String(value));
-  }, [trainingCount]);
 
   useEffect(() => {
     if (!needsTraining && !trainingActive) return;
@@ -828,36 +819,59 @@ function RPSDoodleAppInner(){
     return null;
   }, [rounds]);
 
+  const EXPORT_WARNING_TEXT = "Export may include personal/demographic info. You are responsible for how exported files are stored and shared. No liability is assumed.";
+  const PROFILE_WARNING_TEXT = "New statistics profile requires retraining (10 rounds) before normal play. Existing stats remain available but do not merge.";
+  const sanitizeForFile = useCallback((value: string) => {
+    return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  }, []);
+
+  const handleSelectProfile = useCallback((id: string) => {
+    if (!id) return;
+    selectProfile(id);
+  }, [selectProfile]);
+
+  const handleCreateProfile = useCallback(() => {
+    if (!currentPlayer) {
+      setShowPlayerModal(true);
+      return;
+    }
+    if (!window.confirm(PROFILE_WARNING_TEXT)) return;
+    const defaultName = `Profile ${statsProfiles.length + 1}`;
+    const name = window.prompt("Name for new statistics profile?", defaultName)?.trim();
+    if (!name) return;
+    const created = createStatsProfile(name);
+    if (created) {
+      setLive("New statistics profile created. Complete training to enable challenge mode.");
+    }
+  }, [currentPlayer, statsProfiles.length, createStatsProfile, setLive, setShowPlayerModal]);
+
   const handleExportJson = useCallback(() => {
-    const data = (selectedPlayerFilterId && selectedPlayerFilterId !== 'all') ? exportJsonForPlayer(selectedPlayerFilterId as string) : exportJson();
+    if (!currentPlayer || !currentProfile) return;
+    if (!window.confirm(EXPORT_WARNING_TEXT)) return;
+    const data = exportJson();
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = (selectedPlayerFilterId && selectedPlayerFilterId !== 'all') ? ('rps-' + String(selectedPlayerFilterId) + '-stats.json') : 'rps-stats.json';
+    const profileSegment = sanitizeForFile(currentProfile.name || 'profile') || 'profile';
+    a.download = `rps-${profileSegment}-stats.json`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [exportJson, exportJsonForPlayer, selectedPlayerFilterId]);
+  }, [currentPlayer, currentProfile, exportJson, sanitizeForFile]);
 
   const handleExportCsv = useCallback(() => {
-    const data = (selectedPlayerFilterId && selectedPlayerFilterId !== 'all') ? exportRoundsCsvForPlayer(selectedPlayerFilterId as string) : exportRoundsCsv();
+    if (!currentPlayer || !currentProfile) return;
+    if (!window.confirm(EXPORT_WARNING_TEXT)) return;
+    const data = exportRoundsCsv();
     const blob = new Blob([data], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = (selectedPlayerFilterId && selectedPlayerFilterId !== 'all') ? ('rps-' + String(selectedPlayerFilterId) + '-rounds.csv') : 'rps-rounds.csv';
+    const profileSegment = sanitizeForFile(currentProfile.name || 'profile') || 'profile';
+    a.download = `rps-${profileSegment}-rounds.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [exportRoundsCsv, exportRoundsCsvForPlayer, selectedPlayerFilterId]);
-  const handleResetAll = useCallback(() => {
-    resetAll();
-    setSelectedMatchId(null);
-  }, [resetAll]);
-
-  const handleEraseLastSession = useCallback(() => {
-    eraseLastSession();
-    setSelectedMatchId(null);
-  }, [eraseLastSession]);
+  }, [currentPlayer, currentProfile, exportRoundsCsv, sanitizeForFile]);
 
   useEffect(() => {
     if (!statsOpen) return;
@@ -992,15 +1006,12 @@ function RPSDoodleAppInner(){
   }
 
   function resetTraining(){
-    if (typeof window !== "undefined") {
-      localStorage.setItem(TRAIN_KEY, "0");
-      localStorage.setItem(TRAIN_COUNT_KEY, "0");
-    }
     trainingAnnouncementsRef.current.clear();
-    setIsTrained(false);
+    if (currentProfile) {
+      updateStatsProfile(currentProfile.id, { trainingCount: 0, trained: false });
+    }
     setPredictorMode(false);
     setAiMode("fair");
-    setTrainingCount(0);
     setTrainingActive(false);
     startMatch("practice", { silent: true });
   }
@@ -1026,7 +1037,13 @@ function RPSDoodleAppInner(){
       if (res === "win") audio.thud(); else if (res === "lose") audio.snare(); else audio.tie();
       setTimeout(()=>{
         recordRound(player, ai, res);
-        if (trainingActive) setTrainingCount(count=> Math.min(TRAIN_ROUNDS, count + 1));
+        if (trainingActive && currentProfile) {
+          const nextCount = Math.min(TRAIN_ROUNDS, trainingCount + 1);
+          updateStatsProfile(currentProfile.id, {
+            trainingCount: nextCount,
+            trained: nextCount >= TRAIN_ROUNDS ? true : currentProfile.trained,
+          });
+        }
         setPhase("feedback");
         setLastMoves(prev=>[...prev, player]);
       }, 150);
@@ -1061,9 +1078,11 @@ function RPSDoodleAppInner(){
     if (!trainingActive) return;
     if (trainingCount < TRAIN_ROUNDS) return;
     setTrainingActive(false);
-    if (!isTrained) setIsTrained(true);
+    if (currentProfile && !currentProfile.trained) {
+      updateStatsProfile(currentProfile.id, { trained: true });
+    }
     trainingAnnouncementsRef.current.clear();
-  }, [trainingActive, trainingCount, isTrained]);
+  }, [trainingActive, trainingCount, currentProfile, updateStatsProfile]);
 
   // Failsafes: if something stalls, advance automatically
   useEffect(()=>{ if (phase === "selected"){ const t = setTimeout(()=>{ if (phase === "selected") startCountdown(); }, 500); return ()=> clearTimeout(t); } }, [phase]);
@@ -1183,26 +1202,11 @@ function RPSDoodleAppInner(){
         <div className="flex items-center gap-2">
           {trainingActive && <span className="px-2 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-700">Training</span>}
           {liveAiConfidence !== null && <span className="px-2 py-1 text-xs font-semibold rounded-full bg-sky-100 text-sky-700">AI conf: {Math.round((liveAiConfidence ?? 0) * 100)}%</span>}
-          <button onClick={() => setStatsOpen(true)} className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900">Statistics</button>
-<button onClick={() => { if (!hasConsented) { setShowPlayerModal(true); return; } goToMode(); }} title={!hasConsented ? "Check consent to continue." : undefined} disabled={modesDisabled || !hasConsented} className={"px-3 py-1.5 rounded-xl shadow text-sm " + ((modesDisabled || !hasConsented) ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900")}>Start Game</button>
-<details className="bg-white/70 rounded-xl shadow group">
-  <summary className="list-none px-3 py-1.5 cursor-pointer text-sm text-slate-900">{currentPlayer ? (currentPlayer.displayName + " (" + currentPlayer.gradeBand + ")") : "Select Player"}</summary>
-  <div className="p-3 pt-0 space-y-2 text-sm min-w-[220px]">
-    <div className="font-semibold text-slate-700">Players</div>
-    {players.length ? (
-      <ul className="space-y-1">
-        {players.map(p => (
-          <li key={p.id} className="flex items-center justify-between gap-2">
-            <button className="text-left flex-1 px-2 py-1 rounded hover:bg-slate-100" onClick={()=> setCurrentPlayer(p.id)}>{p.displayName} <span className="text-slate-500 text-xs">({p.gradeBand})</span></button>
-            <button className="text-xs text-sky-700" onClick={()=> { setEditingPlayerId(p.id); setShowPlayerModal(true); }}>Edit</button>
-            <button className="text-xs text-rose-700" onClick={()=> { if (confirm("Delete this player?")) { if (confirm("Also erase this player's logs?")) { eraseDataForPlayer(p.id); } deletePlayer(p.id); } }}>Delete</button>
-          </li>
-        ))}
-      </ul>
-    ) : <div className="text-slate-500">No players yet.</div>}
-    <button className="px-2 py-1 rounded bg-sky-100 text-sky-700" onClick={()=> { setEditingPlayerId(null); setShowPlayerModal(true); }}>Add Player</button>
-  </div>
-</details>
+            <button onClick={() => setStatsOpen(true)} className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900">Statistics</button>
+            <button onClick={() => setShowPlayerModal(true)} className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900">
+              {currentPlayer ? `${currentPlayer.displayName} (${currentPlayer.gradeBand})` : 'Set up profile'}
+            </button>
+            <button onClick={() => { if (!hasConsented) { setShowPlayerModal(true); return; } goToMode(); }} title={!hasConsented ? "Check consent to continue." : undefined} disabled={modesDisabled || !hasConsented} className={"px-3 py-1.5 rounded-xl shadow text-sm " + ((modesDisabled || !hasConsented) ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900")}>Start Game</button>
           <details className="bg-white/70 rounded-xl shadow group">
             <summary className="list-none px-3 py-1.5 cursor-pointer text-sm text-slate-900">Settings ⚙️</summary>
             <div className="p-3 pt-0 space-y-2 text-sm">
@@ -1222,24 +1226,9 @@ function RPSDoodleAppInner(){
               <label className="flex items-center justify-between gap-4"><span>Legacy level</span>
               <hr className="my-2" />
               <div className="space-y-2">
-                <div className="text-xs text-slate-500">Privacy</div>
-                <div className="flex items-center gap-2">
-                  <button className="px-2 py-1 rounded bg-sky-100 text-sky-700" disabled={!currentPlayer} onClick={()=>{
-                    if (!currentPlayer) return;
-                    const data = exportJsonForPlayer(currentPlayer.id);
-                    const blob = new Blob([data], { type: 'application/json' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a'); a.href = url; a.download = 'rps-my-data.json'; a.click(); URL.revokeObjectURL(url);
-                  }}>Export my data</button>
-                  <button className="px-2 py-1 rounded bg-rose-100 text-rose-700" disabled={!currentPlayer} onClick={()=>{
-                    if (!currentPlayer) return;
-                    if (confirm('Erase my data? This removes my profile and logs.')) {
-                      eraseDataForPlayer(currentPlayer.id);
-                      deletePlayer(currentPlayer.id);
-                      setShowPlayerModal(true);
-                    }
-                  }}>Erase my data</button>
-                </div>
+                <div className="text-xs text-slate-500">Profile &amp; data</div>
+                <button className="px-2 py-1 rounded bg-sky-100 text-sky-700" onClick={()=> setShowPlayerModal(true)}>Edit demographics</button>
+                <p className="text-xs text-slate-500 max-w-xs">Use the Statistics panel to export your data. Exports always include your demographics alongside the selected statistics profile.</p>
               </div>
                 <select value={predictorLevel} onChange={e=> setPredictorLevel(e.target.value as PredictorLevel)} className="px-2 py-1 rounded bg-white shadow-inner">
                   <option value="basic">Basic</option>
@@ -1445,6 +1434,30 @@ function RPSDoodleAppInner(){
                 <h2 className="text-lg font-semibold text-slate-800">Statistics</h2>
                 <button onClick={() => setStatsOpen(false)} className="text-slate-500 hover:text-slate-700 text-sm">Close ✕</button>
               </div>
+              <div className="px-4 pt-3 pb-2 space-y-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-800">Active statistics profile</div>
+                    <div className="text-xs text-slate-500">
+                      {currentProfile ? (
+                        <span>{currentProfile.name}{(!currentProfile.trained && currentProfile.trainingCount < TRAIN_ROUNDS) ? ' • Training required' : ''}</span>
+                      ) : 'No profile selected.'}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm text-slate-600 flex items-center gap-2">
+                      <span>Profile</span>
+                      <select value={currentProfile?.id ?? ''} onChange={e => handleSelectProfile(e.target.value)} className="border rounded px-2 py-1" disabled={!statsProfiles.length}>
+                        {statsProfiles.map(profile => (
+                          <option key={profile.id} value={profile.id}>{profile.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <button onClick={handleCreateProfile} className="px-2 py-1 rounded bg-sky-100 text-sky-700">New profile</button>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500">Profiles keep logs, training, and exports separate. Switch profiles to return to previous stats instantly.</p>
+              </div>
               <div className="px-4 pt-3 flex flex-wrap gap-2" role="tablist" aria-label="Statistics tabs">
                 {statsTabs.map(tab => (
                   <button
@@ -1593,14 +1606,6 @@ function RPSDoodleAppInner(){
                 {statsTab === "rounds" && (
                   <div className="space-y-3">
                     <div className="flex flex-wrap gap-2 text-sm">
-                      <label className="flex items-center gap-1">Player
-                        <select value={selectedPlayerFilterId} onChange={e=> setSelectedPlayerFilterId(e.target.value as any)} className="ml-1 border rounded px-2 py-1">
-                          <option value="all">Current Player</option>
-                          {players.map(p => (
-                            <option key={p.id} value={p.id}>{p.displayName} ({p.gradeBand})</option>
-                          ))}
-                        </select>
-                      </label>
                       <label className="flex items-center gap-1">Mode
                         <select value={roundFilters.mode} onChange={e=> setRoundFilters(f => ({ ...f, mode: e.target.value as RoundFilterMode }))} className="ml-1 border rounded px-2 py-1">
                           <option value="all">All</option>
@@ -1695,15 +1700,12 @@ function RPSDoodleAppInner(){
                   </div>
                 )}
               </div>
-              <div className="px-4 py-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-sm">
+              <div className="px-4 py-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-sm">
                 <div className="flex gap-2">
-                  <button onClick={handleExportJson} className="px-3 py-1.5 rounded bg-sky-100 text-sky-700">Export JSON</button>
-                  <button onClick={handleExportCsv} className="px-3 py-1.5 rounded bg-sky-100 text-sky-700">Export CSV</button>
+                  <button onClick={handleExportJson} disabled={!currentPlayer || !currentProfile} className="px-3 py-1.5 rounded bg-sky-100 text-sky-700 disabled:opacity-50 disabled:cursor-not-allowed">Export JSON</button>
+                  <button onClick={handleExportCsv} disabled={!currentPlayer || !currentProfile} className="px-3 py-1.5 rounded bg-sky-100 text-sky-700 disabled:opacity-50 disabled:cursor-not-allowed">Export CSV</button>
                 </div>
-                <div className="flex gap-2">
-                  <button onClick={handleEraseLastSession} className="px-3 py-1.5 rounded bg-amber-100 text-amber-700">Erase last session</button>
-                  <button onClick={handleResetAll} className="px-3 py-1.5 rounded bg-rose-100 text-rose-700">Erase all data</button>
-                </div>
+                <p className="text-xs text-slate-500">Exports bundle your demographics with this statistics profile.</p>
               </div>
             </motion.div>
           </motion.div>
@@ -1715,13 +1717,11 @@ function RPSDoodleAppInner(){
           <motion.div key="pmask" className="fixed inset-0 z-[70] bg-black/30 grid place-items-center" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onKeyDown={(e:any)=>{ if (e.key==='Escape' && hasConsented) setShowPlayerModal(false); }}>
             <motion.div role="dialog" aria-modal="true" aria-label="Player Setup" className="bg-white rounded-2xl shadow-xl w-[min(94vw,520px)]" initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 6, opacity: 0 }}>
               <PlayerSetupForm
-                players={players}
-                editingId={editingPlayerId}
+                currentPlayer={currentPlayer ?? null}
                 onClose={()=> { if (hasConsented) setShowPlayerModal(false); }}
-                onSaved={()=> { setShowPlayerModal(false); setEditingPlayerId(null); }}
+                onSaved={()=> { setShowPlayerModal(false); }}
                 createPlayer={createPlayer}
                 updatePlayer={updatePlayer}
-                setCurrentPlayer={setCurrentPlayer}
               />
             </motion.div>
           </motion.div>
@@ -1740,36 +1740,32 @@ function RPSDoodleAppInner(){
 }
 
 interface PlayerSetupFormProps {
-  players: PlayerProfile[];
-  editingId: string | null;
+  currentPlayer: PlayerProfile | null;
   onClose: () => void;
   onSaved: () => void;
   createPlayer: (input: Omit<PlayerProfile, "id">) => PlayerProfile;
   updatePlayer: (id: string, patch: Partial<Omit<PlayerProfile, "id">>) => void;
-  setCurrentPlayer: (id: string | null) => void;
 }
 
-function PlayerSetupForm({ players, editingId, onClose, onSaved, createPlayer, updatePlayer, setCurrentPlayer }: PlayerSetupFormProps){
-  const editingPlayer = editingId ? players.find(p => p.id === editingId) || null : null;
-  const [displayName, setDisplayName] = useState(editingPlayer?.displayName ?? "");
-  const [gradeBand, setGradeBand] = useState<GradeBand>(editingPlayer?.gradeBand ?? "K-2");
-  const [ageBand, setAgeBand] = useState<AgeBand>(editingPlayer?.ageBand ?? "Prefer not to say");
-  const [gender, setGender] = useState<Gender>(editingPlayer?.gender ?? "Prefer not to say");
-  const [priorExperience, setPriorExperience] = useState(editingPlayer?.priorExperience ?? "");
-  const [consentChecked, setConsentChecked] = useState<boolean>(editingPlayer?.consent?.agreed ?? false);
+function PlayerSetupForm({ currentPlayer, onClose, onSaved, createPlayer, updatePlayer }: PlayerSetupFormProps){
+  const [displayName, setDisplayName] = useState(currentPlayer?.displayName ?? "");
+  const [gradeBand, setGradeBand] = useState<GradeBand>(currentPlayer?.gradeBand ?? "K-2");
+  const [ageBand, setAgeBand] = useState<AgeBand>(currentPlayer?.ageBand ?? "Prefer not to say");
+  const [gender, setGender] = useState<Gender>(currentPlayer?.gender ?? "Prefer not to say");
+  const [priorExperience, setPriorExperience] = useState(currentPlayer?.priorExperience ?? "");
+  const [consentChecked, setConsentChecked] = useState<boolean>(currentPlayer?.consent?.agreed ?? false);
 
   useEffect(() => {
-    const next = editingId ? players.find(p => p.id === editingId) || null : null;
-    setDisplayName(next?.displayName ?? "");
-    setGradeBand(next?.gradeBand ?? "K-2");
-    setAgeBand(next?.ageBand ?? "Prefer not to say");
-    setGender(next?.gender ?? "Prefer not to say");
-    setPriorExperience(next?.priorExperience ?? "");
-    setConsentChecked(next?.consent?.agreed ?? false);
-  }, [editingId, players]);
+    setDisplayName(currentPlayer?.displayName ?? "");
+    setGradeBand(currentPlayer?.gradeBand ?? "K-2");
+    setAgeBand(currentPlayer?.ageBand ?? "Prefer not to say");
+    setGender(currentPlayer?.gender ?? "Prefer not to say");
+    setPriorExperience(currentPlayer?.priorExperience ?? "");
+    setConsentChecked(currentPlayer?.consent?.agreed ?? false);
+  }, [currentPlayer]);
 
   const saveDisabled = !displayName.trim() || !consentChecked;
-  const title = editingPlayer ? "Edit player" : "Create player";
+  const title = currentPlayer ? "Edit your profile" : "Create your profile";
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -1780,12 +1776,10 @@ function PlayerSetupForm({ players, editingId, onClose, onSaved, createPlayer, u
       timestamp: new Date().toISOString(),
       consentTextVersion: CONSENT_TEXT_VERSION,
     };
-    if (editingPlayer) {
-      updatePlayer(editingPlayer.id, { displayName: trimmed, gradeBand, ageBand, gender, priorExperience, consent });
-      setCurrentPlayer(editingPlayer.id);
+    if (currentPlayer) {
+      updatePlayer(currentPlayer.id, { displayName: trimmed, gradeBand, ageBand, gender, priorExperience, consent });
     } else {
       const created = createPlayer({ displayName: trimmed, gradeBand, ageBand, gender, priorExperience, consent });
-      setCurrentPlayer(created.id);
     }
     onSaved();
   };
@@ -1850,7 +1844,7 @@ function PlayerSetupForm({ players, editingId, onClose, onSaved, createPlayer, u
       <div className="flex justify-end gap-2">
         <button type="button" onClick={onClose} className="px-3 py-1.5 rounded bg-slate-100 text-slate-700 hover:bg-slate-200">Cancel</button>
         <button type="submit" disabled={saveDisabled} className={`px-3 py-1.5 rounded text-white ${saveDisabled ? 'bg-slate-300 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-700 shadow'}`}>
-          Save player
+          Save profile
         </button>
       </div>
     </form>
@@ -1865,11 +1859,4 @@ export default function RPSDoodleApp(){
       </StatsProvider>
     </PlayersProvider>
   );
-}
-
-interface PlayerSetupFormProps {
-  players: PlayerProfile[];
-  editingId: string | null;
-  onClose: () => void;
-  onSaved: () => void;
 }
