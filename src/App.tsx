@@ -28,7 +28,6 @@ function mulberry32(a:number){
 // Types
 const MOVES: Move[] = ["rock", "paper", "scissors"];
 const MODES: Mode[] = ["challenge","practice"];
-export type PredictorLevel = "off" | "basic" | "smart" | "adaptive"; // legacy knob (kept for compat)
 
 // Icons (emoji fallback)
 const moveEmoji: Record<Move, string> = { rock: "\u270A", paper: "\u270B", scissors: "\u270C\uFE0F" };
@@ -501,7 +500,6 @@ function RPSDoodleAppInner(){
 
   const [predictorMode, setPredictorMode] = useState(false);
   const [aiMode, setAiMode] = useState<AIMode>("normal");
-  const [predictorLevel, setPredictorLevel] = useState<PredictorLevel>("smart");
   const TRAIN_ROUNDS = 10;
   const trainingCount = currentProfile?.trainingCount ?? 0;
   const isTrained = currentProfile?.trained ?? false;
@@ -1225,21 +1223,12 @@ function RPSDoodleAppInner(){
                   <option value="ruthless">Ruthless</option>
                 </select>
               </label>
-              {/* Legacy level preserved (tunes epsilon in heuristics path) */}
-              <label className="flex items-center justify-between gap-4"><span>Legacy level</span>
               <hr className="my-2" />
               <div className="space-y-2">
                 <div className="text-xs text-slate-500">Profile &amp; data</div>
                 <button className="px-2 py-1 rounded bg-sky-100 text-sky-700" onClick={()=> setShowPlayerModal(true)}>Edit demographics</button>
                 <p className="text-xs text-slate-500 max-w-xs">Use the Statistics panel to export your data. Exports always include your demographics alongside the selected statistics profile.</p>
               </div>
-                <select value={predictorLevel} onChange={e=> setPredictorLevel(e.target.value as PredictorLevel)} className="px-2 py-1 rounded bg-white shadow-inner">
-                  <option value="basic">Basic</option>
-                  <option value="smart">Smart</option>
-                  <option value="adaptive">Adaptive</option>
-                </select>
-              </label>
-              <hr className="my-2" />
               <label className="flex items-center justify-between gap-4"><span>Best of</span>
                 <select value={bestOf} onChange={e=> setBestOf(Number(e.target.value) as BestOf)} className="px-2 py-1 rounded bg-white shadow-inner">
                   <option value={3}>3</option><option value={5}>5</option><option value={7}>7</option>
