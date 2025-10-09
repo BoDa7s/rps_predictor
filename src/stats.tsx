@@ -44,6 +44,7 @@ export interface RoundLog {
   reason: string;
   confidence: number;
   confidenceBucket: "low" | "medium" | "high";
+  decisionTimeMs?: number;
 }
 
 export interface MatchSummary {
@@ -62,6 +63,11 @@ export interface MatchSummary {
   aiWinRate: number;
   youSwitchedRate: number;
   notes?: string;
+  leaderboardScore?: number;
+  leaderboardMaxStreak?: number;
+  leaderboardRoundCount?: number;
+  leaderboardTimerBonus?: number;
+  leaderboardBeatConfidenceBonus?: number;
 }
 
 export interface StatsProfile {
@@ -416,6 +422,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       "outcome",
       "policy",
       "confidence",
+      "decisionTimeMs",
       "streakAI",
       "streakYou",
     ];
@@ -444,6 +451,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         r.outcome,
         r.policy,
         r.confidence.toFixed(2),
+        r.decisionTimeMs ?? "",
         r.streakAI,
         r.streakYou,
       ].join(","));

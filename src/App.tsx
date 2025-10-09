@@ -6,6 +6,8 @@ import { PlayersProvider, usePlayers, GradeBand, AgeBand, Gender, PlayerProfile,
 import { DEV_MODE_ENABLED } from "./devMode";
 import { DeveloperConsole } from "./DeveloperConsole";
 import { lockSecureStore } from "./secureStore";
+import LeaderboardModal from "./LeaderboardModal";
+import { computeMatchScore } from "./leaderboard";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -459,6 +461,7 @@ function RPSDoodleAppInner(){
   } = useStats();
   const { currentPlayer, hasConsented, createPlayer, updatePlayer } = usePlayers();
   const [statsOpen, setStatsOpen] = useState(false);
+  const [leaderboardOpen, setLeaderboardOpen] = useState(false);
   const [statsTab, setStatsTab] = useState<"overview" | "matches" | "rounds" | "insights">("overview");
   const statsModalRef = useRef<HTMLDivElement | null>(null);
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
@@ -469,12 +472,16 @@ function RPSDoodleAppInner(){
   const youStreakRef = useRef(0);
   const matchStartRef = useRef<string>(new Date().toISOString());
   const currentMatchIdRef = useRef<string>(makeLocalId("match"));
+  const roundStartRef = useRef<number | null>(null);
+  const lastDecisionMsRef = useRef<number | null>(null);
+  const currentMatchRoundsRef = useRef<RoundLog[]>([]);
   const [roundFilters, setRoundFilters] = useState<{ mode: RoundFilterMode; difficulty: RoundFilterDifficulty; outcome: RoundFilterOutcome; from: string; to: string }>({ mode: "all", difficulty: "all", outcome: "all", from: "", to: "" });
   useEffect(() => { setRoundPage(0); }, [roundFilters, profileRounds]);
   const rounds = useMemo(() => profileRounds, [profileRounds]);
   const matches = useMemo(() => profileMatches, [profileMatches]);
   const [showPlayerModal, setShowPlayerModal] = useState(false);
   useEffect(() => { if (!hasConsented) setShowPlayerModal(true); }, [hasConsented]);
+  useEffect(() => { if (!hasConsented) setLeaderboardOpen(false); }, [hasConsented]);
   const [developerOpen, setDeveloperOpen] = useState(false);
   const developerTriggerRef = useRef({ count: 0, lastClick: 0 });
   const handleDeveloperHotspotClick = useCallback(
@@ -621,7 +628,8 @@ function RPSDoodleAppInner(){
     youStreakRef.current = youStreak;
     const reason = describeDecision(policy, mixerTrace, heuristicTrace, playerMove, aiMove);
     const confBucket = confidenceBucket(confidence);
-    logRound({
+    const decisionTimeMs = typeof lastDecisionMsRef.current === "number" ? lastDecisionMsRef.current : undefined;
+    const logged = logRound({
       t: now,
       mode: selectedMode ?? "practice",
       matchId: currentMatchIdRef.current,
@@ -638,8 +646,13 @@ function RPSDoodleAppInner(){
       reason,
       confidence,
       confidenceBucket: confBucket,
+      decisionTimeMs,
     });
+    if (logged) {
+      currentMatchRoundsRef.current = [...currentMatchRoundsRef.current, logged];
+    }
     decisionTraceRef.current = null;
+    lastDecisionMsRef.current = null;
   }, [logRound, selectedMode, bestOf, aiMode]);
 
   useEffect(() => {
@@ -647,6 +660,13 @@ function RPSDoodleAppInner(){
     if (predictorMode) setPredictorMode(false);
     if (aiMode !== "fair") setAiMode("fair");
   }, [needsTraining, trainingActive, predictorMode, aiMode]);
+
+  useEffect(() => {
+    if (scene !== "MATCH") return;
+    if (phase !== "idle") return;
+    roundStartRef.current = performance.now();
+    lastDecisionMsRef.current = null;
+  }, [scene, phase, round]);
 
   const armedRef = useRef(false);
   const armAudio = () => { if (!armedRef.current){ audio.ensureCtx(); audio.setEnabled(audioOn); armedRef.current = true; } };
@@ -1019,9 +1039,20 @@ function RPSDoodleAppInner(){
   }
 
   function resetMatch(){
-    setPlayerScore(0); setAiScore(0); setRound(1); setLastMoves([]); setAiHistory([]); setOutcomesHist([]);
-    setOutcome(undefined); setAiPick(undefined); setPlayerPick(undefined);
-    setPhase("idle"); setResultBanner(null);
+    setPlayerScore(0);
+    setAiScore(0);
+    setRound(1);
+    setLastMoves([]);
+    setAiHistory([]);
+    setOutcomesHist([]);
+    setOutcome(undefined);
+    setAiPick(undefined);
+    setPlayerPick(undefined);
+    setPhase("idle");
+    setResultBanner(null);
+    currentMatchRoundsRef.current = [];
+    lastDecisionMsRef.current = null;
+    roundStartRef.current = performance.now();
   }
 
   function startMatch(mode?: Mode, opts: { silent?: boolean } = {}){
@@ -1035,6 +1066,8 @@ function RPSDoodleAppInner(){
     youStreakRef.current = 0;
     matchStartRef.current = new Date().toISOString();
     currentMatchIdRef.current = makeLocalId("match");
+    roundStartRef.current = performance.now();
+    lastDecisionMsRef.current = null;
     if (mode) setSelectedMode(mode);
     setScene("MATCH");
   }
@@ -1056,7 +1089,20 @@ function RPSDoodleAppInner(){
     setTrainingActive(true);
   }
 
-  function onSelect(m: Move){ if (phase !== "idle") return; setPlayerPick(m); setPhase("selected"); setLive(`You selected ${m}.`); audio.pop(); setTimeout(startCountdown, 140); }
+  function onSelect(m: Move){
+    if (phase !== "idle") return;
+    if (roundStartRef.current !== null) {
+      const elapsed = Math.max(0, Math.round(performance.now() - roundStartRef.current));
+      lastDecisionMsRef.current = elapsed;
+    } else {
+      lastDecisionMsRef.current = null;
+    }
+    setPlayerPick(m);
+    setPhase("selected");
+    setLive(`You selected ${m}.`);
+    audio.pop();
+    setTimeout(startCountdown, 140);
+  }
 
   function reveal(){
     const player = playerPick; if (!player) return;
@@ -1144,6 +1190,7 @@ function RPSDoodleAppInner(){
         const totalRounds = outcomesHist.length;
         const aiWins = outcomesHist.filter(o => o === "lose").length;
         const switchRate = computeSwitchRate(lastMoves);
+        const matchScore = computeMatchScore(currentMatchRoundsRef.current);
         logMatch({
           clientId: currentMatchIdRef.current,
           startedAt: matchStartRef.current,
@@ -1156,7 +1203,13 @@ function RPSDoodleAppInner(){
           aiWinRate: totalRounds ? aiWins / totalRounds : 0,
           youSwitchedRate: switchRate,
           notes: undefined,
+          leaderboardScore: matchScore?.total,
+          leaderboardMaxStreak: matchScore?.maxStreak,
+          leaderboardRoundCount: matchScore?.rounds,
+          leaderboardTimerBonus: matchScore?.timerBonus,
+          leaderboardBeatConfidenceBonus: matchScore?.beatConfidenceBonus,
         });
+        currentMatchRoundsRef.current = [];
         matchStartRef.current = new Date().toISOString();
         currentMatchIdRef.current = makeLocalId("match");
         setResultBanner(banner);
@@ -1240,6 +1293,14 @@ function RPSDoodleAppInner(){
           )}
           {liveAiConfidence !== null && <span className="px-2 py-1 text-xs font-semibold rounded-full bg-sky-100 text-sky-700">AI conf: {Math.round((liveAiConfidence ?? 0) * 100)}%</span>}
             <button onClick={() => setStatsOpen(true)} className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900">Statistics</button>
+            <button
+              onClick={() => setLeaderboardOpen(true)}
+              className={"px-3 py-1.5 rounded-xl shadow text-sm " + (hasConsented ? "bg-white/70 hover:bg-white text-sky-900" : "bg-white/50 text-slate-400 cursor-not-allowed")}
+              disabled={!hasConsented}
+              title={!hasConsented ? "Check consent to continue." : undefined}
+            >
+              Leaderboard
+            </button>
             <button onClick={() => setShowPlayerModal(true)} className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900">
               {currentPlayer ? `${currentPlayer.displayName} (${currentPlayer.gradeBand})` : 'Set up profile'}
             </button>
@@ -1470,6 +1531,12 @@ function RPSDoodleAppInner(){
 
       {/* Calibration modal */}
       {/* Calibration modal removed */}
+
+      <AnimatePresence>
+        {leaderboardOpen && (
+          <LeaderboardModal open={leaderboardOpen} onClose={() => setLeaderboardOpen(false)} />
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {statsOpen && (
