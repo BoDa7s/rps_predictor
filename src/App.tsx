@@ -475,33 +475,6 @@ function RPSDoodleAppInner(){
   const [showPlayerModal, setShowPlayerModal] = useState(false);
   useEffect(() => { if (!hasConsented) setShowPlayerModal(true); }, [hasConsented]);
   const [developerOpen, setDeveloperOpen] = useState(false);
-  const secretClickRef = useRef(0);
-  const secretTimerRef = useRef<number | null>(null);
-
-  const handleDeveloperTrigger = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    if (!DEV_MODE_ENABLED) return;
-    if (!event.altKey) return;
-    secretClickRef.current += 1;
-    if (secretTimerRef.current) {
-      window.clearTimeout(secretTimerRef.current);
-    }
-    secretTimerRef.current = window.setTimeout(() => {
-      secretClickRef.current = 0;
-      secretTimerRef.current = null;
-    }, 1200);
-    if (secretClickRef.current >= 3) {
-      secretClickRef.current = 0;
-      setDeveloperOpen(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (secretTimerRef.current) {
-        window.clearTimeout(secretTimerRef.current);
-      }
-    };
-  }, []);
 
   const style = `
   :root{ --challenge:#FF77AA; --practice:#88AA66; }
@@ -1776,20 +1749,13 @@ function RPSDoodleAppInner(){
       </motion.div>
       {DEV_MODE_ENABLED && (
         <>
-          <div
-            aria-hidden="true"
-            onClick={handleDeveloperTrigger}
-            style={{
-              position: "fixed",
-              top: 0,
-              left: 0,
-              width: "32px",
-              height: "32px",
-              opacity: 0,
-              pointerEvents: "auto",
-              zIndex: 5,
-            }}
-          />
+          <button
+            type="button"
+            onClick={() => setDeveloperOpen(true)}
+            className="fixed bottom-3 left-3 z-[60] rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-lg transition hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2"
+          >
+            Developer
+          </button>
           <DeveloperConsole open={developerOpen} onClose={() => setDeveloperOpen(false)} />
         </>
       )}
