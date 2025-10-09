@@ -2,12 +2,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, DecisionPolicy } from "./stats";
-import { PlayersProvider, usePlayers, GradeBand, CONSENT_TEXT_VERSION } from "./players";
+import { PlayersProvider, usePlayers, GradeBand, AgeBand, Gender, PlayerProfile, CONSENT_TEXT_VERSION } from "./players";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
 // Single-file React app implementing ModeSelect full-graphic morph
-// + Ensemble AI (Hedge) with Practice + Calibrate + Exploit flow
+// + Ensemble AI (Hedge) with Practice + Training + Exploit flow
 // Notes:
 // - Emoji-based visuals throughout; no external animation URLs required
 // - Framer Motion handles shared-element scene morph + wipe
@@ -444,14 +444,204 @@ function ModeCard({ mode, onSelect, isDimmed, disabled = false }: { mode: Mode, 
 function RPSDoodleAppInner(){
   const { rounds: allRounds, matches: allMatches, logRound, logMatch, resetAll, eraseLastSession, exportJson, exportRoundsCsv, eraseDataForPlayer, exportJsonForPlayer, exportRoundsCsvForPlayer } = useStats();
   const { players, currentPlayer, currentPlayerId, hasConsented, setCurrentPlayer, createPlayer, updatePlayer, deletePlayer } = usePlayers();
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [statsTab, setStatsTab] = useState<"overview" | "matches" | "rounds" | "insights">("overview");
+  const statsModalRef = useRef<HTMLDivElement | null>(null);
+  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
+  const [roundPage, setRoundPage] = useState(0);
+  const [liveAiConfidence, setLiveAiConfidence] = useState<number | null>(null);
+  const decisionTraceRef = useRef<PendingDecision | null>(null);
+  const aiStreakRef = useRef(0);
+  const youStreakRef = useRef(0);
+  const matchStartRef = useRef<string>(new Date().toISOString());
+  const currentMatchIdRef = useRef<string>(makeLocalId("match"));
+  const [roundFilters, setRoundFilters] = useState<{ mode: RoundFilterMode; difficulty: RoundFilterDifficulty; outcome: RoundFilterOutcome; from: string; to: string }>({ mode: "all", difficulty: "all", outcome: "all", from: "", to: "" });
   const [selectedPlayerFilterId, setSelectedPlayerFilterId] = useState<string | "all">(currentPlayerId || "all");
   useEffect(() => { setSelectedPlayerFilterId(currentPlayerId || "all"); }, [currentPlayerId]);
+  useEffect(() => { setRoundPage(0); }, [roundFilters]);
   const playerFilterId = selectedPlayerFilterId === "all" ? null : selectedPlayerFilterId;
   const rounds = useMemo(() => (playerFilterId ? allRounds.filter(r => r.playerId === playerFilterId) : allRounds), [allRounds, playerFilterId]);
   const matches = useMemo(() => (playerFilterId ? allMatches.filter(m => m.playerId === playerFilterId) : allMatches), [allMatches, playerFilterId]);
   const [showPlayerModal, setShowPlayerModal] = useState(false);
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
   useEffect(() => { if (!hasConsented) setShowPlayerModal(true); }, [hasConsented]);
+
+  const style = `
+  :root{ --challenge:#FF77AA; --practice:#88AA66; }
+  .mode-grid{ display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:12px; width:min(92vw,640px); }
+  .mode-card.dim{ filter: blur(2px) brightness(.85); }
+  .ink-pop{ position:absolute; inset:0; background: radial-gradient(600px circle at var(--x,50%) var(--y,50%), rgba(255,255,255,.6), transparent 40%); opacity:0; transition:opacity .22s; }
+  .mode-card:active .ink-pop{ opacity:1; }
+  .fullscreen{ position:fixed; inset:0; z-index:50; will-change:transform; }
+  .fullscreen.challenge{ background: var(--challenge); }
+  .fullscreen.practice{ background: var(--practice); }
+  .wipe{ position:fixed; inset:0; pointer-events:none; z-index:60; transform:translateX(110%); will-change:transform; background:linear-gradient(12deg, rgba(255,255,255,.9), rgba(255,255,255,1)); }
+  .wipe.run{ animation: wipeIn 400ms cubic-bezier(.22,.61,.36,1) forwards; }
+  @keyframes wipeIn{ 0%{ transform:translateX(110%) rotate(.5deg) } 100%{ transform:translateX(0) rotate(0) } }
+  `;
+
+  type Scene = "BOOT"|"MODE"|"MATCH"|"RESULTS";
+  const [scene, setScene] = useState<Scene>("BOOT");
+
+  const prefersReduced = useReducedMotion();
+  const [reducedMotion, setReducedMotion] = useState<boolean>(prefersReduced ?? false);
+  useEffect(() => {
+    setReducedMotion(prefersReduced ?? false);
+  }, [prefersReduced]);
+  const [audioOn, setAudioOn] = useState(true);
+  const [textScale, setTextScale] = useState(1);
+
+  const [predictorMode, setPredictorMode] = useState(false);
+  const [aiMode, setAiMode] = useState<AIMode>("normal");
+  const [predictorLevel, setPredictorLevel] = useState<PredictorLevel>("smart");
+  const TRAIN_ROUNDS = 10;
+  const TRAIN_KEY = "rps_trained";
+  const TRAIN_COUNT_KEY = "rps_training_count";
+  const [isTrained, setIsTrained] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem(TRAIN_KEY) === "1";
+  });
+  const [trainingCount, setTrainingCount] = useState<number>(() => {
+    if (typeof window === "undefined") return 0;
+    const stored = parseInt(localStorage.getItem(TRAIN_COUNT_KEY) ?? "0", 10);
+    if (Number.isNaN(stored)) return 0;
+    return Math.min(Math.max(stored, 0), TRAIN_ROUNDS);
+  });
+  const [trainingActive, setTrainingActive] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    const trained = localStorage.getItem(TRAIN_KEY) === "1";
+    if (trained) return false;
+    const stored = parseInt(localStorage.getItem(TRAIN_COUNT_KEY) ?? "0", 10);
+    if (Number.isNaN(stored)) return false;
+    return stored > 0 && stored < TRAIN_ROUNDS;
+  });
+
+  const trainingComplete = trainingCount >= TRAIN_ROUNDS;
+  const needsTraining = !isTrained && !trainingComplete;
+  const shouldAutoResumeTraining = needsTraining && trainingActive;
+  const shouldGateTraining = needsTraining && !trainingActive;
+  const bootNeedsTraining = useRef(needsTraining);
+  const bootAutoResumeTraining = useRef(shouldAutoResumeTraining);
+  const bootInitialTrainingActive = useRef(trainingActive);
+  const modesDisabled = trainingActive || needsTraining;
+  const trainingDisplayCount = Math.min(trainingCount, TRAIN_ROUNDS);
+  const trainingProgress = Math.min(trainingDisplayCount / TRAIN_ROUNDS, 1);
+  const [seed] = useState(()=>Math.floor(Math.random()*1e9));
+  const rng = useMemo(()=>mulberry32(seed), [seed]);
+  const [bestOf, setBestOf] = useState<BestOf>(5);
+  const [playerScore, setPlayerScore] = useState(0);
+  const [aiScore, setAiScore] = useState(0);
+  const [round, setRound] = useState(1);
+  const [lastMoves, setLastMoves] = useState<Move[]>([]);
+  const [aiHistory, setAiHistory] = useState<Move[]>([]);
+  const [outcomesHist, setOutcomesHist] = useState<Outcome[]>([]);
+
+  type Phase = "idle"|"selected"|"countdown"|"reveal"|"resolve"|"feedback";
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [playerPick, setPlayerPick] = useState<Move|undefined>();
+  const [aiPick, setAiPick] = useState<Move|undefined>();
+  const [count, setCount] = useState<number>(3);
+  const [outcome, setOutcome] = useState<Outcome|undefined>();
+  const [resultBanner, setResultBanner] = useState<"Victory"|"Defeat"|"Tie"|null>(null);
+  const [live, setLive] = useState("");
+  const countdownRef = useRef<number | null>(null);
+  const trainingAnnouncementsRef = useRef<Set<number>>(new Set());
+  const clearCountdown = ()=>{ if (countdownRef.current!==null){ clearInterval(countdownRef.current); countdownRef.current=null; } };
+  const startCountdown = ()=>{ setPhase("countdown"); setCount(3); clearCountdown(); countdownRef.current = window.setInterval(()=>{
+    setCount(prev=>{
+      const next = prev - 1;
+      audio.tick();
+      if (!reducedMotion) tryVibrate(6);
+      if (next <= 0){
+        clearCountdown();
+        reveal();
+      }
+      return next;
+    });
+  }, 300); };
+
+  const [selectedMode, setSelectedMode] = useState<Mode|null>(null);
+  const [wipeRun, setWipeRun] = useState(false);
+  const modeLabel = (m:Mode)=> m.charAt(0).toUpperCase()+m.slice(1);
+
+  const recordRound = useCallback((playerMove: Move, aiMove: Move, outcomeForPlayer: Outcome) => {
+    const trace = decisionTraceRef.current;
+    const policy: DecisionPolicy = trace?.policy ?? "heuristic";
+    let mixerTrace: MixerTrace | undefined = trace?.mixer
+      ? {
+          dist: trace.mixer.dist,
+          counter: trace.mixer.counter,
+          topExperts: trace.mixer.experts
+            .map(e => ({ name: e.name, weight: e.weight, pActual: e.dist[playerMove] ?? 0 }))
+            .sort((a, b) => b.weight - a.weight)
+            .slice(0, 3),
+          confidence: trace.mixer.confidence,
+        }
+      : undefined;
+    const heuristicTrace = trace?.heuristic;
+    const confidence = trace?.confidence ?? mixerTrace?.confidence ?? heuristicTrace?.conf ?? 0;
+    const now = new Date().toISOString();
+    const aiStreak = outcomeForPlayer === "lose" ? aiStreakRef.current + 1 : 0;
+    const youStreak = outcomeForPlayer === "win" ? youStreakRef.current + 1 : 0;
+    aiStreakRef.current = aiStreak;
+    youStreakRef.current = youStreak;
+    const reason = describeDecision(policy, mixerTrace, heuristicTrace, playerMove, aiMove);
+    const confBucket = confidenceBucket(confidence);
+    logRound({
+      t: now,
+      mode: selectedMode ?? "practice",
+      matchId: currentMatchIdRef.current,
+      bestOf,
+      difficulty: aiMode,
+      player: playerMove,
+      ai: aiMove,
+      outcome: outcomeForPlayer,
+      policy,
+      mixer: mixerTrace,
+      heuristic: heuristicTrace,
+      streakAI: aiStreak,
+      streakYou: youStreak,
+      reason,
+      confidence,
+      confidenceBucket: confBucket,
+    });
+    decisionTraceRef.current = null;
+  }, [logRound, selectedMode, bestOf, aiMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    localStorage.setItem(TRAIN_KEY, isTrained ? "1" : "0");
+  }, [isTrained]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const value = Math.min(trainingCount, TRAIN_ROUNDS);
+    localStorage.setItem(TRAIN_COUNT_KEY, String(value));
+  }, [trainingCount]);
+
+  useEffect(() => {
+    if (!needsTraining && !trainingActive) return;
+    if (predictorMode) setPredictorMode(false);
+    if (aiMode !== "fair") setAiMode("fair");
+  }, [needsTraining, trainingActive, predictorMode, aiMode]);
+
+  const armedRef = useRef(false);
+  const armAudio = () => { if (!armedRef.current){ audio.ensureCtx(); audio.setEnabled(audioOn); armedRef.current = true; } };
+  useEffect(()=>{ audio.setEnabled(audioOn); }, [audioOn]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (bootNeedsTraining.current) {
+        startMatch("practice", { silent: true });
+        if (!bootInitialTrainingActive.current && bootAutoResumeTraining.current) {
+          setTrainingActive(true);
+        }
+      } else {
+        setScene("MODE");
+      }
+    }, 900);
+    return () => clearTimeout(t);
+  }, []);
 
   const statsTabs = [
     { key: "overview", label: "Overview" },
@@ -659,6 +849,29 @@ function RPSDoodleAppInner(){
     a.click();
     URL.revokeObjectURL(url);
   }, [exportRoundsCsv, exportRoundsCsvForPlayer, selectedPlayerFilterId]);
+  const handleResetAll = useCallback(() => {
+    resetAll();
+    setSelectedMatchId(null);
+  }, [resetAll]);
+
+  const handleEraseLastSession = useCallback(() => {
+    eraseLastSession();
+    setSelectedMatchId(null);
+  }, [eraseLastSession]);
+
+  useEffect(() => {
+    if (!statsOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setStatsOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    const node = statsModalRef.current;
+    if (node){
+      const first = node.querySelector<HTMLElement>("[data-focus-first]");
+      if (first) first.focus();
+    }
+    return () => window.removeEventListener("keydown", onKey);
+  }, [statsOpen]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (scene === "MATCH" && phase === "idle" && !shouldGateTraining) {
@@ -784,7 +997,6 @@ function RPSDoodleAppInner(){
       localStorage.setItem(TRAIN_COUNT_KEY, "0");
     }
     trainingAnnouncementsRef.current.clear();
-    setShowCal(false);
     setIsTrained(false);
     setPredictorMode(false);
     setAiMode("fair");
@@ -851,7 +1063,6 @@ function RPSDoodleAppInner(){
     setTrainingActive(false);
     if (!isTrained) setIsTrained(true);
     trainingAnnouncementsRef.current.clear();
-    computeCalibration();
   }, [trainingActive, trainingCount, isTrained]);
 
   // Failsafes: if something stalls, advance automatically
@@ -920,23 +1131,6 @@ function RPSDoodleAppInner(){
   const clearTimers = ()=>{ timersRef.current.forEach(id=> clearTimeout(id)); timersRef.current = []; };
   function goToMode(){ clearCountdown(); clearTimers(); setWipeRun(false); setSelectedMode(null); setScene("MODE"); }
   function goToMatch(){ clearTimers(); startMatch(selectedMode ?? "practice"); }
-
-  // ---- Practice → Calibrate overlay ----
-  function computeCalibration(){
-    const n = lastMoves.length; if (n < 6){ setCalText("Play ~10 rounds in Practice to calibrate."); return; }
-    // Favorite move
-    const fav = mostFrequentMove(lastMoves);
-    const favPct = fav ? Math.round(100* lastMoves.filter(m=>m===fav).length / n) : 0;
-    // Repeat after win
-    let rw=0, tw=0, ls=0, tl=0;
-    for (let i=1;i<outcomesHist.length;i++){
-      if (outcomesHist[i-1]==='win'){ tw++; if (lastMoves[i]===lastMoves[i-1]) rw++; }
-      if (outcomesHist[i-1]==='lose'){ tl++; if (lastMoves[i]!==lastMoves[i-1]) ls++; }
-    }
-    const rwPct = tw? Math.round(100*rw/tw):0; const lsPct = tl? Math.round(100*ls/tl):0;
-    setCalText(`Favorite: ${fav??'-'} (${favPct}%). Repeat-after-win: ${rwPct}%. Switch-after-loss: ${lsPct}%.`);
-    setShowCal(true);
-  }
 
   // ---- Mode selection flow ----
   function handleModeSelect(mode: Mode){
@@ -1108,7 +1302,7 @@ function RPSDoodleAppInner(){
         {/* MATCH */}
         {scene === "MATCH" && (
           <motion.section key="match" initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -20, opacity: 0 }} transition={{ duration: .36 }} className="min-h-screen pt-24 pb-20 flex flex-col items-center">
-            {shouldGateTraining && !showCal && (
+            {shouldGateTraining && (
               <div className="fixed inset-0 z-[70] grid place-items-center bg-white/90">
                 <div className="bg-white rounded-2xl shadow-xl p-6 w-[min(92vw,520px)] text-center space-y-4">
                   <div className="text-2xl font-black">Train the AI</div>
@@ -1149,23 +1343,7 @@ function RPSDoodleAppInner(){
             {trainingActive && (
               <div className="mt-3 w-[min(92vw,680px)] flex items-center justify-between text-sm text-slate-600">
                 <span>Keep playing to finish training.</span>
-                <span className="text-slate-500">Calibration unlocks at {TRAIN_ROUNDS} rounds.</span>
-              </div>
-            )}
-            {selectedMode === 'practice' && (
-              <div className="mt-3 w-[min(92vw,680px)] flex flex-col gap-3 text-sm sm:flex-row sm:items-center sm:gap-8">
-                <button
-                  className="px-3 py-1.5 rounded-xl bg-white shadow hover:bg-slate-50"
-                  disabled={trainingActive || needsTraining || lastMoves.length<10}
-                  onClick={computeCalibration}
-                >
-                  Calibrate
-                </button>
-                <div className="text-slate-600">
-                  {(trainingActive || needsTraining)
-                    ? 'Finish training to unlock calibration statistics.'
-                    : <>Play ~10+ rounds, then calibrate. Toggle <strong>AI Predictor</strong> + set <strong>AI Difficulty</strong> to switch to exploit.</>}
-                </div>
+                <span className="text-slate-500">Training completes after {TRAIN_ROUNDS} rounds.</span>
               </div>
             )}
 
@@ -1257,40 +1435,7 @@ function RPSDoodleAppInner(){
       <div className={"wipe " + (wipeRun ? 'run' : '')} aria-hidden={true} />
 
       {/* Calibration modal */}
-      <AnimatePresence>
-        {showCal && (
-          <motion.div key="cal" initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }} className="fixed inset-0 z-[70] grid place-items-center bg-black/40">
-            <motion.div initial={{ y:20, opacity:0 }} animate={{ y:0, opacity:1 }} exit={{ y:20, opacity:0 }} className="bg-white rounded-2xl shadow-xl w-[min(92vw,520px)] p-4">
-              <div className="text-xl font-black mb-1">Calibration</div>
-              <p className="text-slate-700 text-sm mb-2">{calText}</p>
-              <div className="flex items-center justify-end gap-3 mt-3">
-                <select
-                  className="px-2 py-1 rounded bg-white shadow-inner mr-1"
-                  value={aiMode}
-                  onChange={e=> setAiMode(e.target.value as AIMode)}
-                >
-                  <option value="fair">Fair</option>
-                  <option value="normal">Normal</option>
-                  <option value="ruthless">Ruthless</option>
-                </select>
-                <button
-                  className="px-3 py-1.5 rounded-xl bg-sky-600 text-white shadow"
-                  onClick={()=>{
-                    setShowCal(false);
-                    setPredictorMode(true);
-                    setIsTrained(true);
-                    resetMatch();
-                    setScene("MATCH");
-                  }}
-                >
-                  Start Match
-                </button>
-                <button className="px-3 py-1.5 rounded-xl bg-white shadow" onClick={()=> setShowCal(false)}>Keep practicing</button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Calibration modal removed */}
 
       <AnimatePresence>
         {statsOpen && (
@@ -1574,6 +1719,9 @@ function RPSDoodleAppInner(){
                 editingId={editingPlayerId}
                 onClose={()=> { if (hasConsented) setShowPlayerModal(false); }}
                 onSaved={()=> { setShowPlayerModal(false); setEditingPlayerId(null); }}
+                createPlayer={createPlayer}
+                updatePlayer={updatePlayer}
+                setCurrentPlayer={setCurrentPlayer}
               />
             </motion.div>
           </motion.div>
@@ -1591,6 +1739,124 @@ function RPSDoodleAppInner(){
   );
 }
 
+interface PlayerSetupFormProps {
+  players: PlayerProfile[];
+  editingId: string | null;
+  onClose: () => void;
+  onSaved: () => void;
+  createPlayer: (input: Omit<PlayerProfile, "id">) => PlayerProfile;
+  updatePlayer: (id: string, patch: Partial<Omit<PlayerProfile, "id">>) => void;
+  setCurrentPlayer: (id: string | null) => void;
+}
+
+function PlayerSetupForm({ players, editingId, onClose, onSaved, createPlayer, updatePlayer, setCurrentPlayer }: PlayerSetupFormProps){
+  const editingPlayer = editingId ? players.find(p => p.id === editingId) || null : null;
+  const [displayName, setDisplayName] = useState(editingPlayer?.displayName ?? "");
+  const [gradeBand, setGradeBand] = useState<GradeBand>(editingPlayer?.gradeBand ?? "K-2");
+  const [ageBand, setAgeBand] = useState<AgeBand>(editingPlayer?.ageBand ?? "Prefer not to say");
+  const [gender, setGender] = useState<Gender>(editingPlayer?.gender ?? "Prefer not to say");
+  const [priorExperience, setPriorExperience] = useState(editingPlayer?.priorExperience ?? "");
+  const [consentChecked, setConsentChecked] = useState<boolean>(editingPlayer?.consent?.agreed ?? false);
+
+  useEffect(() => {
+    const next = editingId ? players.find(p => p.id === editingId) || null : null;
+    setDisplayName(next?.displayName ?? "");
+    setGradeBand(next?.gradeBand ?? "K-2");
+    setAgeBand(next?.ageBand ?? "Prefer not to say");
+    setGender(next?.gender ?? "Prefer not to say");
+    setPriorExperience(next?.priorExperience ?? "");
+    setConsentChecked(next?.consent?.agreed ?? false);
+  }, [editingId, players]);
+
+  const saveDisabled = !displayName.trim() || !consentChecked;
+  const title = editingPlayer ? "Edit player" : "Create player";
+
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const trimmed = displayName.trim();
+    if (!trimmed || !consentChecked) return;
+    const consent = {
+      agreed: consentChecked,
+      timestamp: new Date().toISOString(),
+      consentTextVersion: CONSENT_TEXT_VERSION,
+    };
+    if (editingPlayer) {
+      updatePlayer(editingPlayer.id, { displayName: trimmed, gradeBand, ageBand, gender, priorExperience, consent });
+      setCurrentPlayer(editingPlayer.id);
+    } else {
+      const created = createPlayer({ displayName: trimmed, gradeBand, ageBand, gender, priorExperience, consent });
+      setCurrentPlayer(created.id);
+    }
+    onSaved();
+  };
+
+  const gradeOptions: GradeBand[] = ["K-2", "3-5", "6-8", "9-12"];
+  const ageOptions: AgeBand[] = ["<8", "8-10", "11-13", "14-18", "Prefer not to say"];
+  const genderOptions: Gender[] = ["Male", "Female", "Non-binary", "Prefer not to say"];
+
+  return (
+    <form onSubmit={handleSubmit} className="p-5 space-y-4" aria-label="Player setup form">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
+        <button type="button" onClick={onClose} className="text-sm text-slate-500 hover:text-slate-700">Close</button>
+      </div>
+      <div className="grid gap-3">
+        <label className="text-sm font-medium text-slate-700">
+          Display name
+          <input
+            type="text"
+            value={displayName}
+            onChange={e => setDisplayName(e.target.value)}
+            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+            placeholder="e.g. Alex"
+            required
+          />
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          Grade band
+          <select value={gradeBand} onChange={e => setGradeBand(e.target.value as GradeBand)} className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner">
+            {gradeOptions.map(option => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          Age range
+          <select value={ageBand} onChange={e => setAgeBand(e.target.value as AgeBand)} className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner">
+            {ageOptions.map(option => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          Gender
+          <select value={gender} onChange={e => setGender(e.target.value as Gender)} className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner">
+            {genderOptions.map(option => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          Prior experience (optional)
+          <textarea value={priorExperience} onChange={e => setPriorExperience(e.target.value)} rows={3} className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner" placeholder="Tell us about previous AI or RPS experience" />
+        </label>
+      </div>
+      <label className="flex items-start gap-3 text-sm text-slate-700">
+        <input type="checkbox" checked={consentChecked} onChange={e => setConsentChecked(e.target.checked)} className="mt-1" />
+        <span>
+          I consent to participate in this activity and understand how my gameplay data will be used (consent text {CONSENT_TEXT_VERSION}).
+        </span>
+      </label>
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onClose} className="px-3 py-1.5 rounded bg-slate-100 text-slate-700 hover:bg-slate-200">Cancel</button>
+        <button type="submit" disabled={saveDisabled} className={`px-3 py-1.5 rounded text-white ${saveDisabled ? 'bg-slate-300 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-700 shadow'}`}>
+          Save player
+        </button>
+      </div>
+    </form>
+  );
+}
+
 export default function RPSDoodleApp(){
   return (
     <PlayersProvider>
@@ -1598,5 +1864,149 @@ export default function RPSDoodleApp(){
         <RPSDoodleAppInner />
       </StatsProvider>
     </PlayersProvider>
+  );
+}
+
+interface PlayerSetupFormProps {
+  players: PlayerProfile[];
+  editingId: string | null;
+  onClose: () => void;
+  onSaved: () => void;
+}
+
+function PlayerSetupForm({ players, editingId, onClose, onSaved }: PlayerSetupFormProps){
+  const { createPlayer, updatePlayer, setCurrentPlayer } = usePlayers();
+  const editingProfile = useMemo(() => (editingId ? players.find(p => p.id === editingId) || null : null), [players, editingId]);
+  const [displayName, setDisplayName] = useState(editingProfile?.displayName ?? "");
+  const [gradeBand, setGradeBand] = useState<GradeBand>(editingProfile?.gradeBand ?? "K-2");
+  const [ageBand, setAgeBand] = useState<AgeBand | "">(editingProfile?.ageBand ?? "");
+  const [gender, setGender] = useState<Gender | "">(editingProfile?.gender ?? "");
+  const [priorExperience, setPriorExperience] = useState(editingProfile?.priorExperience ?? "");
+  const [consentChecked, setConsentChecked] = useState<boolean>(editingProfile?.consent?.agreed ?? false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDisplayName(editingProfile?.displayName ?? "");
+    setGradeBand(editingProfile?.gradeBand ?? "K-2");
+    setAgeBand(editingProfile?.ageBand ?? "");
+    setGender(editingProfile?.gender ?? "");
+    setPriorExperience(editingProfile?.priorExperience ?? "");
+    setConsentChecked(editingProfile?.consent?.agreed ?? false);
+    setError(null);
+  }, [editingProfile]);
+
+  const gradeOptions: GradeBand[] = ["K-2", "3-5", "6-8", "9-12"];
+  const ageOptions: (AgeBand | "")[] = ["", "<8", "8-10", "11-13", "14-18", "Prefer not to say"];
+  const genderOptions: (Gender | "")[] = ["", "Male", "Female", "Non-binary", "Prefer not to say"];
+
+  const consentText = "I understand this data is collected for educational research only and will not be shared.";
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedName = displayName.trim();
+    if (!trimmedName){
+      setError("Please enter a name to continue.");
+      return;
+    }
+    if (!gradeBand){
+      setError("Select a grade band.");
+      return;
+    }
+    if (!consentChecked){
+      setError("Consent is required to play.");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const consent = consentChecked
+      ? {
+          agreed: true,
+          timestamp: editingProfile?.consent?.agreed ? (editingProfile.consent.timestamp ?? now) : now,
+          consentTextVersion: CONSENT_TEXT_VERSION,
+        }
+      : { agreed: false, consentTextVersion: CONSENT_TEXT_VERSION };
+
+    const payload: Omit<PlayerProfile, "id"> = {
+      displayName: trimmedName,
+      gradeBand,
+      ageBand: ageBand || undefined,
+      gender: gender || undefined,
+      priorExperience: priorExperience.trim() || undefined,
+      consent,
+    };
+
+    if (editingProfile){
+      updatePlayer(editingProfile.id, payload);
+      setCurrentPlayer(editingProfile.id);
+    } else {
+      const created = createPlayer(payload);
+      setCurrentPlayer(created.id);
+    }
+    onSaved();
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="p-6 space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-semibold text-slate-800">{editingProfile ? "Edit player" : "Set up a player"}</h2>
+          <p className="text-sm text-slate-600">We keep stats per player so you can see your progress.</p>
+        </div>
+        <button type="button" onClick={onClose} className="text-slate-500 hover:text-slate-700 text-sm">Close ✕</button>
+      </div>
+
+      <div className="grid gap-3">
+        <label className="text-sm font-medium text-slate-700">
+          Display name
+          <input value={displayName} onChange={e => setDisplayName(e.target.value)} className="mt-1 w-full border rounded px-3 py-2" placeholder="e.g., Alex" />
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          Grade band
+          <select value={gradeBand} onChange={e => setGradeBand(e.target.value as GradeBand)} className="mt-1 w-full border rounded px-3 py-2">
+            {gradeOptions.map(option => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          Age band (optional)
+          <select value={ageBand} onChange={e => setAgeBand(e.target.value as AgeBand | "")} className="mt-1 w-full border rounded px-3 py-2">
+            {ageOptions.map(option => (
+              <option key={option || "none"} value={option}>{option ? option : "Choose..."}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          Gender (optional)
+          <select value={gender} onChange={e => setGender(e.target.value as Gender | "")} className="mt-1 w-full border rounded px-3 py-2">
+            {genderOptions.map(option => (
+              <option key={option || "none"} value={option}>{option ? option : "Choose..."}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          Prior experience (optional)
+          <textarea value={priorExperience} onChange={e => setPriorExperience(e.target.value)} rows={3} className="mt-1 w-full border rounded px-3 py-2" placeholder="Have you played RPS research games before?" />
+        </label>
+      </div>
+
+      <div className="space-y-2 text-sm">
+        <label className="flex items-start gap-2">
+          <input type="checkbox" checked={consentChecked} onChange={e => setConsentChecked(e.target.checked)} className="mt-1" />
+          <span>{consentText}</span>
+        </label>
+        <details className="text-slate-500 text-xs">
+          <summary className="cursor-pointer">Why we ask</summary>
+          <p className="mt-1">We collect anonymized play data to study learning strategies in classrooms. Profiles stay on this device.</p>
+        </details>
+      </div>
+
+      {error && <div className="text-sm text-rose-600">{error}</div>}
+
+      <div className="flex items-center justify-end gap-2">
+        <button type="button" onClick={onClose} className="px-3 py-1.5 rounded bg-slate-100 text-slate-700">Cancel</button>
+        <button type="submit" className="px-4 py-1.5 rounded bg-sky-600 text-white shadow">Save</button>
+      </div>
+    </form>
   );
 }
