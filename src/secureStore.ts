@@ -1,7 +1,7 @@
 const SALT_KEY = "rps_dev_salt_v1";
-const PIN_INFO_KEY = "rps_dev_pin_v1";
 const AUDIT_KEY = "rps_dev_audit_v1";
 const DATASET_KEY = "rps_dev_dataset_v1";
+const DEV_PIN = "02853Adam/@";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -69,39 +69,15 @@ export function isUnlocked() {
 
 export async function unlockWithPin(pin: string): Promise<boolean> {
   if (typeof window === "undefined") return false;
-  const iterations = 150000;
-  const salt = getSalt();
-  const key = await deriveKey(pin, salt, iterations);
-  const exported = await exportRawKey(key);
-  const storedInfoRaw = localStorage.getItem(PIN_INFO_KEY);
-  if (!storedInfoRaw) {
-    const info = { hash: exported, iterations };
-    localStorage.setItem(PIN_INFO_KEY, JSON.stringify(info));
-    cachedKey = key;
-    unlocked = true;
-    notify();
-    return true;
-  }
-  try {
-    const storedInfo = JSON.parse(storedInfoRaw) as { hash: string; iterations?: number };
-    const expectedIterations = storedInfo.iterations || iterations;
-    if (storedInfo.iterations && storedInfo.iterations !== iterations) {
-      // re-derive using stored iterations if different
-      const derived = await deriveKey(pin, salt, storedInfo.iterations);
-      const derivedHash = await exportRawKey(derived);
-      if (derivedHash !== storedInfo.hash) return false;
-      cachedKey = derived;
-    } else {
-      if (exported !== storedInfo.hash) return false;
-      cachedKey = key;
-    }
-    unlocked = true;
-    notify();
-    return true;
-  } catch (err) {
-    console.error("Failed to parse stored PIN info", err);
+  if (pin !== DEV_PIN) {
     return false;
   }
+  const iterations = 150000;
+  const salt = getSalt();
+  cachedKey = await deriveKey(DEV_PIN, salt, iterations);
+  unlocked = true;
+  notify();
+  return true;
 }
 
 export function lockSecureStore() {

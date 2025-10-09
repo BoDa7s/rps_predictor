@@ -475,6 +475,27 @@ function RPSDoodleAppInner(){
   const [showPlayerModal, setShowPlayerModal] = useState(false);
   useEffect(() => { if (!hasConsented) setShowPlayerModal(true); }, [hasConsented]);
   const [developerOpen, setDeveloperOpen] = useState(false);
+  const developerTriggerRef = useRef({ count: 0, lastClick: 0 });
+  const handleDeveloperHotspotClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (!DEV_MODE_ENABLED) return;
+      if (!event.altKey) {
+        developerTriggerRef.current.count = 0;
+        return;
+      }
+      const now = Date.now();
+      if (now - developerTriggerRef.current.lastClick > 1200) {
+        developerTriggerRef.current.count = 0;
+      }
+      developerTriggerRef.current.count += 1;
+      developerTriggerRef.current.lastClick = now;
+      if (developerTriggerRef.current.count >= 3) {
+        developerTriggerRef.current.count = 0;
+        setDeveloperOpen(true);
+      }
+    },
+    [setDeveloperOpen]
+  );
 
   const style = `
   :root{ --challenge:#FF77AA; --practice:#88AA66; }
@@ -1749,13 +1770,12 @@ function RPSDoodleAppInner(){
       </motion.div>
       {DEV_MODE_ENABLED && (
         <>
-          <button
-            type="button"
-            onClick={() => setDeveloperOpen(true)}
-            className="fixed bottom-3 left-3 z-[60] rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-lg transition hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 focus-visible:ring-offset-2"
-          >
-            Developer
-          </button>
+          <div
+            aria-hidden="true"
+            role="presentation"
+            className="fixed top-0 left-0 z-[60] h-8 w-8"
+            onClick={handleDeveloperHotspotClick}
+          />
           <DeveloperConsole open={developerOpen} onClose={() => setDeveloperOpen(false)} />
         </>
       )}

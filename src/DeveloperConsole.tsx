@@ -239,7 +239,7 @@ export function DeveloperConsole({ open, onClose }: DeveloperConsoleProps) {
         {!ready ? (
           <form onSubmit={handleUnlock} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
             <p style={{ margin: 0, opacity: 0.8 }}>
-              Enter the developer PIN. The first successful entry establishes the PIN for this device.
+              Enter the developer PIN to unlock secure tooling for protected data.
             </p>
             <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
               <span style={{ fontSize: "0.85rem", opacity: 0.7 }}>PIN</span>
