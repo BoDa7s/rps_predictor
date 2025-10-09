@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, DecisionPolicy } from "./stats";
+import { PlayersProvider, usePlayers, GradeBand, CONSENT_TEXT_VERSION } from "./players";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -441,202 +442,16 @@ function ModeCard({ mode, onSelect, isDimmed, disabled = false }: { mode: Mode, 
 
 // Main component
 function RPSDoodleAppInner(){
-  const { rounds, matches, logRound, logMatch, resetAll, eraseLastSession, exportJson, exportRoundsCsv } = useStats();
-  const [statsOpen, setStatsOpen] = useState(false);
-  const [statsTab, setStatsTab] = useState<"overview" | "matches" | "rounds" | "insights">("overview");
-  const statsModalRef = useRef<HTMLDivElement | null>(null);
-  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
-  const [roundPage, setRoundPage] = useState(0);
-  const [liveAiConfidence, setLiveAiConfidence] = useState<number | null>(null);
-  const decisionTraceRef = useRef<PendingDecision | null>(null);
-  const aiStreakRef = useRef(0);
-  const youStreakRef = useRef(0);
-  const matchStartRef = useRef<string>(new Date().toISOString());
-  const currentMatchIdRef = useRef<string>(makeLocalId("match"));
-  const [roundFilters, setRoundFilters] = useState<{ mode: RoundFilterMode; difficulty: RoundFilterDifficulty; outcome: RoundFilterOutcome; from: string; to: string }>({ mode: "all", difficulty: "all", outcome: "all", from: "", to: "" });
-  useEffect(() => { setRoundPage(0); }, [roundFilters]);
-  // Inject brand CSS and wipe animation
-  const style = `
-  :root{ --challenge:#FF77AA; --practice:#88AA66; }
-  .mode-grid{ display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:12px; width:min(92vw,640px); }
-  .mode-card.dim{ filter: blur(2px) brightness(.85); }
-  .ink-pop{ position:absolute; inset:0; background: radial-gradient(600px circle at var(--x,50%) var(--y,50%), rgba(255,255,255,.6), transparent 40%); opacity:0; transition:opacity .22s; }
-  .mode-card:active .ink-pop{ opacity:1; }
-  .fullscreen{ position:fixed; inset:0; z-index:50; will-change:transform; }
-  .fullscreen.challenge{ background: var(--challenge); }
-  .fullscreen.practice{ background: var(--practice); }
-  .wipe{ position:fixed; inset:0; pointer-events:none; z-index:60; transform:translateX(110%); will-change:transform; background:linear-gradient(12deg, rgba(255,255,255,.9), rgba(255,255,255,1)); }
-  .wipe.run{ animation: wipeIn 400ms cubic-bezier(.22,.61,.36,1) forwards; }
-  @keyframes wipeIn{ 0%{ transform:translateX(110%) rotate(.5deg) } 100%{ transform:translateX(0) rotate(0) } }
-  `;
-
-  // Scenes
-  type Scene = "BOOT"|"MODE"|"MATCH"|"RESULTS";
-  const [scene, setScene] = useState<Scene>("BOOT");
-
-  // Settings
-  const prefersReduced = useReducedMotion();
-  const [reducedMotion, setReducedMotion] = useState<boolean>(prefersReduced ?? false);
-  useEffect(() => {
-    setReducedMotion(prefersReduced ?? false);
-  }, [prefersReduced]);
-  const [audioOn, setAudioOn] = useState(true);
-  const [textScale, setTextScale] = useState(1);
-
-  const [predictorMode, setPredictorMode] = useState(false); // master enable for AI mix
-  const [aiMode, setAiMode] = useState<AIMode>("normal"); // Fair/Normal/Ruthless
-  const [predictorLevel, setPredictorLevel] = useState<PredictorLevel>("smart"); // legacy knob
-  const TRAIN_ROUNDS = 15;
-  const TRAIN_KEY = "rps_trained";
-  const TRAIN_COUNT_KEY = "rps_training_count";
-  const [isTrained, setIsTrained] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem(TRAIN_KEY) === "1";
-  });
-  const [trainingCount, setTrainingCount] = useState<number>(() => {
-    if (typeof window === "undefined") return 0;
-    const stored = parseInt(localStorage.getItem(TRAIN_COUNT_KEY) ?? "0", 10);
-    if (Number.isNaN(stored)) return 0;
-    return Math.min(Math.max(stored, 0), TRAIN_ROUNDS);
-  });
-  const [trainingActive, setTrainingActive] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    const trained = localStorage.getItem(TRAIN_KEY) === "1";
-    if (trained) return false;
-    const stored = parseInt(localStorage.getItem(TRAIN_COUNT_KEY) ?? "0", 10);
-    if (Number.isNaN(stored)) return false;
-    return stored > 0 && stored < TRAIN_ROUNDS;
-  });
-
-  // Game state
-  const trainingComplete = trainingCount >= TRAIN_ROUNDS;
-  const needsTraining = !isTrained && !trainingComplete;
-  const shouldAutoResumeTraining = needsTraining && trainingActive;
-  const shouldGateTraining = needsTraining && !trainingActive;
-  const bootNeedsTraining = useRef(needsTraining);
-  const bootAutoResumeTraining = useRef(shouldAutoResumeTraining);
-  const bootInitialTrainingActive = useRef(trainingActive);
-  const modesDisabled = trainingActive || needsTraining;
-  const trainingDisplayCount = Math.min(trainingCount, TRAIN_ROUNDS);
-  const trainingProgress = Math.min(trainingDisplayCount / TRAIN_ROUNDS, 1);
-  const [seed] = useState(()=>Math.floor(Math.random()*1e9));
-  const rng = useMemo(()=>mulberry32(seed), [seed]);
-  const [bestOf, setBestOf] = useState<BestOf>(5);
-  const [playerScore, setPlayerScore] = useState(0);
-  const [aiScore, setAiScore] = useState(0);
-  const [round, setRound] = useState(1);
-  const [lastMoves, setLastMoves] = useState<Move[]>([]);
-  const [aiHistory, setAiHistory] = useState<Move[]>([]);
-  const [outcomesHist, setOutcomesHist] = useState<Outcome[]>([]);
-
-  // Round sub-state
-  type Phase = "idle"|"selected"|"countdown"|"reveal"|"resolve"|"feedback";
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [playerPick, setPlayerPick] = useState<Move|undefined>();
-  const [aiPick, setAiPick] = useState<Move|undefined>();
-  const [count, setCount] = useState<number>(3);
-  const [outcome, setOutcome] = useState<Outcome|undefined>();
-  const [resultBanner, setResultBanner] = useState<"Victory"|"Defeat"|"Tie"|null>(null);
-  const [live, setLive] = useState("");
-  // countdown timer ref + helpers (prevents stale closure freezes)
-  const countdownRef = useRef<number | null>(null);
-  const trainingAnnouncementsRef = useRef<Set<number>>(new Set());
-  const clearCountdown = ()=>{ if (countdownRef.current!==null){ clearInterval(countdownRef.current); countdownRef.current=null; } };
-  const startCountdown = ()=>{ setPhase("countdown"); setCount(3); clearCountdown(); countdownRef.current = window.setInterval(()=>{ setCount(prev=>{ const next = prev - 1; audio.tick(); if (!reducedMotion) tryVibrate(6); if (next <= 0){ clearCountdown(); reveal(); } return next; }); }, 300); };
-
-  // Mode select animation state
-  const [selectedMode, setSelectedMode] = useState<Mode|null>(null);
-  const [wipeRun, setWipeRun] = useState(false);
-  const modeLabel = (m:Mode)=> m.charAt(0).toUpperCase()+m.slice(1);
-
-  const recordRound = useCallback((playerMove: Move, aiMove: Move, outcomeForPlayer: Outcome) => {
-    const trace = decisionTraceRef.current;
-    const policy: DecisionPolicy = trace?.policy ?? "heuristic";
-    let mixerTrace: MixerTrace | undefined = undefined;
-    let heuristicTrace: HeuristicTrace | undefined = trace?.heuristic;
-    let confidence = trace?.confidence ?? 0;
-    if (trace?.mixer){
-      const topExperts = trace.mixer.experts
-        .map(e => ({ name: e.name, weight: e.weight, pActual: e.dist[playerMove] ?? 0 }))
-        .sort((a,b)=> b.weight - a.weight)
-        .slice(0,3);
-      mixerTrace = {
-        dist: trace.mixer.dist,
-        counter: trace.mixer.counter,
-        topExperts,
-        confidence: trace.mixer.confidence,
-      };
-      confidence = trace.mixer.confidence;
-    } else if (trace?.heuristic){
-      confidence = trace.confidence;
-    }
-    const now = new Date().toISOString();
-    const aiStreak = outcomeForPlayer === "lose" ? aiStreakRef.current + 1 : 0;
-    const youStreak = outcomeForPlayer === "win" ? youStreakRef.current + 1 : 0;
-    aiStreakRef.current = aiStreak;
-    youStreakRef.current = youStreak;
-    const reason = describeDecision(policy, mixerTrace, heuristicTrace, playerMove, aiMove);
-    const confBucket = confidenceBucket(confidence);
-    logRound({
-      t: now,
-      mode: selectedMode ?? "practice",
-      matchId: currentMatchIdRef.current,
-      bestOf,
-      difficulty: aiMode,
-      player: playerMove,
-      ai: aiMove,
-      outcome: outcomeForPlayer,
-      policy,
-      mixer: mixerTrace,
-      heuristic: heuristicTrace,
-      streakAI: aiStreak,
-      streakYou: youStreak,
-      reason,
-      confidence,
-      confidenceBucket: confBucket,
-    });
-    decisionTraceRef.current = null;
-  }, [selectedMode, bestOf, aiMode, logRound]);
-
-  // Calibration overlay (Practice → Calibrate)
-  const [showCal, setShowCal] = useState(false);
-  const [calText, setCalText] = useState<string>("");
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    localStorage.setItem(TRAIN_KEY, isTrained ? "1" : "0");
-  }, [isTrained]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const value = Math.min(trainingCount, TRAIN_ROUNDS);
-    localStorage.setItem(TRAIN_COUNT_KEY, String(value));
-  }, [trainingCount]);
-
-  useEffect(() => {
-    if (!needsTraining && !trainingActive) return;
-    if (predictorMode) setPredictorMode(false);
-    if (aiMode !== "fair") setAiMode("fair");
-  }, [needsTraining, trainingActive, predictorMode, aiMode]);
-
-  // Create audio context on first interaction
-  const armedRef = useRef(false);
-  const armAudio = () => { if (!armedRef.current){ audio.ensureCtx(); audio.setEnabled(audioOn); armedRef.current = true; } };
-  useEffect(()=>{ audio.setEnabled(audioOn); }, [audioOn]);
-
-  // Boot → initial scene routing
-  useEffect(() => {
-    const t = setTimeout(() => {
-      if (bootNeedsTraining.current) {
-        startMatch("practice", { silent: true });
-        if (!bootInitialTrainingActive.current && bootAutoResumeTraining.current) {
-          setTrainingActive(true);
-        }
-      } else {
-        setScene("MODE");
-      }
-    }, 900);
-    return () => clearTimeout(t);
-  }, []);
+  const { rounds: allRounds, matches: allMatches, logRound, logMatch, resetAll, eraseLastSession, exportJson, exportRoundsCsv, eraseDataForPlayer, exportJsonForPlayer, exportRoundsCsvForPlayer } = useStats();
+  const { players, currentPlayer, currentPlayerId, hasConsented, setCurrentPlayer, createPlayer, updatePlayer, deletePlayer } = usePlayers();
+  const [selectedPlayerFilterId, setSelectedPlayerFilterId] = useState<string | "all">(currentPlayerId || "all");
+  useEffect(() => { setSelectedPlayerFilterId(currentPlayerId || "all"); }, [currentPlayerId]);
+  const playerFilterId = selectedPlayerFilterId === "all" ? null : selectedPlayerFilterId;
+  const rounds = useMemo(() => (playerFilterId ? allRounds.filter(r => r.playerId === playerFilterId) : allRounds), [allRounds, playerFilterId]);
+  const matches = useMemo(() => (playerFilterId ? allMatches.filter(m => m.playerId === playerFilterId) : allMatches), [allMatches, playerFilterId]);
+  const [showPlayerModal, setShowPlayerModal] = useState(false);
+  const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
+  useEffect(() => { if (!hasConsented) setShowPlayerModal(true); }, [hasConsented]);
 
   const statsTabs = [
     { key: "overview", label: "Overview" },
@@ -824,49 +639,26 @@ function RPSDoodleAppInner(){
   }, [rounds]);
 
   const handleExportJson = useCallback(() => {
-    const blob = new Blob([exportJson()], { type: "application/json" });
+    const data = (selectedPlayerFilterId && selectedPlayerFilterId !== 'all') ? exportJsonForPlayer(selectedPlayerFilterId as string) : exportJson();
+    const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
+    const a = document.createElement('a');
     a.href = url;
-    a.download = "rps-stats.json";
+    a.download = (selectedPlayerFilterId && selectedPlayerFilterId !== 'all') ? ('rps-' + String(selectedPlayerFilterId) + '-stats.json') : 'rps-stats.json';
     a.click();
     URL.revokeObjectURL(url);
-  }, [exportJson]);
+  }, [exportJson, exportJsonForPlayer, selectedPlayerFilterId]);
 
   const handleExportCsv = useCallback(() => {
-    const blob = new Blob([exportRoundsCsv()], { type: "text/csv" });
+    const data = (selectedPlayerFilterId && selectedPlayerFilterId !== 'all') ? exportRoundsCsvForPlayer(selectedPlayerFilterId as string) : exportRoundsCsv();
+    const blob = new Blob([data], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
+    const a = document.createElement('a');
     a.href = url;
-    a.download = "rps-rounds.csv";
+    a.download = (selectedPlayerFilterId && selectedPlayerFilterId !== 'all') ? ('rps-' + String(selectedPlayerFilterId) + '-rounds.csv') : 'rps-rounds.csv';
     a.click();
     URL.revokeObjectURL(url);
-  }, [exportRoundsCsv]);
-
-  const handleResetAll = useCallback(() => {
-    resetAll();
-    setSelectedMatchId(null);
-  }, [resetAll]);
-
-  const handleEraseLastSession = useCallback(() => {
-    eraseLastSession();
-    setSelectedMatchId(null);
-  }, [eraseLastSession]);
-
-  useEffect(() => {
-    if (!statsOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setStatsOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    const node = statsModalRef.current;
-    if (node){
-      const first = node.querySelector<HTMLElement>("[data-focus-first]");
-      if (first) first.focus();
-    }
-    return () => window.removeEventListener("keydown", onKey);
-  }, [statsOpen]);
-  // Keyboard controls for MATCH
+  }, [exportRoundsCsv, exportRoundsCsvForPlayer, selectedPlayerFilterId]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (scene === "MATCH" && phase === "idle" && !shouldGateTraining) {
@@ -1198,7 +990,25 @@ function RPSDoodleAppInner(){
           {trainingActive && <span className="px-2 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-700">Training</span>}
           {liveAiConfidence !== null && <span className="px-2 py-1 text-xs font-semibold rounded-full bg-sky-100 text-sky-700">AI conf: {Math.round((liveAiConfidence ?? 0) * 100)}%</span>}
           <button onClick={() => setStatsOpen(true)} className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900">Statistics</button>
-          <button onClick={() => goToMode()} disabled={modesDisabled} className={"px-3 py-1.5 rounded-xl shadow text-sm " + (modesDisabled ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900")}>Modes</button>
+<button onClick={() => { if (!hasConsented) { setShowPlayerModal(true); return; } goToMode(); }} title={!hasConsented ? "Check consent to continue." : undefined} disabled={modesDisabled || !hasConsented} className={"px-3 py-1.5 rounded-xl shadow text-sm " + ((modesDisabled || !hasConsented) ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900")}>Start Game</button>
+<details className="bg-white/70 rounded-xl shadow group">
+  <summary className="list-none px-3 py-1.5 cursor-pointer text-sm text-slate-900">{currentPlayer ? (currentPlayer.displayName + " (" + currentPlayer.gradeBand + ")") : "Select Player"}</summary>
+  <div className="p-3 pt-0 space-y-2 text-sm min-w-[220px]">
+    <div className="font-semibold text-slate-700">Players</div>
+    {players.length ? (
+      <ul className="space-y-1">
+        {players.map(p => (
+          <li key={p.id} className="flex items-center justify-between gap-2">
+            <button className="text-left flex-1 px-2 py-1 rounded hover:bg-slate-100" onClick={()=> setCurrentPlayer(p.id)}>{p.displayName} <span className="text-slate-500 text-xs">({p.gradeBand})</span></button>
+            <button className="text-xs text-sky-700" onClick={()=> { setEditingPlayerId(p.id); setShowPlayerModal(true); }}>Edit</button>
+            <button className="text-xs text-rose-700" onClick={()=> { if (confirm("Delete this player?")) { if (confirm("Also erase this player's logs?")) { eraseDataForPlayer(p.id); } deletePlayer(p.id); } }}>Delete</button>
+          </li>
+        ))}
+      </ul>
+    ) : <div className="text-slate-500">No players yet.</div>}
+    <button className="px-2 py-1 rounded bg-sky-100 text-sky-700" onClick={()=> { setEditingPlayerId(null); setShowPlayerModal(true); }}>Add Player</button>
+  </div>
+</details>
           <details className="bg-white/70 rounded-xl shadow group">
             <summary className="list-none px-3 py-1.5 cursor-pointer text-sm text-slate-900">Settings ⚙️</summary>
             <div className="p-3 pt-0 space-y-2 text-sm">
@@ -1216,6 +1026,27 @@ function RPSDoodleAppInner(){
               </label>
               {/* Legacy level preserved (tunes epsilon in heuristics path) */}
               <label className="flex items-center justify-between gap-4"><span>Legacy level</span>
+              <hr className="my-2" />
+              <div className="space-y-2">
+                <div className="text-xs text-slate-500">Privacy</div>
+                <div className="flex items-center gap-2">
+                  <button className="px-2 py-1 rounded bg-sky-100 text-sky-700" disabled={!currentPlayer} onClick={()=>{
+                    if (!currentPlayer) return;
+                    const data = exportJsonForPlayer(currentPlayer.id);
+                    const blob = new Blob([data], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a'); a.href = url; a.download = 'rps-my-data.json'; a.click(); URL.revokeObjectURL(url);
+                  }}>Export my data</button>
+                  <button className="px-2 py-1 rounded bg-rose-100 text-rose-700" disabled={!currentPlayer} onClick={()=>{
+                    if (!currentPlayer) return;
+                    if (confirm('Erase my data? This removes my profile and logs.')) {
+                      eraseDataForPlayer(currentPlayer.id);
+                      deletePlayer(currentPlayer.id);
+                      setShowPlayerModal(true);
+                    }
+                  }}>Erase my data</button>
+                </div>
+              </div>
                 <select value={predictorLevel} onChange={e=> setPredictorLevel(e.target.value as PredictorLevel)} className="px-2 py-1 rounded bg-white shadow-inner">
                   <option value="basic">Basic</option>
                   <option value="smart">Smart</option>
@@ -1245,16 +1076,15 @@ function RPSDoodleAppInner(){
               <div className="w-48 h-1 bg-slate-200 rounded overflow-hidden"><motion.div initial={{ width: "10%" }} animate={{ width: "100%" }} transition={{ duration: .9, ease: "easeInOut" }} className="h-full bg-sky-500"/></div>
               <div className="text-slate-500 text-sm">Booting...</div>
             </div>
-          </motion.div>
+            </motion.div>
         )}
-
         {/* MODE SELECT */}
         {scene === "MODE" && (
           <motion.main key="mode" initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -20, opacity: 0 }} transition={{ duration: .36, ease: [0.22,0.61,0.36,1] }} className="min-h-screen pt-28 flex flex-col items-center gap-6">
             <motion.div layout className="text-4xl font-black text-sky-700">Choose Your Mode</motion.div>
             <div className="mode-grid">
               {MODES.map(m => (
-                <ModeCard key={m} mode={m} onSelect={handleModeSelect} isDimmed={!!selectedMode && selectedMode!==m} disabled={m === "challenge" && needsTraining} />
+                <ModeCard key={m} mode={m} onSelect={handleModeSelect} isDimmed={!!selectedMode && selectedMode!==m} disabled={(m === "challenge" && needsTraining) || !hasConsented} />
               ))}
             </div>
 
@@ -1424,7 +1254,7 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
 
       {/* Wipe overlay */}
-      <div className={`wipe ${wipeRun ? 'run' : ''}`} aria-hidden/>
+      <div className={"wipe " + (wipeRun ? 'run' : '')} aria-hidden={true} />
 
       {/* Calibration modal */}
       <AnimatePresence>
@@ -1618,6 +1448,14 @@ function RPSDoodleAppInner(){
                 {statsTab === "rounds" && (
                   <div className="space-y-3">
                     <div className="flex flex-wrap gap-2 text-sm">
+                      <label className="flex items-center gap-1">Player
+                        <select value={selectedPlayerFilterId} onChange={e=> setSelectedPlayerFilterId(e.target.value as any)} className="ml-1 border rounded px-2 py-1">
+                          <option value="all">Current Player</option>
+                          {players.map(p => (
+                            <option key={p.id} value={p.id}>{p.displayName} ({p.gradeBand})</option>
+                          ))}
+                        </select>
+                      </label>
                       <label className="flex items-center gap-1">Mode
                         <select value={roundFilters.mode} onChange={e=> setRoundFilters(f => ({ ...f, mode: e.target.value as RoundFilterMode }))} className="ml-1 border rounded px-2 py-1">
                           <option value="all">All</option>
@@ -1726,6 +1564,21 @@ function RPSDoodleAppInner(){
           </motion.div>
         )}
       </AnimatePresence>
+      {/* Player Setup Modal */}
+      <AnimatePresence>
+        {showPlayerModal && (
+          <motion.div key="pmask" className="fixed inset-0 z-[70] bg-black/30 grid place-items-center" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onKeyDown={(e:any)=>{ if (e.key==='Escape' && hasConsented) setShowPlayerModal(false); }}>
+            <motion.div role="dialog" aria-modal="true" aria-label="Player Setup" className="bg-white rounded-2xl shadow-xl w-[min(94vw,520px)]" initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 6, opacity: 0 }}>
+              <PlayerSetupForm
+                players={players}
+                editingId={editingPlayerId}
+                onClose={()=> { if (hasConsented) setShowPlayerModal(false); }}
+                onSaved={()=> { setShowPlayerModal(false); setEditingPlayerId(null); }}
+              />
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Footer robot idle (personality beat) */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: .4 }} className="fixed bottom-3 right-3 bg-white/70 rounded-2xl shadow px-3 py-2 flex items-center gap-2">
@@ -1734,15 +1587,16 @@ function RPSDoodleAppInner(){
         </motion.span>
         <span className="text-sm text-slate-700">Ready!</span>
       </motion.div>
-
     </div>
   );
 }
 
 export default function RPSDoodleApp(){
   return (
-    <StatsProvider>
-      <RPSDoodleAppInner />
-    </StatsProvider>
+    <PlayersProvider>
+      <StatsProvider>
+        <RPSDoodleAppInner />
+      </StatsProvider>
+    </PlayersProvider>
   );
 }

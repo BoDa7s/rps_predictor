@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AIMode, BestOf, Mode, Move, Outcome } from "./gameTypes";
+import { usePlayers } from "./players";
 
 export type DecisionPolicy = "mixer" | "heuristic";
 
@@ -26,6 +27,7 @@ export interface RoundLog {
   id: string;
   sessionId: string;
   matchId?: string;
+  playerId: string;
   t: string;
   mode: Mode;
   bestOf: BestOf;
@@ -47,6 +49,7 @@ export interface MatchSummary {
   id: string;
   sessionId: string;
   clientId?: string;
+  playerId: string;
   startedAt: string;
   endedAt: string;
   mode: Mode;
@@ -63,12 +66,15 @@ interface StatsContextValue {
   rounds: RoundLog[];
   matches: MatchSummary[];
   sessionId: string;
-  logRound: (round: Omit<RoundLog, "id" | "sessionId">) => RoundLog | null;
-  logMatch: (match: Omit<MatchSummary, "id" | "sessionId">) => MatchSummary | null;
+  logRound: (round: Omit<RoundLog, "id" | "sessionId" | "playerId">) => RoundLog | null;
+  logMatch: (match: Omit<MatchSummary, "id" | "sessionId" | "playerId">) => MatchSummary | null;
   resetAll: () => void;
   eraseLastSession: () => void;
   exportJson: () => string;
   exportRoundsCsv: () => string;
+  eraseDataForPlayer: (playerId: string) => void;
+  exportJsonForPlayer: (playerId: string) => string;
+  exportRoundsCsvForPlayer: (playerId: string) => string;
 }
 
 const StatsContext = createContext<StatsContextValue | null>(null);
@@ -112,6 +118,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   const [roundsDirty, setRoundsDirty] = useState(false);
   const [matchesDirty, setMatchesDirty] = useState(false);
   const sessionIdRef = useRef<string>("");
+  const { currentPlayerId, players } = usePlayers();
 
   if (!sessionIdRef.current) {
     sessionIdRef.current = makeId("sess");
@@ -119,11 +126,13 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
 
   const sessionId = sessionIdRef.current;
 
-  const logRound = useCallback((round: Omit<RoundLog, "id" | "sessionId">) => {
+  const logRound = useCallback((round: Omit<RoundLog, "id" | "sessionId" | "playerId">) => {
+    if (!currentPlayerId) return null;
     const entry: RoundLog = {
       ...round,
       id: makeId("r"),
       sessionId,
+      playerId: currentPlayerId,
     };
     setRounds(prev => {
       const next = prev.concat(entry);
@@ -132,18 +141,20 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     });
     setRoundsDirty(true);
     return entry;
-  }, [sessionId]);
+  }, [sessionId, currentPlayerId]);
 
-  const logMatch = useCallback((match: Omit<MatchSummary, "id" | "sessionId">) => {
+  const logMatch = useCallback((match: Omit<MatchSummary, "id" | "sessionId" | "playerId">) => {
+    if (!currentPlayerId) return null;
     const entry: MatchSummary = {
       ...match,
       id: makeId("m"),
       sessionId,
+      playerId: currentPlayerId,
     };
     setMatches(prev => prev.concat(entry));
     setMatchesDirty(true);
     return entry;
-  }, [sessionId]);
+  }, [sessionId, currentPlayerId]);
 
   useEffect(() => {
     if (!roundsDirty) return;
@@ -197,10 +208,16 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   }, [rounds, matches]);
 
   const exportRoundsCsv = useCallback(() => {
-    const headers = ["timestamp","mode","bestOf","difficulty","player","ai","outcome","policy","confidence","streakAI","streakYou"];
+    const headers = ["playerId","playerName","gradeBand","timestamp","mode","bestOf","difficulty","player","ai","outcome","policy","confidence","streakAI","streakYou"];
     const lines = [headers.join(",")];
     rounds.forEach(r => {
+      const prof = players.find(p => p.id === r.playerId) || null;
+      const playerName = prof?.displayName ?? "";
+      const grade = prof?.gradeBand ?? "";
       lines.push([
+        r.playerId,
+        JSON.stringify(playerName),
+        grade,
         r.t,
         r.mode,
         r.bestOf,
@@ -216,7 +233,49 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     });
     return lines.join('\n');
 
-  }, [rounds]);
+  }, [rounds, players]);
+
+  const eraseDataForPlayer = useCallback((playerId: string) => {
+    setRounds(prev => prev.filter(r => r.playerId !== playerId));
+    setMatches(prev => prev.filter(m => m.playerId !== playerId));
+    setRoundsDirty(true);
+    setMatchesDirty(true);
+  }, []);
+
+  const exportJsonForPlayer = useCallback((playerId: string) => {
+    const r = rounds.filter(x => x.playerId === playerId);
+    const m = matches.filter(x => x.playerId === playerId);
+    const prof = players.find(p => p.id === playerId) || null;
+    const payload = { profile: prof, rounds: r, matches: m };
+    return JSON.stringify(payload, null, 2);
+  }, [rounds, matches, players]);
+
+  const exportRoundsCsvForPlayer = useCallback((playerId: string) => {
+    const headers = ["playerId","playerName","gradeBand","timestamp","mode","bestOf","difficulty","player","ai","outcome","policy","confidence","streakAI","streakYou"];
+    const lines = [headers.join(",")];
+    const prof = players.find(p => p.id === playerId) || null;
+    const playerName = prof?.displayName ?? "";
+    const grade = prof?.gradeBand ?? "";
+    rounds.filter(r => r.playerId === playerId).forEach(r => {
+      lines.push([
+        r.playerId,
+        JSON.stringify(playerName),
+        grade,
+        r.t,
+        r.mode,
+        r.bestOf,
+        r.difficulty,
+        r.player,
+        r.ai,
+        r.outcome,
+        r.policy,
+        r.confidence.toFixed(2),
+        r.streakAI,
+        r.streakYou
+      ].join(","));
+    });
+    return lines.join('\n');
+  }, [rounds, players]);
 
   const value = useMemo<StatsContextValue>(() => ({
     rounds,
@@ -228,7 +287,10 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     eraseLastSession,
     exportJson,
     exportRoundsCsv,
-  }), [rounds, matches, sessionId, logRound, logMatch, resetAll, eraseLastSession, exportJson, exportRoundsCsv]);
+    eraseDataForPlayer,
+    exportJsonForPlayer,
+    exportRoundsCsvForPlayer,
+  }), [rounds, matches, sessionId, logRound, logMatch, resetAll, eraseLastSession, exportJson, exportRoundsCsv, eraseDataForPlayer, exportJsonForPlayer, exportRoundsCsvForPlayer]);
 
   return <StatsContext.Provider value={value}>{children}</StatsContext.Provider>;
 }
@@ -238,3 +300,4 @@ export function useStats(){
   if (!ctx) throw new Error("useStats must be used within StatsProvider");
   return ctx;
 }
+
