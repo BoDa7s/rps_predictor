@@ -89,6 +89,13 @@ interface StatsContextValue {
   updateProfile: (id: string, patch: StatsProfileUpdate) => void;
   exportJson: () => string;
   exportRoundsCsv: () => string;
+  adminRounds: RoundLog[];
+  adminMatches: MatchSummary[];
+  adminProfiles: StatsProfile[];
+  adminUpdateRound: (id: string, patch: Partial<RoundLog>) => void;
+  adminDeleteRound: (id: string) => void;
+  adminUpdateMatch: (id: string, patch: Partial<MatchSummary>) => void;
+  adminDeleteMatch: (id: string) => void;
 }
 
 const StatsContext = createContext<StatsContextValue | null>(null);
@@ -361,6 +368,26 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     return allMatches.filter(m => m.playerId === currentPlayerId && (m.profileId ?? currentProfile.id) === currentProfile.id);
   }, [allMatches, currentPlayerId, currentProfile]);
 
+  const adminUpdateRound = useCallback((id: string, patch: Partial<RoundLog>) => {
+    setAllRounds(prev => prev.map(r => (r.id === id ? { ...r, ...patch } : r)));
+    setRoundsDirty(true);
+  }, []);
+
+  const adminDeleteRound = useCallback((id: string) => {
+    setAllRounds(prev => prev.filter(r => r.id !== id));
+    setRoundsDirty(true);
+  }, []);
+
+  const adminUpdateMatch = useCallback((id: string, patch: Partial<MatchSummary>) => {
+    setAllMatches(prev => prev.map(m => (m.id === id ? { ...m, ...patch } : m)));
+    setMatchesDirty(true);
+  }, []);
+
+  const adminDeleteMatch = useCallback((id: string) => {
+    setAllMatches(prev => prev.filter(m => m.id !== id));
+    setMatchesDirty(true);
+  }, []);
+
   const exportJson = useCallback(() => {
     const payload = {
       player: currentPlayer ?? null,
@@ -438,7 +465,14 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     updateProfile,
     exportJson,
     exportRoundsCsv,
-  }), [rounds, matches, sessionId, currentProfile, playerProfiles, logRound, logMatch, selectProfile, createProfile, updateProfile, exportJson, exportRoundsCsv]);
+    adminRounds: allRounds,
+    adminMatches: allMatches,
+    adminProfiles: profiles,
+    adminUpdateRound,
+    adminDeleteRound,
+    adminUpdateMatch,
+    adminDeleteMatch,
+  }), [rounds, matches, sessionId, currentProfile, playerProfiles, logRound, logMatch, selectProfile, createProfile, updateProfile, exportJson, exportRoundsCsv, allRounds, allMatches, profiles, adminUpdateRound, adminDeleteRound, adminUpdateMatch, adminDeleteMatch]);
 
   return <StatsContext.Provider value={value}>{children}</StatsContext.Provider>;
 }

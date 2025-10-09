@@ -3,6 +3,8 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, DecisionPolicy } from "./stats";
 import { PlayersProvider, usePlayers, GradeBand, AgeBand, Gender, PlayerProfile, CONSENT_TEXT_VERSION } from "./players";
+import { DEV_MODE_ENABLED } from "./devMode";
+import { DeveloperConsole } from "./DeveloperConsole";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -472,6 +474,34 @@ function RPSDoodleAppInner(){
   const matches = useMemo(() => profileMatches, [profileMatches]);
   const [showPlayerModal, setShowPlayerModal] = useState(false);
   useEffect(() => { if (!hasConsented) setShowPlayerModal(true); }, [hasConsented]);
+  const [developerOpen, setDeveloperOpen] = useState(false);
+  const secretClickRef = useRef(0);
+  const secretTimerRef = useRef<number | null>(null);
+
+  const handleDeveloperTrigger = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!DEV_MODE_ENABLED) return;
+    if (!event.altKey) return;
+    secretClickRef.current += 1;
+    if (secretTimerRef.current) {
+      window.clearTimeout(secretTimerRef.current);
+    }
+    secretTimerRef.current = window.setTimeout(() => {
+      secretClickRef.current = 0;
+      secretTimerRef.current = null;
+    }, 1200);
+    if (secretClickRef.current >= 3) {
+      secretClickRef.current = 0;
+      setDeveloperOpen(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (secretTimerRef.current) {
+        window.clearTimeout(secretTimerRef.current);
+      }
+    };
+  }, []);
 
   const style = `
   :root{ --challenge:#FF77AA; --practice:#88AA66; }
@@ -1744,6 +1774,25 @@ function RPSDoodleAppInner(){
         </motion.span>
         <span className="text-sm text-slate-700">Ready!</span>
       </motion.div>
+      {DEV_MODE_ENABLED && (
+        <>
+          <div
+            aria-hidden="true"
+            onClick={handleDeveloperTrigger}
+            style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              width: "32px",
+              height: "32px",
+              opacity: 0,
+              pointerEvents: "auto",
+              zIndex: 5,
+            }}
+          />
+          <DeveloperConsole open={developerOpen} onClose={() => setDeveloperOpen(false)} />
+        </>
+      )}
     </div>
   );
 }
