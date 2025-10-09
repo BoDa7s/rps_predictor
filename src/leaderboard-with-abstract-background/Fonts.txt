@@ -1,0 +1,9 @@
+Fonts used in this design:
+
+Font: Chivo
+Author: Omnibus Type
+Url: http://www.fontsquirrel.com/fonts/chivo
+
+Font: Montserrat
+Author: Julieta Ulanovsky
+Url: http://www.fontsquirrel.com/fonts/montserrat
