@@ -2,11 +2,17 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, DecisionPolicy } from "./stats";
+import { PlayersProvider, usePlayers, GradeBand, AgeBand, Gender, PlayerProfile, CONSENT_TEXT_VERSION } from "./players";
+import { DEV_MODE_ENABLED } from "./devMode";
+import { DeveloperConsole } from "./DeveloperConsole";
+import { lockSecureStore } from "./secureStore";
+import LeaderboardModal from "./LeaderboardModal";
+import { computeMatchScore } from "./leaderboard";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
 // Single-file React app implementing ModeSelect full-graphic morph
-// + Ensemble AI (Hedge) with Practice + Calibrate + Exploit flow
+// + Ensemble AI (Hedge) with Practice + Training + Exploit flow
 // Notes:
 // - Emoji-based visuals throughout; no external animation URLs required
 // - Framer Motion handles shared-element scene morph + wipe
@@ -27,7 +33,6 @@ function mulberry32(a:number){
 // Types
 const MOVES: Move[] = ["rock", "paper", "scissors"];
 const MODES: Mode[] = ["challenge","practice"];
-export type PredictorLevel = "off" | "basic" | "smart" | "adaptive"; // legacy knob (kept for compat)
 
 // Icons (emoji fallback)
 const moveEmoji: Record<Move, string> = { rock: "\u270A", paper: "\u270B", scissors: "\u270C\uFE0F" };
@@ -441,8 +446,22 @@ function ModeCard({ mode, onSelect, isDimmed, disabled = false }: { mode: Mode, 
 
 // Main component
 function RPSDoodleAppInner(){
-  const { rounds, matches, logRound, logMatch, resetAll, eraseLastSession, exportJson, exportRoundsCsv } = useStats();
+  const {
+    rounds: profileRounds,
+    matches: profileMatches,
+    logRound,
+    logMatch,
+    exportJson,
+    exportRoundsCsv,
+    profiles: statsProfiles,
+    currentProfile,
+    createProfile: createStatsProfile,
+    selectProfile,
+    updateProfile: updateStatsProfile,
+  } = useStats();
+  const { currentPlayer, hasConsented, createPlayer, updatePlayer } = usePlayers();
   const [statsOpen, setStatsOpen] = useState(false);
+  const [leaderboardOpen, setLeaderboardOpen] = useState(false);
   const [statsTab, setStatsTab] = useState<"overview" | "matches" | "rounds" | "insights">("overview");
   const statsModalRef = useRef<HTMLDivElement | null>(null);
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
@@ -453,9 +472,50 @@ function RPSDoodleAppInner(){
   const youStreakRef = useRef(0);
   const matchStartRef = useRef<string>(new Date().toISOString());
   const currentMatchIdRef = useRef<string>(makeLocalId("match"));
+  const roundStartRef = useRef<number | null>(null);
+  const lastDecisionMsRef = useRef<number | null>(null);
+  const currentMatchRoundsRef = useRef<RoundLog[]>([]);
   const [roundFilters, setRoundFilters] = useState<{ mode: RoundFilterMode; difficulty: RoundFilterDifficulty; outcome: RoundFilterOutcome; from: string; to: string }>({ mode: "all", difficulty: "all", outcome: "all", from: "", to: "" });
-  useEffect(() => { setRoundPage(0); }, [roundFilters]);
-  // Inject brand CSS and wipe animation
+  useEffect(() => { setRoundPage(0); }, [roundFilters, profileRounds]);
+  const rounds = useMemo(() => profileRounds, [profileRounds]);
+  const matches = useMemo(() => profileMatches, [profileMatches]);
+  const [showPlayerModal, setShowPlayerModal] = useState(false);
+  useEffect(() => { if (!hasConsented) setShowPlayerModal(true); }, [hasConsented]);
+  useEffect(() => { if (!hasConsented) setLeaderboardOpen(false); }, [hasConsented]);
+  const [developerOpen, setDeveloperOpen] = useState(false);
+  const developerTriggerRef = useRef({ count: 0, lastClick: 0 });
+  const handleDeveloperHotspotClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (!DEV_MODE_ENABLED) return;
+      if (!event.altKey) {
+        developerTriggerRef.current.count = 0;
+        return;
+      }
+      const now = Date.now();
+      if (now - developerTriggerRef.current.lastClick > 1200) {
+        developerTriggerRef.current.count = 0;
+      }
+      developerTriggerRef.current.count += 1;
+      developerTriggerRef.current.lastClick = now;
+      if (developerTriggerRef.current.count >= 3) {
+        developerTriggerRef.current.count = 0;
+        setDeveloperOpen(true);
+      }
+    },
+    [setDeveloperOpen]
+  );
+
+  useEffect(() => {
+    if (!developerOpen) {
+      lockSecureStore();
+    }
+  }, [developerOpen, lockSecureStore]);
+
+  const handleDeveloperClose = useCallback(() => {
+    lockSecureStore();
+    setDeveloperOpen(false);
+  }, [lockSecureStore, setDeveloperOpen]);
+
   const style = `
   :root{ --challenge:#FF77AA; --practice:#88AA66; }
   .mode-grid{ display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:12px; width:min(92vw,640px); }
@@ -470,11 +530,9 @@ function RPSDoodleAppInner(){
   @keyframes wipeIn{ 0%{ transform:translateX(110%) rotate(.5deg) } 100%{ transform:translateX(0) rotate(0) } }
   `;
 
-  // Scenes
   type Scene = "BOOT"|"MODE"|"MATCH"|"RESULTS";
   const [scene, setScene] = useState<Scene>("BOOT");
 
-  // Settings
   const prefersReduced = useReducedMotion();
   const [reducedMotion, setReducedMotion] = useState<boolean>(prefersReduced ?? false);
   useEffect(() => {
@@ -483,42 +541,28 @@ function RPSDoodleAppInner(){
   const [audioOn, setAudioOn] = useState(true);
   const [textScale, setTextScale] = useState(1);
 
-  const [predictorMode, setPredictorMode] = useState(false); // master enable for AI mix
-  const [aiMode, setAiMode] = useState<AIMode>("normal"); // Fair/Normal/Ruthless
-  const [predictorLevel, setPredictorLevel] = useState<PredictorLevel>("smart"); // legacy knob
-  const TRAIN_ROUNDS = 15;
-  const TRAIN_KEY = "rps_trained";
-  const TRAIN_COUNT_KEY = "rps_training_count";
-  const [isTrained, setIsTrained] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem(TRAIN_KEY) === "1";
-  });
-  const [trainingCount, setTrainingCount] = useState<number>(() => {
-    if (typeof window === "undefined") return 0;
-    const stored = parseInt(localStorage.getItem(TRAIN_COUNT_KEY) ?? "0", 10);
-    if (Number.isNaN(stored)) return 0;
-    return Math.min(Math.max(stored, 0), TRAIN_ROUNDS);
-  });
-  const [trainingActive, setTrainingActive] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    const trained = localStorage.getItem(TRAIN_KEY) === "1";
-    if (trained) return false;
-    const stored = parseInt(localStorage.getItem(TRAIN_COUNT_KEY) ?? "0", 10);
-    if (Number.isNaN(stored)) return false;
-    return stored > 0 && stored < TRAIN_ROUNDS;
-  });
+  const [predictorMode, setPredictorMode] = useState(false);
+  const [aiMode, setAiMode] = useState<AIMode>("normal");
+  const TRAIN_ROUNDS = 10;
+  const trainingCount = currentProfile?.trainingCount ?? 0;
+  const isTrained = currentProfile?.trained ?? false;
+  const [trainingActive, setTrainingActive] = useState<boolean>(false);
 
-  // Game state
   const trainingComplete = trainingCount >= TRAIN_ROUNDS;
   const needsTraining = !isTrained && !trainingComplete;
-  const shouldAutoResumeTraining = needsTraining && trainingActive;
   const shouldGateTraining = needsTraining && !trainingActive;
-  const bootNeedsTraining = useRef(needsTraining);
-  const bootAutoResumeTraining = useRef(shouldAutoResumeTraining);
-  const bootInitialTrainingActive = useRef(trainingActive);
   const modesDisabled = trainingActive || needsTraining;
   const trainingDisplayCount = Math.min(trainingCount, TRAIN_ROUNDS);
   const trainingProgress = Math.min(trainingDisplayCount / TRAIN_ROUNDS, 1);
+  const showTrainingCompleteBadge = !needsTraining && trainingCount >= TRAIN_ROUNDS;
+
+  useEffect(() => {
+    if (!needsTraining && trainingActive) {
+      setTrainingActive(false);
+      trainingAnnouncementsRef.current.clear();
+    }
+  }, [needsTraining, trainingActive]);
+
   const [seed] = useState(()=>Math.floor(Math.random()*1e9));
   const rng = useMemo(()=>mulberry32(seed), [seed]);
   const [bestOf, setBestOf] = useState<BestOf>(5);
@@ -529,7 +573,6 @@ function RPSDoodleAppInner(){
   const [aiHistory, setAiHistory] = useState<Move[]>([]);
   const [outcomesHist, setOutcomesHist] = useState<Outcome[]>([]);
 
-  // Round sub-state
   type Phase = "idle"|"selected"|"countdown"|"reveal"|"resolve"|"feedback";
   const [phase, setPhase] = useState<Phase>("idle");
   const [playerPick, setPlayerPick] = useState<Move|undefined>();
@@ -538,13 +581,26 @@ function RPSDoodleAppInner(){
   const [outcome, setOutcome] = useState<Outcome|undefined>();
   const [resultBanner, setResultBanner] = useState<"Victory"|"Defeat"|"Tie"|null>(null);
   const [live, setLive] = useState("");
-  // countdown timer ref + helpers (prevents stale closure freezes)
   const countdownRef = useRef<number | null>(null);
   const trainingAnnouncementsRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    setTrainingActive(false);
+    trainingAnnouncementsRef.current.clear();
+  }, [currentProfile?.id]);
   const clearCountdown = ()=>{ if (countdownRef.current!==null){ clearInterval(countdownRef.current); countdownRef.current=null; } };
-  const startCountdown = ()=>{ setPhase("countdown"); setCount(3); clearCountdown(); countdownRef.current = window.setInterval(()=>{ setCount(prev=>{ const next = prev - 1; audio.tick(); if (!reducedMotion) tryVibrate(6); if (next <= 0){ clearCountdown(); reveal(); } return next; }); }, 300); };
+  const startCountdown = ()=>{ setPhase("countdown"); setCount(3); clearCountdown(); countdownRef.current = window.setInterval(()=>{
+    setCount(prev=>{
+      const next = prev - 1;
+      audio.tick();
+      if (!reducedMotion) tryVibrate(6);
+      if (next <= 0){
+        clearCountdown();
+        reveal();
+      }
+      return next;
+    });
+  }, 300); };
 
-  // Mode select animation state
   const [selectedMode, setSelectedMode] = useState<Mode|null>(null);
   const [wipeRun, setWipeRun] = useState(false);
   const modeLabel = (m:Mode)=> m.charAt(0).toUpperCase()+m.slice(1);
@@ -552,24 +608,19 @@ function RPSDoodleAppInner(){
   const recordRound = useCallback((playerMove: Move, aiMove: Move, outcomeForPlayer: Outcome) => {
     const trace = decisionTraceRef.current;
     const policy: DecisionPolicy = trace?.policy ?? "heuristic";
-    let mixerTrace: MixerTrace | undefined = undefined;
-    let heuristicTrace: HeuristicTrace | undefined = trace?.heuristic;
-    let confidence = trace?.confidence ?? 0;
-    if (trace?.mixer){
-      const topExperts = trace.mixer.experts
-        .map(e => ({ name: e.name, weight: e.weight, pActual: e.dist[playerMove] ?? 0 }))
-        .sort((a,b)=> b.weight - a.weight)
-        .slice(0,3);
-      mixerTrace = {
-        dist: trace.mixer.dist,
-        counter: trace.mixer.counter,
-        topExperts,
-        confidence: trace.mixer.confidence,
-      };
-      confidence = trace.mixer.confidence;
-    } else if (trace?.heuristic){
-      confidence = trace.confidence;
-    }
+    let mixerTrace: MixerTrace | undefined = trace?.mixer
+      ? {
+          dist: trace.mixer.dist,
+          counter: trace.mixer.counter,
+          topExperts: trace.mixer.experts
+            .map(e => ({ name: e.name, weight: e.weight, pActual: e.dist[playerMove] ?? 0 }))
+            .sort((a, b) => b.weight - a.weight)
+            .slice(0, 3),
+          confidence: trace.mixer.confidence,
+        }
+      : undefined;
+    const heuristicTrace = trace?.heuristic;
+    const confidence = trace?.confidence ?? mixerTrace?.confidence ?? heuristicTrace?.conf ?? 0;
     const now = new Date().toISOString();
     const aiStreak = outcomeForPlayer === "lose" ? aiStreakRef.current + 1 : 0;
     const youStreak = outcomeForPlayer === "win" ? youStreakRef.current + 1 : 0;
@@ -577,7 +628,8 @@ function RPSDoodleAppInner(){
     youStreakRef.current = youStreak;
     const reason = describeDecision(policy, mixerTrace, heuristicTrace, playerMove, aiMove);
     const confBucket = confidenceBucket(confidence);
-    logRound({
+    const decisionTimeMs = typeof lastDecisionMsRef.current === "number" ? lastDecisionMsRef.current : undefined;
+    const logged = logRound({
       t: now,
       mode: selectedMode ?? "practice",
       matchId: currentMatchIdRef.current,
@@ -594,23 +646,14 @@ function RPSDoodleAppInner(){
       reason,
       confidence,
       confidenceBucket: confBucket,
+      decisionTimeMs,
     });
+    if (logged) {
+      currentMatchRoundsRef.current = [...currentMatchRoundsRef.current, logged];
+    }
     decisionTraceRef.current = null;
-  }, [selectedMode, bestOf, aiMode, logRound]);
-
-  // Calibration overlay (Practice → Calibrate)
-  const [showCal, setShowCal] = useState(false);
-  const [calText, setCalText] = useState<string>("");
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    localStorage.setItem(TRAIN_KEY, isTrained ? "1" : "0");
-  }, [isTrained]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const value = Math.min(trainingCount, TRAIN_ROUNDS);
-    localStorage.setItem(TRAIN_COUNT_KEY, String(value));
-  }, [trainingCount]);
+    lastDecisionMsRef.current = null;
+  }, [logRound, selectedMode, bestOf, aiMode]);
 
   useEffect(() => {
     if (!needsTraining && !trainingActive) return;
@@ -618,25 +661,32 @@ function RPSDoodleAppInner(){
     if (aiMode !== "fair") setAiMode("fair");
   }, [needsTraining, trainingActive, predictorMode, aiMode]);
 
-  // Create audio context on first interaction
+  useEffect(() => {
+    if (scene !== "MATCH") return;
+    if (phase !== "idle") return;
+    roundStartRef.current = performance.now();
+    lastDecisionMsRef.current = null;
+  }, [scene, phase, round]);
+
   const armedRef = useRef(false);
   const armAudio = () => { if (!armedRef.current){ audio.ensureCtx(); audio.setEnabled(audioOn); armedRef.current = true; } };
   useEffect(()=>{ audio.setEnabled(audioOn); }, [audioOn]);
 
-  // Boot → initial scene routing
   useEffect(() => {
-    const t = setTimeout(() => {
-      if (bootNeedsTraining.current) {
+    if (scene !== "BOOT") return;
+    if (!currentProfile || !hasConsented) return;
+    const t = window.setTimeout(() => {
+      if (needsTraining) {
         startMatch("practice", { silent: true });
-        if (!bootInitialTrainingActive.current && bootAutoResumeTraining.current) {
+        if (!trainingActive) {
           setTrainingActive(true);
         }
       } else {
         setScene("MODE");
       }
     }, 900);
-    return () => clearTimeout(t);
-  }, []);
+    return () => window.clearTimeout(t);
+  }, [scene, currentProfile, hasConsented, needsTraining, trainingActive]);
 
   const statsTabs = [
     { key: "overview", label: "Overview" },
@@ -823,35 +873,59 @@ function RPSDoodleAppInner(){
     return null;
   }, [rounds]);
 
+  const EXPORT_WARNING_TEXT = "Export may include personal/demographic info. You are responsible for how exported files are stored and shared. No liability is assumed.";
+  const PROFILE_WARNING_TEXT = "New statistics profile requires retraining (10 rounds) before normal play. Existing stats remain available but do not merge.";
+  const sanitizeForFile = useCallback((value: string) => {
+    return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  }, []);
+
+  const handleSelectProfile = useCallback((id: string) => {
+    if (!id) return;
+    selectProfile(id);
+  }, [selectProfile]);
+
+  const handleCreateProfile = useCallback(() => {
+    if (!currentPlayer) {
+      setShowPlayerModal(true);
+      return;
+    }
+    if (!window.confirm(PROFILE_WARNING_TEXT)) return;
+    const defaultName = `Profile ${statsProfiles.length + 1}`;
+    const name = window.prompt("Name for new statistics profile?", defaultName)?.trim();
+    if (!name) return;
+    const created = createStatsProfile(name);
+    if (created) {
+      setLive("New statistics profile created. Complete training to enable challenge mode.");
+    }
+  }, [currentPlayer, statsProfiles.length, createStatsProfile, setLive, setShowPlayerModal]);
+
   const handleExportJson = useCallback(() => {
-    const blob = new Blob([exportJson()], { type: "application/json" });
+    if (!currentPlayer || !currentProfile) return;
+    if (!window.confirm(EXPORT_WARNING_TEXT)) return;
+    const data = exportJson();
+    const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
+    const a = document.createElement('a');
     a.href = url;
-    a.download = "rps-stats.json";
+    const profileSegment = sanitizeForFile(currentProfile.name || 'profile') || 'profile';
+    a.download = `rps-${profileSegment}-stats.json`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [exportJson]);
+  }, [currentPlayer, currentProfile, exportJson, sanitizeForFile]);
 
   const handleExportCsv = useCallback(() => {
-    const blob = new Blob([exportRoundsCsv()], { type: "text/csv" });
+    if (!currentPlayer || !currentProfile) return;
+    if (!window.confirm(EXPORT_WARNING_TEXT)) return;
+    const data = exportRoundsCsv();
+    const blob = new Blob([data], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
+    const a = document.createElement('a');
     a.href = url;
-    a.download = "rps-rounds.csv";
+    const profileSegment = sanitizeForFile(currentProfile.name || 'profile') || 'profile';
+    a.download = `rps-${profileSegment}-rounds.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [exportRoundsCsv]);
-
-  const handleResetAll = useCallback(() => {
-    resetAll();
-    setSelectedMatchId(null);
-  }, [resetAll]);
-
-  const handleEraseLastSession = useCallback(() => {
-    eraseLastSession();
-    setSelectedMatchId(null);
-  }, [eraseLastSession]);
+  }, [currentPlayer, currentProfile, exportRoundsCsv, sanitizeForFile]);
 
   useEffect(() => {
     if (!statsOpen) return;
@@ -866,7 +940,6 @@ function RPSDoodleAppInner(){
     }
     return () => window.removeEventListener("keydown", onKey);
   }, [statsOpen]);
-  // Keyboard controls for MATCH
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (scene === "MATCH" && phase === "idle" && !shouldGateTraining) {
@@ -966,9 +1039,20 @@ function RPSDoodleAppInner(){
   }
 
   function resetMatch(){
-    setPlayerScore(0); setAiScore(0); setRound(1); setLastMoves([]); setAiHistory([]); setOutcomesHist([]);
-    setOutcome(undefined); setAiPick(undefined); setPlayerPick(undefined);
-    setPhase("idle"); setResultBanner(null);
+    setPlayerScore(0);
+    setAiScore(0);
+    setRound(1);
+    setLastMoves([]);
+    setAiHistory([]);
+    setOutcomesHist([]);
+    setOutcome(undefined);
+    setAiPick(undefined);
+    setPlayerPick(undefined);
+    setPhase("idle");
+    setResultBanner(null);
+    currentMatchRoundsRef.current = [];
+    lastDecisionMsRef.current = null;
+    roundStartRef.current = performance.now();
   }
 
   function startMatch(mode?: Mode, opts: { silent?: boolean } = {}){
@@ -982,21 +1066,19 @@ function RPSDoodleAppInner(){
     youStreakRef.current = 0;
     matchStartRef.current = new Date().toISOString();
     currentMatchIdRef.current = makeLocalId("match");
+    roundStartRef.current = performance.now();
+    lastDecisionMsRef.current = null;
     if (mode) setSelectedMode(mode);
     setScene("MATCH");
   }
 
   function resetTraining(){
-    if (typeof window !== "undefined") {
-      localStorage.setItem(TRAIN_KEY, "0");
-      localStorage.setItem(TRAIN_COUNT_KEY, "0");
-    }
     trainingAnnouncementsRef.current.clear();
-    setShowCal(false);
-    setIsTrained(false);
+    if (currentProfile) {
+      updateStatsProfile(currentProfile.id, { trainingCount: 0, trained: false });
+    }
     setPredictorMode(false);
     setAiMode("fair");
-    setTrainingCount(0);
     setTrainingActive(false);
     startMatch("practice", { silent: true });
   }
@@ -1007,7 +1089,20 @@ function RPSDoodleAppInner(){
     setTrainingActive(true);
   }
 
-  function onSelect(m: Move){ if (phase !== "idle") return; setPlayerPick(m); setPhase("selected"); setLive(`You selected ${m}.`); audio.pop(); setTimeout(startCountdown, 140); }
+  function onSelect(m: Move){
+    if (phase !== "idle") return;
+    if (roundStartRef.current !== null) {
+      const elapsed = Math.max(0, Math.round(performance.now() - roundStartRef.current));
+      lastDecisionMsRef.current = elapsed;
+    } else {
+      lastDecisionMsRef.current = null;
+    }
+    setPlayerPick(m);
+    setPhase("selected");
+    setLive(`You selected ${m}.`);
+    audio.pop();
+    setTimeout(startCountdown, 140);
+  }
 
   function reveal(){
     const player = playerPick; if (!player) return;
@@ -1022,7 +1117,13 @@ function RPSDoodleAppInner(){
       if (res === "win") audio.thud(); else if (res === "lose") audio.snare(); else audio.tie();
       setTimeout(()=>{
         recordRound(player, ai, res);
-        if (trainingActive) setTrainingCount(count=> Math.min(TRAIN_ROUNDS, count + 1));
+        if (trainingActive && currentProfile) {
+          const nextCount = Math.min(TRAIN_ROUNDS, trainingCount + 1);
+          updateStatsProfile(currentProfile.id, {
+            trainingCount: nextCount,
+            trained: nextCount >= TRAIN_ROUNDS ? true : currentProfile.trained,
+          });
+        }
         setPhase("feedback");
         setLastMoves(prev=>[...prev, player]);
       }, 150);
@@ -1057,10 +1158,11 @@ function RPSDoodleAppInner(){
     if (!trainingActive) return;
     if (trainingCount < TRAIN_ROUNDS) return;
     setTrainingActive(false);
-    if (!isTrained) setIsTrained(true);
+    if (currentProfile && !currentProfile.trained) {
+      updateStatsProfile(currentProfile.id, { trained: true });
+    }
     trainingAnnouncementsRef.current.clear();
-    computeCalibration();
-  }, [trainingActive, trainingCount, isTrained]);
+  }, [trainingActive, trainingCount, currentProfile, updateStatsProfile]);
 
   // Failsafes: if something stalls, advance automatically
   useEffect(()=>{ if (phase === "selected"){ const t = setTimeout(()=>{ if (phase === "selected") startCountdown(); }, 500); return ()=> clearTimeout(t); } }, [phase]);
@@ -1088,6 +1190,7 @@ function RPSDoodleAppInner(){
         const totalRounds = outcomesHist.length;
         const aiWins = outcomesHist.filter(o => o === "lose").length;
         const switchRate = computeSwitchRate(lastMoves);
+        const matchScore = computeMatchScore(currentMatchRoundsRef.current);
         logMatch({
           clientId: currentMatchIdRef.current,
           startedAt: matchStartRef.current,
@@ -1100,7 +1203,13 @@ function RPSDoodleAppInner(){
           aiWinRate: totalRounds ? aiWins / totalRounds : 0,
           youSwitchedRate: switchRate,
           notes: undefined,
+          leaderboardScore: matchScore?.total,
+          leaderboardMaxStreak: matchScore?.maxStreak,
+          leaderboardRoundCount: matchScore?.rounds,
+          leaderboardTimerBonus: matchScore?.timerBonus,
+          leaderboardBeatConfidenceBonus: matchScore?.beatConfidenceBonus,
         });
+        currentMatchRoundsRef.current = [];
         matchStartRef.current = new Date().toISOString();
         currentMatchIdRef.current = makeLocalId("match");
         setResultBanner(banner);
@@ -1128,23 +1237,6 @@ function RPSDoodleAppInner(){
   const clearTimers = ()=>{ timersRef.current.forEach(id=> clearTimeout(id)); timersRef.current = []; };
   function goToMode(){ clearCountdown(); clearTimers(); setWipeRun(false); setSelectedMode(null); setScene("MODE"); }
   function goToMatch(){ clearTimers(); startMatch(selectedMode ?? "practice"); }
-
-  // ---- Practice → Calibrate overlay ----
-  function computeCalibration(){
-    const n = lastMoves.length; if (n < 6){ setCalText("Play ~10 rounds in Practice to calibrate."); return; }
-    // Favorite move
-    const fav = mostFrequentMove(lastMoves);
-    const favPct = fav ? Math.round(100* lastMoves.filter(m=>m===fav).length / n) : 0;
-    // Repeat after win
-    let rw=0, tw=0, ls=0, tl=0;
-    for (let i=1;i<outcomesHist.length;i++){
-      if (outcomesHist[i-1]==='win'){ tw++; if (lastMoves[i]===lastMoves[i-1]) rw++; }
-      if (outcomesHist[i-1]==='lose'){ tl++; if (lastMoves[i]!==lastMoves[i-1]) ls++; }
-    }
-    const rwPct = tw? Math.round(100*rw/tw):0; const lsPct = tl? Math.round(100*ls/tl):0;
-    setCalText(`Favorite: ${fav??'-'} (${favPct}%). Repeat-after-win: ${rwPct}%. Switch-after-loss: ${lsPct}%.`);
-    setShowCal(true);
-  }
 
   // ---- Mode selection flow ----
   function handleModeSelect(mode: Mode){
@@ -1196,9 +1288,23 @@ function RPSDoodleAppInner(){
         <motion.h1 layout className="text-2xl font-extrabold tracking-tight text-sky-700 drop-shadow-sm">RPS Lab</motion.h1>
         <div className="flex items-center gap-2">
           {trainingActive && <span className="px-2 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-700">Training</span>}
+          {showTrainingCompleteBadge && (
+            <span className="px-2 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-700">Training complete</span>
+          )}
           {liveAiConfidence !== null && <span className="px-2 py-1 text-xs font-semibold rounded-full bg-sky-100 text-sky-700">AI conf: {Math.round((liveAiConfidence ?? 0) * 100)}%</span>}
-          <button onClick={() => setStatsOpen(true)} className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900">Statistics</button>
-          <button onClick={() => goToMode()} disabled={modesDisabled} className={"px-3 py-1.5 rounded-xl shadow text-sm " + (modesDisabled ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900")}>Modes</button>
+            <button onClick={() => setStatsOpen(true)} className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900">Statistics</button>
+            <button
+              onClick={() => setLeaderboardOpen(true)}
+              className={"px-3 py-1.5 rounded-xl shadow text-sm " + (hasConsented ? "bg-white/70 hover:bg-white text-sky-900" : "bg-white/50 text-slate-400 cursor-not-allowed")}
+              disabled={!hasConsented}
+              title={!hasConsented ? "Check consent to continue." : undefined}
+            >
+              Leaderboard
+            </button>
+            <button onClick={() => setShowPlayerModal(true)} className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900">
+              {currentPlayer ? `${currentPlayer.displayName} (${currentPlayer.gradeBand})` : 'Set up profile'}
+            </button>
+            <button onClick={() => { if (!hasConsented) { setShowPlayerModal(true); return; } goToMode(); }} title={!hasConsented ? "Check consent to continue." : undefined} disabled={modesDisabled || !hasConsented} className={"px-3 py-1.5 rounded-xl shadow text-sm " + ((modesDisabled || !hasConsented) ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900")}>Modes</button>
           <details className="bg-white/70 rounded-xl shadow group">
             <summary className="list-none px-3 py-1.5 cursor-pointer text-sm text-slate-900">Settings ⚙️</summary>
             <div className="p-3 pt-0 space-y-2 text-sm">
@@ -1214,21 +1320,28 @@ function RPSDoodleAppInner(){
                   <option value="ruthless">Ruthless</option>
                 </select>
               </label>
-              {/* Legacy level preserved (tunes epsilon in heuristics path) */}
-              <label className="flex items-center justify-between gap-4"><span>Legacy level</span>
-                <select value={predictorLevel} onChange={e=> setPredictorLevel(e.target.value as PredictorLevel)} className="px-2 py-1 rounded bg-white shadow-inner">
-                  <option value="basic">Basic</option>
-                  <option value="smart">Smart</option>
-                  <option value="adaptive">Adaptive</option>
-                </select>
-              </label>
               <hr className="my-2" />
+              <div className="space-y-2">
+                <div className="text-xs text-slate-500">Profile &amp; data</div>
+                <button className="px-2 py-1 rounded bg-sky-100 text-sky-700" onClick={()=> setShowPlayerModal(true)}>Edit demographics</button>
+                <p className="text-xs text-slate-500 max-w-xs">Use the Statistics panel to export your data. Exports always include your demographics alongside the selected statistics profile.</p>
+              </div>
               <label className="flex items-center justify-between gap-4"><span>Best of</span>
                 <select value={bestOf} onChange={e=> setBestOf(Number(e.target.value) as BestOf)} className="px-2 py-1 rounded bg-white shadow-inner">
                   <option value={3}>3</option><option value={5}>5</option><option value={7}>7</option>
                 </select>
               </label>
-              <button className="px-2 py-1 rounded bg-white shadow" onClick={resetTraining}>Reset AI training</button>
+              <button
+                className="px-2 py-1 rounded bg-white shadow"
+                onClick={() => {
+                  const confirmed = window.confirm("Reset AI training? This clears the AI's memory of your moves and restarts the 10-round training session.");
+                  if (confirmed) {
+                    resetTraining();
+                  }
+                }}
+              >
+                Reset AI training
+              </button>
             </div>
           </details>
         </div>
@@ -1245,16 +1358,15 @@ function RPSDoodleAppInner(){
               <div className="w-48 h-1 bg-slate-200 rounded overflow-hidden"><motion.div initial={{ width: "10%" }} animate={{ width: "100%" }} transition={{ duration: .9, ease: "easeInOut" }} className="h-full bg-sky-500"/></div>
               <div className="text-slate-500 text-sm">Booting...</div>
             </div>
-          </motion.div>
+            </motion.div>
         )}
-
         {/* MODE SELECT */}
         {scene === "MODE" && (
           <motion.main key="mode" initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -20, opacity: 0 }} transition={{ duration: .36, ease: [0.22,0.61,0.36,1] }} className="min-h-screen pt-28 flex flex-col items-center gap-6">
             <motion.div layout className="text-4xl font-black text-sky-700">Choose Your Mode</motion.div>
             <div className="mode-grid">
               {MODES.map(m => (
-                <ModeCard key={m} mode={m} onSelect={handleModeSelect} isDimmed={!!selectedMode && selectedMode!==m} disabled={m === "challenge" && needsTraining} />
+                <ModeCard key={m} mode={m} onSelect={handleModeSelect} isDimmed={!!selectedMode && selectedMode!==m} disabled={(m === "challenge" && needsTraining) || !hasConsented} />
               ))}
             </div>
 
@@ -1278,7 +1390,7 @@ function RPSDoodleAppInner(){
         {/* MATCH */}
         {scene === "MATCH" && (
           <motion.section key="match" initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -20, opacity: 0 }} transition={{ duration: .36 }} className="min-h-screen pt-24 pb-20 flex flex-col items-center">
-            {shouldGateTraining && !showCal && (
+            {shouldGateTraining && (
               <div className="fixed inset-0 z-[70] grid place-items-center bg-white/90">
                 <div className="bg-white rounded-2xl shadow-xl p-6 w-[min(92vw,520px)] text-center space-y-4">
                   <div className="text-2xl font-black">Train the AI</div>
@@ -1306,36 +1418,27 @@ function RPSDoodleAppInner(){
                   </div>
                 </div>
               ) : (
-                <div className="flex items-center justify-between">
-                  <div className="text-sm text-slate-700">Round <strong>{round}</strong> / Best of {bestOf}</div>
-                  <div className="flex items-center gap-6 text-xl">
-                    <div className="flex items-center gap-2"><span className="text-slate-500 text-sm">You</span><strong>{playerScore}</strong></div>
-                    <div className="flex items-center gap-2"><span className="text-slate-500 text-sm">AI</span><strong>{aiScore}</strong></div>
+                <>
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm text-slate-700">Round <strong>{round}</strong> / Best of {bestOf}</div>
+                    <div className="flex items-center gap-6 text-xl">
+                      <div className="flex items-center gap-2"><span className="text-slate-500 text-sm">You</span><strong>{playerScore}</strong></div>
+                      <div className="flex items-center gap-2"><span className="text-slate-500 text-sm">AI</span><strong>{aiScore}</strong></div>
+                    </div>
                   </div>
-                </div>
+                  {showTrainingCompleteBadge && (
+                    <div className="mt-2">
+                      <span className="inline-flex items-center px-2 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-700">Training complete</span>
+                    </div>
+                  )}
+                </>
               )}
             </motion.div>
 
             {trainingActive && (
               <div className="mt-3 w-[min(92vw,680px)] flex items-center justify-between text-sm text-slate-600">
                 <span>Keep playing to finish training.</span>
-                <span className="text-slate-500">Calibration unlocks at {TRAIN_ROUNDS} rounds.</span>
-              </div>
-            )}
-            {selectedMode === 'practice' && (
-              <div className="mt-3 w-[min(92vw,680px)] flex flex-col gap-3 text-sm sm:flex-row sm:items-center sm:gap-8">
-                <button
-                  className="px-3 py-1.5 rounded-xl bg-white shadow hover:bg-slate-50"
-                  disabled={trainingActive || needsTraining || lastMoves.length<10}
-                  onClick={computeCalibration}
-                >
-                  Calibrate
-                </button>
-                <div className="text-slate-600">
-                  {(trainingActive || needsTraining)
-                    ? 'Finish training to unlock calibration statistics.'
-                    : <>Play ~10+ rounds, then calibrate. Toggle <strong>AI Predictor</strong> + set <strong>AI Difficulty</strong> to switch to exploit.</>}
-                </div>
+                <span className="text-slate-500">Training completes after {TRAIN_ROUNDS} rounds.</span>
               </div>
             )}
 
@@ -1424,41 +1527,14 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
 
       {/* Wipe overlay */}
-      <div className={`wipe ${wipeRun ? 'run' : ''}`} aria-hidden/>
+      <div className={"wipe " + (wipeRun ? 'run' : '')} aria-hidden={true} />
 
       {/* Calibration modal */}
+      {/* Calibration modal removed */}
+
       <AnimatePresence>
-        {showCal && (
-          <motion.div key="cal" initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }} className="fixed inset-0 z-[70] grid place-items-center bg-black/40">
-            <motion.div initial={{ y:20, opacity:0 }} animate={{ y:0, opacity:1 }} exit={{ y:20, opacity:0 }} className="bg-white rounded-2xl shadow-xl w-[min(92vw,520px)] p-4">
-              <div className="text-xl font-black mb-1">Calibration</div>
-              <p className="text-slate-700 text-sm mb-2">{calText}</p>
-              <div className="flex items-center justify-end gap-3 mt-3">
-                <select
-                  className="px-2 py-1 rounded bg-white shadow-inner mr-1"
-                  value={aiMode}
-                  onChange={e=> setAiMode(e.target.value as AIMode)}
-                >
-                  <option value="fair">Fair</option>
-                  <option value="normal">Normal</option>
-                  <option value="ruthless">Ruthless</option>
-                </select>
-                <button
-                  className="px-3 py-1.5 rounded-xl bg-sky-600 text-white shadow"
-                  onClick={()=>{
-                    setShowCal(false);
-                    setPredictorMode(true);
-                    setIsTrained(true);
-                    resetMatch();
-                    setScene("MATCH");
-                  }}
-                >
-                  Start Match
-                </button>
-                <button className="px-3 py-1.5 rounded-xl bg-white shadow" onClick={()=> setShowCal(false)}>Keep practicing</button>
-              </div>
-            </motion.div>
-          </motion.div>
+        {leaderboardOpen && (
+          <LeaderboardModal open={leaderboardOpen} onClose={() => setLeaderboardOpen(false)} />
         )}
       </AnimatePresence>
 
@@ -1469,6 +1545,30 @@ function RPSDoodleAppInner(){
               <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
                 <h2 className="text-lg font-semibold text-slate-800">Statistics</h2>
                 <button onClick={() => setStatsOpen(false)} className="text-slate-500 hover:text-slate-700 text-sm">Close ✕</button>
+              </div>
+              <div className="px-4 pt-3 pb-2 space-y-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-800">Active statistics profile</div>
+                    <div className="text-xs text-slate-500">
+                      {currentProfile ? (
+                        <span>{currentProfile.name}{(!currentProfile.trained && currentProfile.trainingCount < TRAIN_ROUNDS) ? ' • Training required' : ''}</span>
+                      ) : 'No profile selected.'}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm text-slate-600 flex items-center gap-2">
+                      <span>Profile</span>
+                      <select value={currentProfile?.id ?? ''} onChange={e => handleSelectProfile(e.target.value)} className="border rounded px-2 py-1" disabled={!statsProfiles.length}>
+                        {statsProfiles.map(profile => (
+                          <option key={profile.id} value={profile.id}>{profile.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <button onClick={handleCreateProfile} className="px-2 py-1 rounded bg-sky-100 text-sky-700">New profile</button>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500">Profiles keep logs, training, and exports separate. Switch profiles to return to previous stats instantly.</p>
               </div>
               <div className="px-4 pt-3 flex flex-wrap gap-2" role="tablist" aria-label="Statistics tabs">
                 {statsTabs.map(tab => (
@@ -1712,16 +1812,29 @@ function RPSDoodleAppInner(){
                   </div>
                 )}
               </div>
-              <div className="px-4 py-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-sm">
+              <div className="px-4 py-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-sm">
                 <div className="flex gap-2">
-                  <button onClick={handleExportJson} className="px-3 py-1.5 rounded bg-sky-100 text-sky-700">Export JSON</button>
-                  <button onClick={handleExportCsv} className="px-3 py-1.5 rounded bg-sky-100 text-sky-700">Export CSV</button>
+                  <button onClick={handleExportJson} disabled={!currentPlayer || !currentProfile} className="px-3 py-1.5 rounded bg-sky-100 text-sky-700 disabled:opacity-50 disabled:cursor-not-allowed">Export JSON</button>
+                  <button onClick={handleExportCsv} disabled={!currentPlayer || !currentProfile} className="px-3 py-1.5 rounded bg-sky-100 text-sky-700 disabled:opacity-50 disabled:cursor-not-allowed">Export CSV</button>
                 </div>
-                <div className="flex gap-2">
-                  <button onClick={handleEraseLastSession} className="px-3 py-1.5 rounded bg-amber-100 text-amber-700">Erase last session</button>
-                  <button onClick={handleResetAll} className="px-3 py-1.5 rounded bg-rose-100 text-rose-700">Erase all data</button>
-                </div>
+                <p className="text-xs text-slate-500">Exports bundle your demographics with this statistics profile.</p>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      {/* Player Setup Modal */}
+      <AnimatePresence>
+        {showPlayerModal && (
+          <motion.div key="pmask" className="fixed inset-0 z-[70] bg-black/30 grid place-items-center" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onKeyDown={(e:any)=>{ if (e.key==='Escape' && hasConsented) setShowPlayerModal(false); }}>
+            <motion.div role="dialog" aria-modal="true" aria-label="Player Setup" className="bg-white rounded-2xl shadow-xl w-[min(94vw,520px)]" initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 6, opacity: 0 }}>
+              <PlayerSetupForm
+                currentPlayer={currentPlayer ?? null}
+                onClose={()=> { if (hasConsented) setShowPlayerModal(false); }}
+                onSaved={()=> { setShowPlayerModal(false); }}
+                createPlayer={createPlayer}
+                updatePlayer={updatePlayer}
+              />
             </motion.div>
           </motion.div>
         )}
@@ -1734,15 +1847,139 @@ function RPSDoodleAppInner(){
         </motion.span>
         <span className="text-sm text-slate-700">Ready!</span>
       </motion.div>
-
+      {DEV_MODE_ENABLED && (
+        <>
+          <div
+            aria-hidden="true"
+            role="presentation"
+            className="fixed bottom-0 left-0 z-[60] h-8 w-8"
+            onClick={handleDeveloperHotspotClick}
+          />
+          <DeveloperConsole open={developerOpen} onClose={handleDeveloperClose} />
+        </>
+      )}
     </div>
+  );
+}
+
+interface PlayerSetupFormProps {
+  currentPlayer: PlayerProfile | null;
+  onClose: () => void;
+  onSaved: () => void;
+  createPlayer: (input: Omit<PlayerProfile, "id">) => PlayerProfile;
+  updatePlayer: (id: string, patch: Partial<Omit<PlayerProfile, "id">>) => void;
+}
+
+function PlayerSetupForm({ currentPlayer, onClose, onSaved, createPlayer, updatePlayer }: PlayerSetupFormProps){
+  const [displayName, setDisplayName] = useState(currentPlayer?.displayName ?? "");
+  const [gradeBand, setGradeBand] = useState<GradeBand>(currentPlayer?.gradeBand ?? "K-2");
+  const [ageBand, setAgeBand] = useState<AgeBand>(currentPlayer?.ageBand ?? "Prefer not to say");
+  const [gender, setGender] = useState<Gender>(currentPlayer?.gender ?? "Prefer not to say");
+  const [priorExperience, setPriorExperience] = useState(currentPlayer?.priorExperience ?? "");
+  const [consentChecked, setConsentChecked] = useState<boolean>(currentPlayer?.consent?.agreed ?? false);
+
+  useEffect(() => {
+    setDisplayName(currentPlayer?.displayName ?? "");
+    setGradeBand(currentPlayer?.gradeBand ?? "K-2");
+    setAgeBand(currentPlayer?.ageBand ?? "Prefer not to say");
+    setGender(currentPlayer?.gender ?? "Prefer not to say");
+    setPriorExperience(currentPlayer?.priorExperience ?? "");
+    setConsentChecked(currentPlayer?.consent?.agreed ?? false);
+  }, [currentPlayer]);
+
+  const saveDisabled = !displayName.trim() || !consentChecked;
+  const title = currentPlayer ? "Edit your profile" : "Create your profile";
+
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const trimmed = displayName.trim();
+    if (!trimmed || !consentChecked) return;
+    const consent = {
+      agreed: consentChecked,
+      timestamp: new Date().toISOString(),
+      consentTextVersion: CONSENT_TEXT_VERSION,
+    };
+    if (currentPlayer) {
+      updatePlayer(currentPlayer.id, { displayName: trimmed, gradeBand, ageBand, gender, priorExperience, consent });
+    } else {
+      const created = createPlayer({ displayName: trimmed, gradeBand, ageBand, gender, priorExperience, consent });
+    }
+    onSaved();
+  };
+
+  const gradeOptions: GradeBand[] = ["K-2", "3-5", "6-8", "9-12"];
+  const ageOptions: AgeBand[] = ["<8", "8-10", "11-13", "14-18", "Prefer not to say"];
+  const genderOptions: Gender[] = ["Male", "Female", "Non-binary", "Prefer not to say"];
+
+  return (
+    <form onSubmit={handleSubmit} className="p-5 space-y-4" aria-label="Player setup form">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
+        <button type="button" onClick={onClose} className="text-sm text-slate-500 hover:text-slate-700">Close</button>
+      </div>
+      <div className="grid gap-3">
+        <label className="text-sm font-medium text-slate-700">
+          Display name
+          <input
+            type="text"
+            value={displayName}
+            onChange={e => setDisplayName(e.target.value)}
+            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+            placeholder="e.g. Alex"
+            required
+          />
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          Grade band
+          <select value={gradeBand} onChange={e => setGradeBand(e.target.value as GradeBand)} className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner">
+            {gradeOptions.map(option => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          Age range
+          <select value={ageBand} onChange={e => setAgeBand(e.target.value as AgeBand)} className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner">
+            {ageOptions.map(option => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          Gender
+          <select value={gender} onChange={e => setGender(e.target.value as Gender)} className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner">
+            {genderOptions.map(option => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          Prior experience (optional)
+          <textarea value={priorExperience} onChange={e => setPriorExperience(e.target.value)} rows={3} className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner" placeholder="Tell us about previous AI or RPS experience" />
+        </label>
+      </div>
+      <label className="flex items-start gap-3 text-sm text-slate-700">
+        <input type="checkbox" checked={consentChecked} onChange={e => setConsentChecked(e.target.checked)} className="mt-1" />
+        <span>
+          I consent to participate in this activity and understand how my gameplay data will be used (consent text {CONSENT_TEXT_VERSION}).
+        </span>
+      </label>
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onClose} className="px-3 py-1.5 rounded bg-slate-100 text-slate-700 hover:bg-slate-200">Cancel</button>
+        <button type="submit" disabled={saveDisabled} className={`px-3 py-1.5 rounded text-white ${saveDisabled ? 'bg-slate-300 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-700 shadow'}`}>
+          Save profile
+        </button>
+      </div>
+    </form>
   );
 }
 
 export default function RPSDoodleApp(){
   return (
-    <StatsProvider>
-      <RPSDoodleAppInner />
-    </StatsProvider>
+    <PlayersProvider>
+      <StatsProvider>
+        <RPSDoodleAppInner />
+      </StatsProvider>
+    </PlayersProvider>
   );
 }
