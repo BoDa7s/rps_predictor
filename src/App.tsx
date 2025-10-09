@@ -5,6 +5,7 @@ import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, Decision
 import { PlayersProvider, usePlayers, GradeBand, AgeBand, Gender, PlayerProfile, CONSENT_TEXT_VERSION } from "./players";
 import { DEV_MODE_ENABLED } from "./devMode";
 import { DeveloperConsole } from "./DeveloperConsole";
+import { lockSecureStore } from "./secureStore";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -496,6 +497,17 @@ function RPSDoodleAppInner(){
     },
     [setDeveloperOpen]
   );
+
+  useEffect(() => {
+    if (!developerOpen) {
+      lockSecureStore();
+    }
+  }, [developerOpen, lockSecureStore]);
+
+  const handleDeveloperClose = useCallback(() => {
+    lockSecureStore();
+    setDeveloperOpen(false);
+  }, [lockSecureStore, setDeveloperOpen]);
 
   const style = `
   :root{ --challenge:#FF77AA; --practice:#88AA66; }
@@ -1776,7 +1788,7 @@ function RPSDoodleAppInner(){
             className="fixed bottom-0 left-0 z-[60] h-8 w-8"
             onClick={handleDeveloperHotspotClick}
           />
-          <DeveloperConsole open={developerOpen} onClose={() => setDeveloperOpen(false)} />
+          <DeveloperConsole open={developerOpen} onClose={handleDeveloperClose} />
         </>
       )}
     </div>
