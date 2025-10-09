@@ -509,14 +509,11 @@ function RPSDoodleAppInner(){
 
   const trainingComplete = trainingCount >= TRAIN_ROUNDS;
   const needsTraining = !isTrained && !trainingComplete;
-  const shouldAutoResumeTraining = needsTraining && trainingActive;
   const shouldGateTraining = needsTraining && !trainingActive;
-  const bootNeedsTraining = useRef(needsTraining);
-  const bootAutoResumeTraining = useRef(shouldAutoResumeTraining);
-  const bootInitialTrainingActive = useRef(trainingActive);
   const modesDisabled = trainingActive || needsTraining;
   const trainingDisplayCount = Math.min(trainingCount, TRAIN_ROUNDS);
   const trainingProgress = Math.min(trainingDisplayCount / TRAIN_ROUNDS, 1);
+  const showTrainingCompleteBadge = !needsTraining && trainingCount >= TRAIN_ROUNDS;
 
   useEffect(() => {
     if (!needsTraining && trainingActive) {
@@ -524,12 +521,6 @@ function RPSDoodleAppInner(){
       trainingAnnouncementsRef.current.clear();
     }
   }, [needsTraining, trainingActive]);
-
-  useEffect(() => {
-    bootNeedsTraining.current = needsTraining;
-    bootAutoResumeTraining.current = shouldAutoResumeTraining;
-    bootInitialTrainingActive.current = trainingActive;
-  }, [needsTraining, shouldAutoResumeTraining, trainingActive]);
 
   const [seed] = useState(()=>Math.floor(Math.random()*1e9));
   const rng = useMemo(()=>mulberry32(seed), [seed]);
@@ -628,18 +619,20 @@ function RPSDoodleAppInner(){
   useEffect(()=>{ audio.setEnabled(audioOn); }, [audioOn]);
 
   useEffect(() => {
-    const t = setTimeout(() => {
-      if (bootNeedsTraining.current) {
+    if (scene !== "BOOT") return;
+    if (!currentProfile || !hasConsented) return;
+    const t = window.setTimeout(() => {
+      if (needsTraining) {
         startMatch("practice", { silent: true });
-        if (!bootInitialTrainingActive.current && bootAutoResumeTraining.current) {
+        if (!trainingActive) {
           setTrainingActive(true);
         }
       } else {
         setScene("MODE");
       }
     }, 900);
-    return () => clearTimeout(t);
-  }, []);
+    return () => window.clearTimeout(t);
+  }, [scene, currentProfile, hasConsented, needsTraining, trainingActive]);
 
   const statsTabs = [
     { key: "overview", label: "Overview" },
@@ -1208,12 +1201,15 @@ function RPSDoodleAppInner(){
         <motion.h1 layout className="text-2xl font-extrabold tracking-tight text-sky-700 drop-shadow-sm">RPS Lab</motion.h1>
         <div className="flex items-center gap-2">
           {trainingActive && <span className="px-2 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-700">Training</span>}
+          {showTrainingCompleteBadge && (
+            <span className="px-2 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-700">Training complete</span>
+          )}
           {liveAiConfidence !== null && <span className="px-2 py-1 text-xs font-semibold rounded-full bg-sky-100 text-sky-700">AI conf: {Math.round((liveAiConfidence ?? 0) * 100)}%</span>}
             <button onClick={() => setStatsOpen(true)} className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900">Statistics</button>
             <button onClick={() => setShowPlayerModal(true)} className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900">
               {currentPlayer ? `${currentPlayer.displayName} (${currentPlayer.gradeBand})` : 'Set up profile'}
             </button>
-            <button onClick={() => { if (!hasConsented) { setShowPlayerModal(true); return; } goToMode(); }} title={!hasConsented ? "Check consent to continue." : undefined} disabled={modesDisabled || !hasConsented} className={"px-3 py-1.5 rounded-xl shadow text-sm " + ((modesDisabled || !hasConsented) ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900")}>Start Game</button>
+            <button onClick={() => { if (!hasConsented) { setShowPlayerModal(true); return; } goToMode(); }} title={!hasConsented ? "Check consent to continue." : undefined} disabled={modesDisabled || !hasConsented} className={"px-3 py-1.5 rounded-xl shadow text-sm " + ((modesDisabled || !hasConsented) ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900")}>Modes</button>
           <details className="bg-white/70 rounded-xl shadow group">
             <summary className="list-none px-3 py-1.5 cursor-pointer text-sm text-slate-900">Settings ⚙️</summary>
             <div className="p-3 pt-0 space-y-2 text-sm">
@@ -1249,7 +1245,17 @@ function RPSDoodleAppInner(){
                   <option value={3}>3</option><option value={5}>5</option><option value={7}>7</option>
                 </select>
               </label>
-              <button className="px-2 py-1 rounded bg-white shadow" onClick={resetTraining}>Reset AI training</button>
+              <button
+                className="px-2 py-1 rounded bg-white shadow"
+                onClick={() => {
+                  const confirmed = window.confirm("Reset AI training? This clears the AI's memory of your moves and restarts the 10-round training session.");
+                  if (confirmed) {
+                    resetTraining();
+                  }
+                }}
+              >
+                Reset AI training
+              </button>
             </div>
           </details>
         </div>
@@ -1326,13 +1332,20 @@ function RPSDoodleAppInner(){
                   </div>
                 </div>
               ) : (
-                <div className="flex items-center justify-between">
-                  <div className="text-sm text-slate-700">Round <strong>{round}</strong> / Best of {bestOf}</div>
-                  <div className="flex items-center gap-6 text-xl">
-                    <div className="flex items-center gap-2"><span className="text-slate-500 text-sm">You</span><strong>{playerScore}</strong></div>
-                    <div className="flex items-center gap-2"><span className="text-slate-500 text-sm">AI</span><strong>{aiScore}</strong></div>
+                <>
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm text-slate-700">Round <strong>{round}</strong> / Best of {bestOf}</div>
+                    <div className="flex items-center gap-6 text-xl">
+                      <div className="flex items-center gap-2"><span className="text-slate-500 text-sm">You</span><strong>{playerScore}</strong></div>
+                      <div className="flex items-center gap-2"><span className="text-slate-500 text-sm">AI</span><strong>{aiScore}</strong></div>
+                    </div>
                   </div>
-                </div>
+                  {showTrainingCompleteBadge && (
+                    <div className="mt-2">
+                      <span className="inline-flex items-center px-2 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-700">Training complete</span>
+                    </div>
+                  )}
+                </>
               )}
             </motion.div>
 
