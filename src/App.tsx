@@ -1773,7 +1773,7 @@ function RPSDoodleAppInner(){
           <div
             aria-hidden="true"
             role="presentation"
-            className="fixed top-0 left-0 z-[60] h-8 w-8"
+            className="fixed bottom-0 left-0 z-[60] h-8 w-8"
             onClick={handleDeveloperHotspotClick}
           />
           <DeveloperConsole open={developerOpen} onClose={() => setDeveloperOpen(false)} />
