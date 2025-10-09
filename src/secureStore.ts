@@ -47,11 +47,6 @@ async function deriveKey(pin: string, salt: Uint8Array, iterations: number) {
   );
 }
 
-async function exportRawKey(key: CryptoKey) {
-  const raw = new Uint8Array(await crypto.subtle.exportKey("raw", key));
-  return base64FromBytes(raw);
-}
-
 function notify() {
   listeners.forEach(l => l());
 }
