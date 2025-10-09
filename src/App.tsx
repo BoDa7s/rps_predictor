@@ -519,6 +519,13 @@ function RPSDoodleAppInner(){
   const trainingProgress = Math.min(trainingDisplayCount / TRAIN_ROUNDS, 1);
 
   useEffect(() => {
+    if (!needsTraining && trainingActive) {
+      setTrainingActive(false);
+      trainingAnnouncementsRef.current.clear();
+    }
+  }, [needsTraining, trainingActive]);
+
+  useEffect(() => {
     bootNeedsTraining.current = needsTraining;
     bootAutoResumeTraining.current = shouldAutoResumeTraining;
     bootInitialTrainingActive.current = trainingActive;
