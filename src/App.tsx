@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, DecisionPolicy } from "./stats";
 import { PlayersProvider, usePlayers, Grade, Gender, PlayerProfile, CONSENT_TEXT_VERSION, GRADE_OPTIONS, GENDER_OPTIONS } from "./players";
@@ -511,6 +511,7 @@ function RPSDoodleAppInner(){
   const statsModalRef = useRef<HTMLDivElement | null>(null);
   const settingsPanelRef = useRef<HTMLDivElement | null>(null);
   const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const toastReaderCloseRef = useRef<HTMLButtonElement | null>(null);
   const wasSettingsOpenRef = useRef(false);
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
   const [roundPage, setRoundPage] = useState(0);
@@ -537,11 +538,29 @@ function RPSDoodleAppInner(){
   }, [hasConsented, currentPlayer]);
   useEffect(() => { if (!hasConsented) setLeaderboardOpen(false); }, [hasConsented]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastReaderOpen, setToastReaderOpen] = useState(false);
   useEffect(() => {
     if (!toastMessage) return;
+    if (toastReaderOpen) return;
     const id = window.setTimeout(() => setToastMessage(null), 4000);
     return () => window.clearTimeout(id);
-  }, [toastMessage]);
+  }, [toastMessage, toastReaderOpen]);
+  useEffect(() => {
+    if (!toastMessage && toastReaderOpen) {
+      setToastReaderOpen(false);
+    }
+  }, [toastMessage, toastReaderOpen]);
+  useEffect(() => {
+    if (!toastReaderOpen) return;
+    requestAnimationFrame(() => toastReaderCloseRef.current?.focus());
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setToastReaderOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [toastReaderOpen]);
   const [developerOpen, setDeveloperOpen] = useState(false);
   const developerTriggerRef = useRef({ count: 0, lastClick: 0 });
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
@@ -618,11 +637,6 @@ function RPSDoodleAppInner(){
   type Scene = "BOOT"|"MODE"|"MATCH"|"RESULTS";
   const [scene, setScene] = useState<Scene>("BOOT");
 
-  const prefersReduced = useReducedMotion();
-  const [reducedMotion, setReducedMotion] = useState<boolean>(prefersReduced ?? false);
-  useEffect(() => {
-    setReducedMotion(prefersReduced ?? false);
-  }, [prefersReduced]);
   const [audioOn, setAudioOn] = useState(true);
   const [textScale, setTextScale] = useState(1);
 
@@ -702,8 +716,7 @@ function RPSDoodleAppInner(){
   const clearCountdown = ()=>{ if (countdownRef.current!==null){ clearInterval(countdownRef.current); countdownRef.current=null; } };
   const startCountdown = ()=>{
     const modeForTiming: Mode = selectedMode ?? "practice";
-    const baseInterval = matchTimings[modeForTiming].countdownTickMs;
-    const interval = reducedMotion ? Math.min(300, baseInterval) : baseInterval;
+    const interval = matchTimings[modeForTiming].countdownTickMs;
     setPhase("countdown");
     setCount(3);
     clearCountdown();
@@ -711,7 +724,7 @@ function RPSDoodleAppInner(){
       setCount(prev=>{
         const next = prev - 1;
         audio.tick();
-        if (!reducedMotion) tryVibrate(6);
+        tryVibrate(6);
         if (next <= 0){
           clearCountdown();
           reveal();
@@ -1291,8 +1304,7 @@ function RPSDoodleAppInner(){
     const player = playerPick; if (!player) return;
     const ai = aiChoose(); setAiPick(ai); setAiHistory(h=>[...h, ai]); setPhase("reveal");
     const modeForTiming: Mode = selectedMode ?? "practice";
-    const baseHold = matchTimings[modeForTiming].revealHoldMs;
-    const holdMs = reducedMotion ? Math.min(600, baseHold) : baseHold;
+    const holdMs = matchTimings[modeForTiming].revealHoldMs;
     setTimeout(()=>{
       const res = resolveOutcome(player, ai); setOutcome(res); setPhase("resolve");
       // Online update mixer with context prior to adding current move
@@ -1355,20 +1367,18 @@ function RPSDoodleAppInner(){
   useEffect(()=>{
     if (phase !== "countdown") return;
     const modeForTiming: Mode = selectedMode ?? "practice";
-    const baseInterval = matchTimings[modeForTiming].countdownTickMs;
-    const interval = reducedMotion ? Math.min(300, baseInterval) : baseInterval;
+    const interval = matchTimings[modeForTiming].countdownTickMs;
     const failSafeMs = Math.max(interval * 4, interval * 3 + 600);
     const t = setTimeout(()=>{ if (phase === "countdown"){ clearCountdown(); reveal(); } }, failSafeMs);
     return ()=> clearTimeout(t);
-  }, [phase, selectedMode, matchTimings, reducedMotion]);
+  }, [phase, selectedMode, matchTimings]);
   useEffect(()=>{ return ()=> clearCountdown(); },[]);
 
   // Next round or end match
   useEffect(() => {
     if (phase !== "feedback") return;
     const modeForTiming: Mode = selectedMode ?? "practice";
-    const baseDelay = matchTimings[modeForTiming].resultBannerMs;
-    const delayBase = reducedMotion ? Math.min(300, baseDelay) : baseDelay;
+    const delayBase = matchTimings[modeForTiming].resultBannerMs;
     const delay = trainingActive ? Math.min(delayBase, 600) : delayBase;
     const t = setTimeout(() => {
       if (trainingActive) {
@@ -1423,7 +1433,7 @@ function RPSDoodleAppInner(){
       setPhase("idle");
     }, delay);
     return () => clearTimeout(t);
-  }, [phase, trainingActive, playerScore, aiScore, bestOf, reducedMotion, matchTimings, selectedMode]);
+  }, [phase, trainingActive, playerScore, aiScore, bestOf, matchTimings, selectedMode]);
 
   // Helpers
   function tryVibrate(ms:number){ if ((navigator as any).vibrate) (navigator as any).vibrate(ms); }
@@ -1439,7 +1449,6 @@ function RPSDoodleAppInner(){
   function handleModeSelect(mode: Mode){
     if (needsTraining && mode !== "practice") return;
     armAudio(); audio.cardSelect(); setSelectedMode(mode); setLive(`${modeLabel(mode)} mode selected. Loading match.`);
-    if (reducedMotion){ setTimeout(()=>{ startMatch(mode); }, 200); return; }
     addT(()=>{ audio.whooshShort(); }, 140); // morph start cue
     const graphicBudget = 1400; addT(()=>{ startSceneWipe(mode); }, graphicBudget);
   }
@@ -1481,10 +1490,75 @@ function RPSDoodleAppInner(){
       <LiveRegion message={live} />
 
       {toastMessage && (
-        <div className="fixed top-20 right-4 z-[95]" role="status" aria-live="polite">
-          <div className="rounded-lg bg-slate-900/90 px-4 py-2 text-sm text-white shadow-lg">{toastMessage}</div>
+        <div className="fixed top-20 right-4 z-[95] flex flex-col items-end gap-2">
+          <div
+            role="status"
+            aria-live="polite"
+            className="rounded-lg bg-slate-900/90 px-4 py-2 text-sm text-white shadow-lg"
+          >
+            {toastMessage}
+          </div>
+          <button
+            type="button"
+            className="rounded-lg bg-white/80 px-3 py-1 text-xs font-semibold text-slate-800 shadow hover:bg-white"
+            onClick={() => setToastReaderOpen(true)}
+            aria-haspopup="dialog"
+            aria-expanded={toastReaderOpen}
+          >
+            Open toast reader
+          </button>
         </div>
       )}
+
+      <AnimatePresence>
+        {toastReaderOpen && toastMessage && (
+          <motion.div
+            className="fixed inset-0 z-[96] grid place-items-center bg-slate-900/40 px-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setToastReaderOpen(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="w-[min(480px,100%)] space-y-4 rounded-2xl bg-white p-5 text-slate-700 shadow-2xl"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="toast-reader-title"
+              onClick={e => e.stopPropagation()}
+            >
+              <h3 id="toast-reader-title" className="text-base font-semibold text-slate-900">
+                Latest message
+              </h3>
+              <p className="text-sm leading-relaxed text-slate-600">{toastMessage}</p>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded-lg border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                  onClick={() => {
+                    setToastMessage(null);
+                    setToastReaderOpen(false);
+                  }}
+                >
+                  Dismiss message
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg bg-sky-600 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-sky-700"
+                  onClick={() => setToastReaderOpen(false)}
+                  data-focus-first
+                  ref={toastReaderCloseRef}
+                >
+                  Close reader
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {resetDialogOpen && (
@@ -1702,31 +1776,41 @@ function RPSDoodleAppInner(){
               </div>
               <div className="space-y-6 text-sm text-slate-700">
                 <section className="space-y-3">
-                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">A. Profile &amp; Data</h2>
-                  <div className="space-y-3 rounded-lg border border-slate-200/80 bg-white/80 p-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-semibold text-slate-900">{playerLabel}</span>
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Profile &amp; Data</h2>
+                  <div className="space-y-4 rounded-lg border border-slate-200/80 bg-white/80 p-3">
+                    <div className="space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="font-semibold text-slate-900">{playerLabel}</span>
+                        {demographicsNeedReview && (
+                          <span className="text-xs font-semibold text-amber-600">Needs review</span>
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <button
+                          className="rounded-lg bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={() => {
+                            if (!currentPlayer) return;
+                            handleCloseSettings();
+                            setPlayerModalMode("edit");
+                          }}
+                          disabled={!currentPlayer}
+                        >
+                          Edit demographics
+                        </button>
+                        <button
+                          className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+                          onClick={() => {
+                            handleCloseSettings();
+                            setPlayerModalMode("create");
+                          }}
+                        >
+                          Create new player
+                        </button>
+                      </div>
                       {demographicsNeedReview && (
-                        <span className="text-xs font-semibold text-amber-600">Needs review</span>
+                        <p className="text-xs text-amber-600">Update grade and age from Edit demographics.</p>
                       )}
-                      <span aria-hidden className="text-slate-300">→</span>
-                      <button
-                        className="rounded-lg bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
-                        onClick={() => setPlayerModalMode(currentPlayer ? "edit" : "create")}
-                        disabled={!currentPlayer}
-                      >
-                        Edit demographics
-                      </button>
-                      <button
-                        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-                        onClick={() => setPlayerModalMode("create")}
-                      >
-                        Create new player
-                      </button>
                     </div>
-                    {demographicsNeedReview && (
-                      <p className="text-xs text-amber-600">Update grade and age from Edit demographics.</p>
-                    )}
                     <div className="space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-medium text-slate-800">Statistics profile</span>
@@ -1780,16 +1864,22 @@ function RPSDoodleAppInner(){
                         Export (CSV)
                       </button>
                     </div>
-                    <div className="space-y-2 border-t border-slate-200 pt-3">
-                      <span className="font-medium text-slate-800">Reset training (this profile)</span>
+                  </div>
+                </section>
+                <section className="space-y-3">
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Training</h2>
+                  <div className="space-y-3 rounded-lg border border-slate-200/80 bg-white/80 p-3">
+                    <div className="space-y-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Action</span>
                       <button
                         type="button"
                         onClick={() => {
+                          handleCloseSettings();
                           setResetDialogAcknowledged(false);
                           setResetDialogOpen(true);
                         }}
                         className="inline-flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 shadow-sm hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        title="training history preserved"
+                        title="Training history is preserved."
                         disabled={!currentProfile}
                       >
                         Reset AI training
@@ -1798,7 +1888,7 @@ function RPSDoodleAppInner(){
                   </div>
                 </section>
                 <section className="space-y-3">
-                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">B. Gameplay</h2>
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Gameplay</h2>
                   <div className="space-y-4 rounded-lg border border-slate-200/80 bg-white/80 p-3">
                     <div className="space-y-2">
                       <div className="flex items-center justify-between gap-3">
@@ -1887,20 +1977,13 @@ function RPSDoodleAppInner(){
                   </div>
                 </section>
                 <section className="space-y-3">
-                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">C. Accessibility &amp; Display</h2>
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Accessibility &amp; Display</h2>
                   <div className="space-y-4 rounded-lg border border-slate-200/80 bg-white/80 p-3">
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <span className="font-medium text-slate-800">Audio</span>
                       </div>
                       <OnOffToggle value={audioOn} onChange={next => setAudioOn(next)} />
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <span className="font-medium text-slate-800">Reduced motion</span>
-                        <p className="text-xs text-slate-500">Toggle lighter animations if you’re sensitive to motion.</p>
-                      </div>
-                      <OnOffToggle value={reducedMotion} onChange={next => setReducedMotion(next)} />
                     </div>
                     <div className="space-y-2">
                       <span className="font-medium text-slate-800">Text size</span>
@@ -1922,7 +2005,7 @@ function RPSDoodleAppInner(){
                   </div>
                 </section>
                 <section className="space-y-3">
-                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">D. Help &amp; About</h2>
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Help &amp; About</h2>
                   <div className="rounded-lg border border-slate-200/80 bg-white/80 p-3">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sky-700">
                       <button
@@ -1946,31 +2029,6 @@ function RPSDoodleAppInner(){
                         }}
                       >
                         How training works
-                      </button>
-                      <span aria-hidden className="text-slate-300">•</span>
-                      <button
-                        type="button"
-                        className="text-xs font-semibold hover:underline"
-                        onClick={() => {
-                          setStatsOpen(true);
-                          setLive("Opening statistics.");
-                        }}
-                      >
-                        View my stats
-                      </button>
-                      <span aria-hidden className="text-slate-300">•</span>
-                      <button
-                        type="button"
-                        className={`text-xs font-semibold hover:underline ${hasConsented ? "" : "text-slate-400 hover:no-underline"}`}
-                        onClick={() => {
-                          if (!hasConsented) return;
-                          setLeaderboardOpen(true);
-                          setLive("Opening leaderboard.");
-                        }}
-                        disabled={!hasConsented}
-                        title={!hasConsented ? "Check consent to continue." : undefined}
-                      >
-                        Leaderboard
                       </button>
                     </div>
                   </div>
@@ -2155,7 +2213,7 @@ function RPSDoodleAppInner(){
                 <button onClick={()=> goToMode()} className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 shadow">Modes</button>
               </div>
             </div>
-            {!reducedMotion && <Confetti />}
+            <Confetti />
           </motion.section>
         )}
       </AnimatePresence>
