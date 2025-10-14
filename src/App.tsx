@@ -1620,6 +1620,66 @@ function RPSDoodleAppInner(){
   }, [phase, trainingActive, playerScore, aiScore, bestOf, matchTimings, selectedMode]);
 
   useEffect(() => {
+    if (scene !== "MATCH") return;
+    if (phase !== "feedback") return;
+    if (!outcome) return;
+    if (trainingActive) return;
+    const modeForReaction: Mode = selectedMode ?? "practice";
+    const reaction = modeForReaction === "challenge"
+      ? outcome === "win"
+        ? {
+            emoji: "😎",
+            body: "“Too easy. Try to keep up.”",
+            label: "Robot boasts after you win the round: Too easy. Try to keep up.",
+          }
+        : outcome === "tie"
+          ? {
+              emoji: "🤨",
+              body: "“Not bad… but I’m still catching up.”",
+              label: "Robot comments on a tied round: Not bad, but still catching up.",
+            }
+          : {
+              emoji: "😏",
+              body: "“Lucky hit. Don’t get cocky.”",
+              label: "Robot teases after winning the round: Lucky hit. Don’t get cocky.",
+            }
+      : outcome === "win"
+        ? {
+            emoji: "😊",
+            body: "Nice counter!",
+            label: "Robot congratulates your win: Nice counter.",
+          }
+        : outcome === "tie"
+          ? {
+              emoji: "🤝",
+              body: "Even match—try mixing it up.",
+              label: "Robot suggests mixing it up after a tie.",
+            }
+          : {
+              emoji: "🤍",
+              body: "I saw a pattern—can you break it?",
+              label: "Robot encourages you after a loss to break the pattern.",
+            };
+    setRobotResultReaction(reaction);
+    if (robotResultTimeoutRef.current) {
+      window.clearTimeout(robotResultTimeoutRef.current);
+    }
+    const reactionDuration = modeForReaction === "challenge" ? 1800 : 2000;
+    const timeoutId = window.setTimeout(() => {
+      if (robotResultTimeoutRef.current !== timeoutId) return;
+      setRobotResultReaction(null);
+      robotResultTimeoutRef.current = null;
+    }, reactionDuration);
+    robotResultTimeoutRef.current = timeoutId;
+    return () => {
+      if (robotResultTimeoutRef.current === timeoutId) {
+        window.clearTimeout(timeoutId);
+        robotResultTimeoutRef.current = null;
+      }
+    };
+  }, [scene, phase, outcome, selectedMode, trainingActive]);
+
+  useEffect(() => {
     if (scene !== "RESULTS" || !resultBanner) return;
     const modeForReaction: Mode = selectedMode ?? "practice";
     const reaction = (() => {
@@ -1635,7 +1695,7 @@ function RPSDoodleAppInner(){
             : { emoji: "🤝", body: "Even match—try mixing it up.", label: "Robot suggests mixing it up after an even match." };
       }
       return resultBanner === "Victory"
-        ? { emoji: "👍", label: "Robot celebrates your win." }
+        ? { emoji: "😄", label: "Robot celebrates your win." }
         : resultBanner === "Defeat"
           ? { emoji: "😮", label: "Robot is surprised by the loss." }
           : { emoji: "🤔", label: "Robot is thinking about the tie." };
@@ -1644,21 +1704,23 @@ function RPSDoodleAppInner(){
     if (robotResultTimeoutRef.current) {
       window.clearTimeout(robotResultTimeoutRef.current);
     }
-    const reactionDuration = modeForReaction === "practice" ? 1800 : 1200;
-    robotResultTimeoutRef.current = window.setTimeout(() => {
+    const reactionDuration = 2000;
+    const timeoutId = window.setTimeout(() => {
+      if (robotResultTimeoutRef.current !== timeoutId) return;
       setRobotResultReaction(null);
       robotResultTimeoutRef.current = null;
     }, reactionDuration);
+    robotResultTimeoutRef.current = timeoutId;
     return () => {
-      if (robotResultTimeoutRef.current) {
-        window.clearTimeout(robotResultTimeoutRef.current);
+      if (robotResultTimeoutRef.current === timeoutId) {
+        window.clearTimeout(timeoutId);
         robotResultTimeoutRef.current = null;
       }
     };
   }, [scene, resultBanner, selectedMode]);
 
   useEffect(() => {
-    if (scene === "RESULTS") return;
+    if (scene === "RESULTS" || scene === "MATCH") return;
     setRobotResultReaction(null);
     if (robotResultTimeoutRef.current) {
       window.clearTimeout(robotResultTimeoutRef.current);
