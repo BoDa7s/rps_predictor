@@ -104,7 +104,6 @@ interface StatsContextValue {
   createProfile: () => StatsProfile | null;
   updateProfile: (id: string, patch: StatsProfileUpdate) => void;
   forkProfileVersion: (id: string) => StatsProfile | null;
-  exportJson: () => string;
   exportRoundsCsv: () => string;
   adminRounds: RoundLog[];
   adminMatches: MatchSummary[];
@@ -550,16 +549,6 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     setMatchesDirty(true);
   }, []);
 
-  const exportJson = useCallback(() => {
-    const payload = {
-      player: currentPlayer ?? null,
-      profile: currentProfile ?? null,
-      rounds,
-      matches,
-    };
-    return JSON.stringify(payload, null, 2);
-  }, [currentPlayer, currentProfile, rounds, matches]);
-
   const exportRoundsCsv = useCallback(() => {
     const headers = [
       "playerId",
@@ -631,7 +620,6 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     createProfile,
     updateProfile,
     forkProfileVersion,
-    exportJson,
     exportRoundsCsv,
     adminRounds: allRounds,
     adminMatches: allMatches,
@@ -652,7 +640,6 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     createProfile,
     updateProfile,
     forkProfileVersion,
-    exportJson,
     exportRoundsCsv,
     allRounds,
     allMatches,

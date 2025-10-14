@@ -494,7 +494,6 @@ function RPSDoodleAppInner(){
     matches: profileMatches,
     logRound,
     logMatch,
-    exportJson,
     exportRoundsCsv,
     profiles: statsProfiles,
     currentProfile,
@@ -540,6 +539,12 @@ function RPSDoodleAppInner(){
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastReaderOpen, setToastReaderOpen] = useState(false);
   const [helpToast, setHelpToast] = useState<{ title: string; message: string } | null>(null);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportDialogAcknowledged, setExportDialogAcknowledged] = useState(false);
+  const [exportDialogSource, setExportDialogSource] = useState<"settings" | "stats" | null>(null);
+  const exportDialogRef = useRef<HTMLDivElement | null>(null);
+  const exportDialogCheckboxRef = useRef<HTMLInputElement | null>(null);
+  const exportDialogReturnFocusRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     if (!toastMessage) return;
     if (toastReaderOpen) return;
@@ -869,6 +874,9 @@ function RPSDoodleAppInner(){
 
   const totalMatches = matches.length;
   const totalRounds = rounds.length;
+  const hasExportData = totalRounds > 0;
+  const canExportData = Boolean(currentPlayer && currentProfile && hasExportData);
+  const shouldShowNoExportMessage = !currentPlayer || !currentProfile || !hasExportData;
   const playerWins = matches.reduce((acc, m) => acc + (m.score.you > m.score.ai ? 1 : 0), 0);
   const overallWinRate = totalMatches ? playerWins / totalMatches : 0;
 
@@ -1015,7 +1023,7 @@ function RPSDoodleAppInner(){
     return null;
   }, [rounds]);
 
-  const EXPORT_WARNING_TEXT = "Export may include personal/demographic info. You are responsible for how exported files are stored and shared. No liability is assumed.";
+  const EXPORT_WARNING_TEXT = "Export may include personal/demographic information. You are responsible for how exported files are stored and shared. No liability is assumed.";
   const RESET_TRAINING_TOAST =
     "You’re starting a new training run. Your previous results are archived and linked as Profile History. You can review past vs new results in Statistics.";
   const sanitizeForFile = useCallback((value: string) => {
@@ -1032,10 +1040,15 @@ function RPSDoodleAppInner(){
     setLive("Settings opened. Press Escape to close.");
   }, [setLive]);
 
-  const handleCloseSettings = useCallback(() => {
-    setSettingsOpen(false);
-    setLive("Settings closed.");
-  }, [setLive]);
+  const handleCloseSettings = useCallback(
+    (announce: boolean = true) => {
+      setSettingsOpen(false);
+      if (announce) {
+        setLive("Settings closed.");
+      }
+    },
+    [setLive]
+  );
 
   const handleCreateProfile = useCallback(() => {
     if (settingsOpen) {
@@ -1064,39 +1077,113 @@ function RPSDoodleAppInner(){
     setLive(`New statistics profile created: ${created.name}. Training starts now (${TRAIN_ROUNDS} rounds). Previous results remain available in Statistics.`);
   }, [createStatsProfile, setToastMessage, setLive, TRAIN_ROUNDS]);
 
-  const handleExportJson = useCallback(() => {
-    if (!currentPlayer || !currentProfile) return;
-    if (!window.confirm(EXPORT_WARNING_TEXT)) return;
-    const data = exportJson();
-    const blob = new Blob([data], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const profileSegment = sanitizeForFile(currentProfile.name || 'profile') || 'profile';
-    a.download = `rps-${profileSegment}-stats.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [currentPlayer, currentProfile, exportJson, sanitizeForFile]);
-
-  const handleExportCsv = useCallback(() => {
-    if (!currentPlayer || !currentProfile) return;
-    if (!window.confirm(EXPORT_WARNING_TEXT)) return;
-    if (settingsOpen) {
-      handleCloseSettings();
-    }
+  const performCsvExport = useCallback(() => {
+    if (!currentPlayer || !currentProfile || !hasExportData) return;
     const data = exportRoundsCsv();
-    const blob = new Blob([data], { type: 'text/csv' });
+    const blob = new Blob([data], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+    const a = document.createElement("a");
     a.href = url;
-    const profileSegment = sanitizeForFile(currentProfile.name || 'profile') || 'profile';
+    const profileSegment = sanitizeForFile(currentProfile.name || "profile") || "profile";
     a.download = `rps-${profileSegment}-rounds.csv`;
     a.click();
     URL.revokeObjectURL(url);
     const label = currentProfile.name ? ` for ${currentProfile.name}` : "";
     setToastMessage(`CSV export ready${label}. Check your downloads.`);
     setLive(`Rounds exported as CSV${label}. Download starting.`);
-  }, [currentPlayer, currentProfile, exportRoundsCsv, handleCloseSettings, sanitizeForFile, setLive, settingsOpen, setToastMessage]);
+  }, [currentPlayer, currentProfile, exportRoundsCsv, hasExportData, sanitizeForFile, setLive, setToastMessage]);
+
+  const closeExportDialog = useCallback(
+    (announce?: string) => {
+      setExportDialogOpen(false);
+      setExportDialogAcknowledged(false);
+      setExportDialogSource(null);
+      if (announce) {
+        setLive(announce);
+      }
+    },
+    [setLive]
+  );
+
+  const handleOpenExportDialog = useCallback(
+    (source: "settings" | "stats", trigger?: HTMLButtonElement | null) => {
+      if (!canExportData) return;
+      exportDialogReturnFocusRef.current = trigger ?? null;
+      setExportDialogSource(source);
+      setExportDialogAcknowledged(false);
+      setExportDialogOpen(true);
+      setLive("Export confirmation open. Check the agreement box to continue.");
+    },
+    [canExportData, setLive]
+  );
+
+  const handleConfirmExport = useCallback(() => {
+    if (!exportDialogAcknowledged || !canExportData) return;
+    const source = exportDialogSource;
+    performCsvExport();
+    closeExportDialog();
+    if (source === "settings") {
+      handleCloseSettings(false);
+    }
+  }, [
+    canExportData,
+    closeExportDialog,
+    exportDialogAcknowledged,
+    exportDialogSource,
+    handleCloseSettings,
+    performCsvExport,
+  ]);
+
+  const handleCancelExport = useCallback(() => {
+    closeExportDialog("Export cancelled.");
+  }, [closeExportDialog]);
+
+  useEffect(() => {
+    if (!exportDialogOpen) {
+      const trigger = exportDialogReturnFocusRef.current;
+      if (trigger) {
+        requestAnimationFrame(() => trigger.focus());
+        exportDialogReturnFocusRef.current = null;
+      }
+      return;
+    }
+    const node = exportDialogRef.current;
+    if (!node) return;
+    const focusableSelector = "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
+    const getFocusable = () =>
+      Array.from(node.querySelectorAll<HTMLElement>(focusableSelector)).filter(el => !el.hasAttribute("disabled"));
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        handleCancelExport();
+        return;
+      }
+      if (event.key === "Tab") {
+        const focusable = getFocusable();
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey) {
+          if (document.activeElement === first || document.activeElement === node) {
+            event.preventDefault();
+            last.focus();
+          }
+        } else if (document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    requestAnimationFrame(() => {
+      const checkbox = exportDialogCheckboxRef.current;
+      const focusTarget = checkbox ?? getFocusable()[0];
+      focusTarget?.focus();
+    });
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [exportDialogOpen, handleCancelExport]);
 
   useEffect(() => {
     if (!settingsOpen) {
@@ -1595,6 +1682,80 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
 
       <AnimatePresence>
+        {exportDialogOpen && (
+          <motion.div
+            className="fixed inset-0 z-[97] flex items-end justify-center bg-slate-900/50 px-4 pb-10 sm:items-center sm:pb-0"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={handleCancelExport}
+          >
+            <motion.div
+              initial={{ y: 40, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 40, opacity: 0 }}
+              transition={{ duration: 0.22 }}
+              className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-2xl ring-1 ring-slate-200 sm:rounded-2xl"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="export-confirm-title"
+              aria-describedby="export-confirm-body"
+              onClick={event => event.stopPropagation()}
+              ref={exportDialogRef}
+            >
+              <form
+                className="space-y-4"
+                onSubmit={event => {
+                  event.preventDefault();
+                  handleConfirmExport();
+                }}
+                onKeyDown={event => {
+                  if (event.key === "Enter" && !exportDialogAcknowledged) {
+                    event.preventDefault();
+                  }
+                }}
+              >
+                <div className="space-y-2">
+                  <h2 id="export-confirm-title" className="text-base font-semibold text-slate-900">
+                    Export data (CSV)
+                  </h2>
+                  <p id="export-confirm-body" className="text-sm leading-relaxed text-slate-600">
+                    {EXPORT_WARNING_TEXT}
+                  </p>
+                </div>
+                <label className="flex items-start gap-3 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={exportDialogAcknowledged}
+                    onChange={event => setExportDialogAcknowledged(event.target.checked)}
+                    className="mt-1"
+                    ref={exportDialogCheckboxRef}
+                  />
+                  <span>“I understand and agree.”</span>
+                </label>
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={handleCancelExport}
+                    className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!exportDialogAcknowledged}
+                    className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    Confirm &amp; Download
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {resetDialogOpen && (
           <motion.div
             className="fixed inset-0 z-[90] grid place-items-center bg-slate-900/50 px-4"
@@ -1780,7 +1941,7 @@ function RPSDoodleAppInner(){
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            onClick={handleCloseSettings}
+            onClick={() => handleCloseSettings()}
           >
             <motion.aside
               ref={settingsPanelRef}
@@ -1801,7 +1962,7 @@ function RPSDoodleAppInner(){
                 </h2>
                 <button
                   type="button"
-                  onClick={handleCloseSettings}
+                  onClick={() => handleCloseSettings()}
                   className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100"
                   data-focus-first
                 >
@@ -1887,16 +2048,22 @@ function RPSDoodleAppInner(){
                     <div className="space-y-2 border-t border-slate-200 pt-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-medium text-slate-800">Export data</span>
-                        <span className="text-xs text-slate-500">Includes demographics for the selected profile.</span>
                       </div>
-                      <button
-                        type="button"
-                        onClick={handleExportCsv}
-                        disabled={!currentPlayer || !currentProfile}
-                        className="inline-flex items-center gap-1 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                      >
-                        Export (CSV)
-                      </button>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <button
+                          type="button"
+                          onClick={event => handleOpenExportDialog("settings", event.currentTarget)}
+                          disabled={!canExportData}
+                          className="inline-flex items-center gap-1 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                        >
+                          Export (CSV)
+                        </button>
+                        <p className={`text-xs ${shouldShowNoExportMessage ? "text-amber-600" : "text-slate-500"}`}>
+                          {shouldShowNoExportMessage
+                            ? "No data available to export."
+                            : "Includes demographics for the selected profile."}
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </section>
@@ -2544,11 +2711,18 @@ function RPSDoodleAppInner(){
                 )}
               </div>
               <div className="px-4 py-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-sm">
-                <div className="flex gap-2">
-                  <button onClick={handleExportJson} disabled={!currentPlayer || !currentProfile} className="px-3 py-1.5 rounded bg-sky-100 text-sky-700 disabled:opacity-50 disabled:cursor-not-allowed">Export JSON</button>
-                  <button onClick={handleExportCsv} disabled={!currentPlayer || !currentProfile} className="px-3 py-1.5 rounded bg-sky-100 text-sky-700 disabled:opacity-50 disabled:cursor-not-allowed">Export CSV</button>
-                </div>
-                <p className="text-xs text-slate-500">Exports bundle your demographics with this statistics profile.</p>
+                <button
+                  onClick={event => handleOpenExportDialog("stats", event.currentTarget)}
+                  disabled={!canExportData}
+                  className="px-3 py-1.5 rounded bg-sky-100 text-sky-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Export (CSV)
+                </button>
+                <p className={`text-xs ${shouldShowNoExportMessage ? "text-amber-600" : "text-slate-500"}`}>
+                  {shouldShowNoExportMessage
+                    ? "No data available to export."
+                    : "Exports bundle your demographics with this statistics profile."}
+                </p>
               </div>
             </motion.div>
           </motion.div>
