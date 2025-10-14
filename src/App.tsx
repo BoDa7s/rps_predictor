@@ -466,6 +466,7 @@ function RPSDoodleAppInner(){
     createProfile: createStatsProfile,
     selectProfile,
     updateProfile: updateStatsProfile,
+    forkProfileVersion,
   } = useStats();
   const { currentPlayer, hasConsented, createPlayer, updatePlayer } = usePlayers();
   const [statsOpen, setStatsOpen] = useState(false);
@@ -504,6 +505,8 @@ function RPSDoodleAppInner(){
   }, [toastMessage]);
   const [developerOpen, setDeveloperOpen] = useState(false);
   const developerTriggerRef = useRef({ count: 0, lastClick: 0 });
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [resetDialogAcknowledged, setResetDialogAcknowledged] = useState(false);
   const handleDeveloperHotspotClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (!DEV_MODE_ENABLED) return;
@@ -524,6 +527,14 @@ function RPSDoodleAppInner(){
     },
     [setDeveloperOpen]
   );
+  const handleResetDialogClose = useCallback(() => {
+    setResetDialogOpen(false);
+    setResetDialogAcknowledged(false);
+  }, []);
+  const handleConfirmTrainingReset = useCallback(() => {
+    resetTraining();
+    handleResetDialogClose();
+  }, [resetTraining, handleResetDialogClose]);
 
   useEffect(() => {
     if (!developerOpen) {
@@ -940,6 +951,8 @@ function RPSDoodleAppInner(){
 
   const EXPORT_WARNING_TEXT = "Export may include personal/demographic info. You are responsible for how exported files are stored and shared. No liability is assumed.";
   const PROFILE_WARNING_TEXT = "New statistics profile requires retraining (10 rounds) before normal play. Existing stats remain available but do not merge.";
+  const RESET_TRAINING_TOAST =
+    "You’re starting a new training run. Your previous results are archived and linked as Profile History. You can review past vs new results in Statistics.";
   const sanitizeForFile = useCallback((value: string) => {
     return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   }, []);
@@ -1139,13 +1152,23 @@ function RPSDoodleAppInner(){
 
   function resetTraining(){
     trainingAnnouncementsRef.current.clear();
+    let createdNewProfile = false;
     if (currentProfile) {
-      updateStatsProfile(currentProfile.id, { trainingCount: 0, trained: false });
+      const forked = forkProfileVersion(currentProfile.id);
+      if (forked) {
+        createdNewProfile = true;
+      } else {
+        updateStatsProfile(currentProfile.id, { trainingCount: 0, trained: false });
+      }
     }
     setPredictorMode(false);
     setAiMode("fair");
     setTrainingActive(false);
     startMatch("practice", { silent: true });
+    setToastMessage(RESET_TRAINING_TOAST);
+    if (createdNewProfile) {
+      setLive("New statistics profile created for training reset.");
+    }
   }
 
   function beginTrainingSession(){
@@ -1368,6 +1391,68 @@ function RPSDoodleAppInner(){
         </div>
       )}
 
+      <AnimatePresence>
+        {resetDialogOpen && (
+          <motion.div
+            className="fixed inset-0 z-[90] grid place-items-center bg-slate-900/50 px-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={handleResetDialogClose}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="w-[min(520px,100%)] rounded-2xl bg-white p-6 shadow-2xl"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="reset-training-title"
+              aria-describedby="reset-training-body"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <h2 id="reset-training-title" className="text-lg font-semibold text-slate-900">
+                    Reset AI Training (Visible Only)
+                  </h2>
+                  <p id="reset-training-body" className="text-sm text-slate-600">
+                    This will restart training for your current statistics profile view. Historical round/match data is not deleted and stays available to developers for later analysis. A new linked profile snapshot will track your fresh training.
+                  </p>
+                </div>
+                <label className="flex items-start gap-3 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={resetDialogAcknowledged}
+                    onChange={e => setResetDialogAcknowledged(e.target.checked)}
+                    className="mt-1"
+                  />
+                  <span>I understand my past results remain archived and visible to developers.</span>
+                </label>
+                <div className="flex flex-wrap justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleResetDialogClose}
+                    className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmTrainingReset}
+                    disabled={!resetDialogAcknowledged}
+                    className={`rounded-lg px-4 py-2 text-sm font-medium text-white shadow ${resetDialogAcknowledged ? "bg-sky-600 hover:bg-sky-700" : "bg-slate-400 cursor-not-allowed"}`}
+                  >
+                    Reset training
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header / Settings */}
       <div className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between">
         <motion.h1 layout className="text-2xl font-extrabold tracking-tight text-sky-700 drop-shadow-sm">RPS Lab</motion.h1>
@@ -1454,11 +1539,10 @@ function RPSDoodleAppInner(){
               </label>
               <button
                 className="px-2 py-1 rounded bg-white shadow"
+                type="button"
                 onClick={() => {
-                  const confirmed = window.confirm("Reset AI training? This clears the AI's memory of your moves and restarts the 10-round training session.");
-                  if (confirmed) {
-                    resetTraining();
-                  }
+                  setResetDialogAcknowledged(false);
+                  setResetDialogOpen(true);
                 }}
               >
                 Reset AI training
