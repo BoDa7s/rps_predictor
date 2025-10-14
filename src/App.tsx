@@ -45,6 +45,15 @@ const MODES: Mode[] = ["challenge","practice"];
 // Icons (emoji fallback)
 const moveEmoji: Record<Move, string> = { rock: "\u270A", paper: "\u270B", scissors: "\u270C\uFE0F" };
 
+const DIFFICULTY_INFO: Record<AIMode, { label: string; helper: string }> = {
+  fair: { label: "Fair", helper: "Gentle counterplay tuned for learning." },
+  normal: { label: "Normal", helper: "Balanced challenge that reacts to streaks." },
+  ruthless: { label: "Ruthless", helper: "Aggressive mix-ups that punish predictability." },
+};
+
+const DIFFICULTY_SEQUENCE: AIMode[] = ["fair", "normal", "ruthless"];
+const BEST_OF_OPTIONS: BestOf[] = [3, 5, 7];
+
 // ---- Core game logic (pure) ----
 export function resolveOutcome(player: Move, ai: Move): Outcome {
   if (player === ai) return "tie";
@@ -452,6 +461,32 @@ function ModeCard({ mode, onSelect, isDimmed, disabled = false }: { mode: Mode, 
   );
 }
 
+function OnOffToggle({ value, onChange, disabled = false }: { value: boolean; onChange: (next: boolean) => void; disabled?: boolean }) {
+  const baseButton = "px-3 py-1 text-xs font-semibold transition-colors";
+  return (
+    <div className="inline-flex items-center overflow-hidden rounded-full border border-slate-300 bg-white shadow-sm">
+      <button
+        type="button"
+        className={`${baseButton} ${value ? "bg-sky-600 text-white" : "text-slate-500 hover:bg-slate-100"}`}
+        aria-pressed={value}
+        onClick={() => !disabled && onChange(true)}
+        disabled={disabled}
+      >
+        On
+      </button>
+      <button
+        type="button"
+        className={`${baseButton} ${!value ? "bg-slate-200 text-slate-700" : "text-slate-500 hover:bg-slate-100"}`}
+        aria-pressed={!value}
+        onClick={() => !disabled && onChange(false)}
+        disabled={disabled}
+      >
+        Off
+      </button>
+    </div>
+  );
+}
+
 // Main component
 function RPSDoodleAppInner(){
   const {
@@ -605,6 +640,7 @@ function RPSDoodleAppInner(){
 
   const [predictorMode, setPredictorMode] = useState<boolean>(currentProfile?.predictorDefault ?? true);
   const [aiMode, setAiMode] = useState<AIMode>("normal");
+  const [difficultyHint, setDifficultyHint] = useState<string>(DIFFICULTY_INFO["normal"].helper);
   const TRAIN_ROUNDS = 10;
   const trainingCount = currentProfile?.trainingCount ?? 0;
   const isTrained = currentProfile?.trained ?? false;
@@ -617,6 +653,16 @@ function RPSDoodleAppInner(){
   const trainingDisplayCount = Math.min(trainingCount, TRAIN_ROUNDS);
   const trainingProgress = Math.min(trainingDisplayCount / TRAIN_ROUNDS, 1);
   const showTrainingCompleteBadge = !needsTraining && trainingCount >= TRAIN_ROUNDS;
+
+  const difficultyDisabled = !isTrained || !predictorMode;
+
+  useEffect(() => {
+    if (difficultyDisabled) {
+      setDifficultyHint("Enable the predictor to adjust difficulty.");
+      return;
+    }
+    setDifficultyHint(DIFFICULTY_INFO[aiMode].helper);
+  }, [aiMode, difficultyDisabled]);
 
   useEffect(() => {
     if (!needsTraining && trainingActive) {
@@ -1569,57 +1615,281 @@ function RPSDoodleAppInner(){
             </button>
           <details className="bg-white/70 rounded-xl shadow group">
             <summary className="list-none px-3 py-1.5 cursor-pointer text-sm text-slate-900">Settings ⚙️</summary>
-            <div className="p-3 pt-0 space-y-2 text-sm">
-              <label className="flex items-center justify-between gap-4"><span>Audio</span><input type="checkbox" checked={audioOn} onChange={e=> setAudioOn(e.target.checked)} /></label>
-              <label className="flex items-center justify-between gap-4"><span>Reduced motion</span><input type="checkbox" checked={reducedMotion} onChange={e=> setReducedMotion(e.target.checked)} /></label>
-              <label className="flex items-center justify-between gap-4"><span>Text size</span><input type="range" min={0.9} max={1.4} step={0.05} value={textScale} onChange={e=> setTextScale(parseFloat(e.target.value))} /></label>
-              <hr className="my-2" />
-              <label className="flex items-center justify-between gap-4" title="When ON, the AI studies your recent moves to predict—and counter—your next move."><span>AI Predictor</span><input type="checkbox" checked={predictorMode} onChange={e=> handlePredictorToggle(e.target.checked)} disabled={!isTrained} /></label>
-              <label className="flex items-center justify-between gap-4"><span>AI Difficulty</span>
-                <select value={aiMode} onChange={e=> setAiMode(e.target.value as AIMode)} disabled={!isTrained || !predictorMode} className="px-2 py-1 rounded bg-white shadow-inner">
-                  <option value="fair">Fair</option>
-                  <option value="normal">Normal</option>
-                  <option value="ruthless">Ruthless</option>
-                </select>
-              </label>
-              <hr className="my-2" />
-              <div className="space-y-2">
-                <div className="text-xs text-slate-500">Profile &amp; data</div>
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                  <button
-                    className="px-2 py-1 rounded bg-sky-100 text-sky-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                    onClick={() => setPlayerModalMode(currentPlayer ? "edit" : "create")}
-                    disabled={!currentPlayer}
-                  >
-                    Edit demographics
-                  </button>
-                  <button
-                    className="px-2 py-1 rounded bg-white shadow text-slate-700 hover:bg-slate-50"
-                    onClick={() => setPlayerModalMode("create")}
-                  >
-                    Create new player
-                  </button>
+            <div className="p-3 pt-0 space-y-6 text-sm text-slate-700">
+              <section className="space-y-3">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">A. Profile &amp; Data</h2>
+                <div className="space-y-3 rounded-lg border border-slate-200/80 bg-white/80 p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-slate-900">{playerLabel}</span>
+                    {demographicsNeedReview && (
+                      <span className="text-xs font-semibold text-amber-600">Needs review</span>
+                    )}
+                    <span aria-hidden className="text-slate-300">→</span>
+                    <button
+                      className="rounded-lg bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={() => setPlayerModalMode(currentPlayer ? "edit" : "create")}
+                      disabled={!currentPlayer}
+                    >
+                      Edit demographics
+                    </button>
+                    <button
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+                      onClick={() => setPlayerModalMode("create")}
+                    >
+                      Create new player
+                    </button>
+                  </div>
+                  {demographicsNeedReview && (
+                    <p className="text-xs text-amber-600">Update grade and age from Edit demographics.</p>
+                  )}
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium text-slate-800">Statistics profile</span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label htmlFor="settings-profile-select" className="sr-only">
+                        Select statistics profile
+                      </label>
+                      <select
+                        id="settings-profile-select"
+                        value={currentProfile?.id ?? ""}
+                        onChange={e => handleSelectProfile(e.target.value)}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-inner"
+                        disabled={!statsProfiles.length}
+                      >
+                        {statsProfiles.length === 0 ? (
+                          <option value="">No profiles yet</option>
+                        ) : (
+                          <>
+                            {!currentProfile && <option value="">Select a profile…</option>}
+                            {statsProfiles.map(profile => (
+                              <option key={profile.id} value={profile.id}>
+                                {profile.name}
+                                {!profile.trained && (profile.trainingCount ?? 0) < TRAIN_ROUNDS ? " • Training required" : ""}
+                              </option>
+                            ))}
+                          </>
+                        )}
+                      </select>
+                      <button
+                        type="button"
+                        className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-sky-700"
+                        onClick={handleCreateProfile}
+                      >
+                        Create new
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-500">Profiles don’t merge; new ones require {TRAIN_ROUNDS}-round training.</p>
+                  </div>
+                  <div className="space-y-2 border-t border-slate-200 pt-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium text-slate-800">Export data</span>
+                      <span className="text-xs text-slate-500">Includes demographics for the selected profile.</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleExportCsv}
+                      disabled={!currentPlayer || !currentProfile}
+                      className="inline-flex items-center gap-1 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                    >
+                      Export (CSV)
+                    </button>
+                  </div>
+                  <div className="space-y-2 border-t border-slate-200 pt-3">
+                    <span className="font-medium text-slate-800">Reset training (this profile)</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setResetDialogAcknowledged(false);
+                        setResetDialogOpen(true);
+                      }}
+                      className="inline-flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 shadow-sm hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      title="training history preserved"
+                      disabled={!currentProfile}
+                    >
+                      Reset AI training
+                    </button>
+                  </div>
                 </div>
-                {demographicsNeedReview && (
-                  <p className="text-xs text-amber-600">Demographics need review. Update grade and age from Edit demographics.</p>
-                )}
-                <p className="text-xs text-slate-500 max-w-xs">Use the Statistics panel to export your data. Exports always include your demographics alongside the selected statistics profile.</p>
-              </div>
-              <label className="flex items-center justify-between gap-4"><span>Best of</span>
-                <select value={bestOf} onChange={e=> setBestOf(Number(e.target.value) as BestOf)} className="px-2 py-1 rounded bg-white shadow-inner">
-                  <option value={3}>3</option><option value={5}>5</option><option value={7}>7</option>
-                </select>
-              </label>
-              <button
-                className="px-2 py-1 rounded bg-white shadow"
-                type="button"
-                onClick={() => {
-                  setResetDialogAcknowledged(false);
-                  setResetDialogOpen(true);
-                }}
-              >
-                Reset AI training
-              </button>
+              </section>
+              <section className="space-y-3">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">B. Gameplay</h2>
+                <div className="space-y-4 rounded-lg border border-slate-200/80 bg-white/80 p-3">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-slate-800">AI Predictor</span>
+                        <span className="text-xs text-slate-400" title="AI predicts your next move from recent patterns.">ⓘ</span>
+                      </div>
+                      <OnOffToggle
+                        value={predictorMode}
+                        onChange={handlePredictorToggle}
+                        disabled={!isTrained}
+                      />
+                    </div>
+                    {!isTrained && (
+                      <p className="text-xs text-amber-600">Complete {TRAIN_ROUNDS} training rounds to unlock predictions.</p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-slate-800">AI Difficulty</span>
+                      <span className="text-xs text-slate-400" title="Fine-tune how boldly the AI counters your moves.">ⓘ</span>
+                    </div>
+                    <div
+                      className="flex flex-wrap gap-2"
+                      role="radiogroup"
+                      aria-label="AI difficulty"
+                      onMouseLeave={() => {
+                        if (!difficultyDisabled) setDifficultyHint(DIFFICULTY_INFO[aiMode].helper);
+                      }}
+                    >
+                      {DIFFICULTY_SEQUENCE.map(level => {
+                        const info = DIFFICULTY_INFO[level];
+                        const isActive = aiMode === level;
+                        return (
+                          <button
+                            key={level}
+                            type="button"
+                            role="radio"
+                            aria-checked={isActive}
+                            onFocus={() => setDifficultyHint(info.helper)}
+                            onMouseEnter={() => setDifficultyHint(info.helper)}
+                            onBlur={() => setDifficultyHint(difficultyDisabled ? "Enable the predictor to adjust difficulty." : DIFFICULTY_INFO[aiMode].helper)}
+                            onClick={() => {
+                              if (difficultyDisabled) return;
+                              setAiMode(level);
+                            }}
+                            disabled={difficultyDisabled}
+                            className={`rounded-full border px-3 py-1 text-xs font-semibold shadow-sm transition-colors ${
+                              isActive
+                                ? "border-sky-500 bg-sky-600 text-white"
+                                : "border-slate-200 bg-white text-slate-600 hover:border-sky-300 hover:text-sky-700"
+                            } ${difficultyDisabled ? "cursor-not-allowed opacity-60" : ""}`}
+                          >
+                            {info.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className={`text-xs ${difficultyDisabled ? "text-slate-400" : "text-slate-500"}`}>{difficultyHint}</p>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-slate-800">Best of</span>
+                      <span className="text-xs text-slate-400" title="Rounds needed to win a match.">ⓘ</span>
+                    </div>
+                    <div className="inline-flex rounded-full border border-slate-300 bg-white shadow-sm" role="radiogroup" aria-label="Best of series length">
+                      {BEST_OF_OPTIONS.map(option => {
+                        const isActive = bestOf === option;
+                        return (
+                          <button
+                            key={option}
+                            type="button"
+                            role="radio"
+                            aria-checked={isActive}
+                            onClick={() => setBestOf(option)}
+                            className={`px-3 py-1 text-xs font-semibold transition-colors ${
+                              isActive ? "bg-sky-600 text-white" : "text-slate-600 hover:bg-slate-100"
+                            }`}
+                          >
+                            {option}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </section>
+              <section className="space-y-3">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">C. Accessibility &amp; Display</h2>
+                <div className="space-y-4 rounded-lg border border-slate-200/80 bg-white/80 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <span className="font-medium text-slate-800">Audio</span>
+                    </div>
+                    <OnOffToggle value={audioOn} onChange={next => setAudioOn(next)} />
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <span className="font-medium text-slate-800">Reduced motion</span>
+                      <p className="text-xs text-slate-500">Toggle lighter animations if you’re sensitive to motion.</p>
+                    </div>
+                    <OnOffToggle value={reducedMotion} onChange={next => setReducedMotion(next)} />
+                  </div>
+                  <div className="space-y-2">
+                    <span className="font-medium text-slate-800">Text size</span>
+                    <input
+                      type="range"
+                      min={0.9}
+                      max={1.4}
+                      step={0.05}
+                      value={textScale}
+                      onChange={e => setTextScale(parseFloat(e.target.value))}
+                      className="w-full accent-sky-600"
+                    />
+                    <div className="flex justify-between text-[10px] uppercase tracking-wide text-slate-400">
+                      <span>Smaller</span>
+                      <span>Default</span>
+                      <span>Larger</span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+              <section className="space-y-3">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">D. Help &amp; About</h2>
+                <div className="rounded-lg border border-slate-200/80 bg-white/80 p-3">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sky-700">
+                    <button
+                      type="button"
+                      className="text-xs font-semibold hover:underline"
+                      onClick={() => {
+                        goToMode();
+                        setToastMessage("Modes show different ways to play and practice.");
+                        setLive("Opening modes overview.");
+                      }}
+                    >
+                      What are Modes?
+                    </button>
+                    <span aria-hidden className="text-slate-300">•</span>
+                    <button
+                      type="button"
+                      className="text-xs font-semibold hover:underline"
+                      onClick={() => {
+                        setToastMessage(`Training runs ${TRAIN_ROUNDS} rounds so the AI can learn your habits.`);
+                        setLive("Training overview shared.");
+                      }}
+                    >
+                      How training works
+                    </button>
+                    <span aria-hidden className="text-slate-300">•</span>
+                    <button
+                      type="button"
+                      className="text-xs font-semibold hover:underline"
+                      onClick={() => {
+                        setStatsOpen(true);
+                        setLive("Opening statistics.");
+                      }}
+                    >
+                      View my stats
+                    </button>
+                    <span aria-hidden className="text-slate-300">•</span>
+                    <button
+                      type="button"
+                      className={`text-xs font-semibold hover:underline ${hasConsented ? "" : "text-slate-400 hover:no-underline"}`}
+                      onClick={() => {
+                        if (!hasConsented) return;
+                        setLeaderboardOpen(true);
+                        setLive("Opening leaderboard.");
+                      }}
+                      disabled={!hasConsented}
+                      title={!hasConsented ? "Check consent to continue." : undefined}
+                    >
+                      Leaderboard
+                    </button>
+                  </div>
+                </div>
+              </section>
             </div>
           </details>
         </div>
