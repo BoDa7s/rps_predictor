@@ -77,9 +77,10 @@ export interface StatsProfile {
   createdAt: string;
   trainingCount: number;
   trained: boolean;
+  predictorDefault: boolean;
 }
 
-type StatsProfileUpdate = Partial<Pick<StatsProfile, "name" | "trainingCount" | "trained">>;
+type StatsProfileUpdate = Partial<Pick<StatsProfile, "name" | "trainingCount" | "trained" | "predictorDefault">>;
 
 interface StatsContextValue {
   rounds: RoundLog[];
@@ -148,6 +149,7 @@ function loadProfiles(): StatsProfile[] {
       createdAt: typeof item?.createdAt === "string" ? item.createdAt : new Date().toISOString(),
       trainingCount: typeof item?.trainingCount === "number" ? item.trainingCount : 0,
       trained: Boolean(item?.trained),
+      predictorDefault: typeof item?.predictorDefault === "boolean" ? item.predictorDefault : true,
     }));
   } catch (err) {
     console.warn("Failed to read stats profiles", err);
@@ -228,6 +230,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         createdAt: new Date().toISOString(),
         trainingCount: 0,
         trained: false,
+        predictorDefault: true,
       };
       setProfiles(prev => prev.concat(defaultProfile));
       setProfilesDirty(true);
@@ -316,6 +319,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       createdAt: new Date().toISOString(),
       trainingCount: 0,
       trained: false,
+      predictorDefault: true,
     };
     setProfiles(prev => prev.concat(profile));
     setProfilesDirty(true);

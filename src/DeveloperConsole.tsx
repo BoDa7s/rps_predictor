@@ -4,6 +4,7 @@ import { usePlayers } from "./players";
 import type { PlayerProfile } from "./players";
 import { useStats } from "./stats";
 import type { MatchSummary, RoundLog } from "./stats";
+import { MatchTimings, MATCH_TIMING_DEFAULTS, normalizeMatchTimings } from "./matchTimings";
 import {
   appendAuditEntry,
   AuditEntry,
@@ -15,15 +16,26 @@ import {
   unlockWithPin,
 } from "./secureStore";
 
+function cloneTimings(value: MatchTimings): MatchTimings {
+  return {
+    challenge: { ...value.challenge },
+    practice: { ...value.practice },
+  };
+}
+
 interface DeveloperConsoleProps {
   open: boolean;
   onClose: () => void;
+  timings: MatchTimings;
+  onTimingsUpdate: (timings: MatchTimings, options?: { persist?: boolean; clearSaved?: boolean }) => void;
+  onTimingsReset: () => void;
 }
 
-const TAB_OPTIONS = ["overview", "players", "rounds", "matches", "audit"] as const;
+const TAB_OPTIONS = ["overview", "players", "rounds", "matches", "timers", "audit"] as const;
 type TabKey = typeof TAB_OPTIONS[number];
+type TimingField = keyof MatchTimings["challenge"];
 
-export function DeveloperConsole({ open, onClose }: DeveloperConsoleProps) {
+export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTimingsReset }: DeveloperConsoleProps) {
   const { players, updatePlayer, deletePlayer } = usePlayers();
   const {
     adminRounds,
@@ -41,6 +53,17 @@ export function DeveloperConsole({ open, onClose }: DeveloperConsoleProps) {
   const [auditLogs, setAuditLogs] = useState<AuditEntry[]>([]);
   const [ready, setReady] = useState(() => (typeof window === "undefined" ? false : isUnlocked()));
   const [snapshotSavedAt, setSnapshotSavedAt] = useState<string | null>(null);
+  const [timingDraft, setTimingDraft] = useState<MatchTimings>(() => cloneTimings(timings));
+  const [makeDefault, setMakeDefault] = useState(false);
+
+  const timerFields = useMemo(
+    () => [
+      { key: "countdownTickMs" as TimingField, label: "Countdown tick (ms)", helper: "Delay between countdown numbers." },
+      { key: "revealHoldMs" as TimingField, label: "AI reveal hold (ms)", helper: "Pause between reveal and score resolution." },
+      { key: "resultBannerMs" as TimingField, label: "Result banner (ms)", helper: "Hold duration before the next round begins." },
+    ],
+    []
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -74,6 +97,12 @@ export function DeveloperConsole({ open, onClose }: DeveloperConsoleProps) {
     }
     return unsubscribe;
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    setTimingDraft(cloneTimings(timings));
+    setMakeDefault(false);
+  }, [timings, open]);
 
   useEffect(() => {
     if (!open || !ready || !DEV_MODE_SECURE) return;
@@ -180,6 +209,44 @@ export function DeveloperConsole({ open, onClose }: DeveloperConsoleProps) {
     adminDeleteMatch(id);
     await recordAudit({ action: "delete-match", target: id });
   }, [adminDeleteMatch, recordAudit]);
+
+  const handleTimingFieldChange = useCallback((mode: "challenge" | "practice", field: TimingField, raw: string) => {
+    const nextValue = Number.parseFloat(raw);
+    setTimingDraft(prev => {
+      if (!Number.isFinite(nextValue)) return prev;
+      const clamped = Math.max(1, Math.round(nextValue));
+      if (prev[mode][field] === clamped) return prev;
+      return {
+        ...prev,
+        [mode]: {
+          ...prev[mode],
+          [field]: clamped,
+        },
+      };
+    });
+  }, []);
+
+  const handleTimingSubmit = useCallback(
+    (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      const sanitized = normalizeMatchTimings(timingDraft);
+      setTimingDraft(cloneTimings(sanitized));
+      onTimingsUpdate(sanitized, { persist: makeDefault });
+    },
+    [timingDraft, makeDefault, onTimingsUpdate]
+  );
+
+  const handleRevertDraft = useCallback(() => {
+    setTimingDraft(cloneTimings(timings));
+    setMakeDefault(false);
+  }, [timings]);
+
+  const handleResetTimings = useCallback(() => {
+    const defaults = normalizeMatchTimings(MATCH_TIMING_DEFAULTS);
+    setTimingDraft(cloneTimings(defaults));
+    setMakeDefault(false);
+    onTimingsReset();
+  }, [onTimingsReset]);
 
   if (!DEV_MODE_ENABLED || !open) return null;
 
@@ -381,6 +448,123 @@ export function DeveloperConsole({ open, onClose }: DeveloperConsoleProps) {
                   columns={["id", "playerId", "profileId", "startedAt", "endedAt", "mode", "difficulty", "rounds", "notes"]}
                   title="Matches"
                 />
+              )}
+
+              {tab === "timers" && (
+                <form onSubmit={handleTimingSubmit} style={{ display: "grid", gap: "16px" }}>
+                  <div
+                    style={{
+                      background: "rgba(15,25,45,0.8)",
+                      borderRadius: "12px",
+                      padding: "16px",
+                      display: "grid",
+                      gap: "16px",
+                    }}
+                  >
+                    <div>
+                      <h3 style={{ margin: "0 0 4px" }}>Match loop timings</h3>
+                      <p style={{ margin: 0, fontSize: "0.8rem", opacity: 0.7 }}>
+                        Update countdown, reveal, and banner durations. Apply changes for the current session or mark them as the
+                        new default.
+                      </p>
+                    </div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gap: "12px",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+                      }}
+                    >
+                      {(["challenge", "practice"] as const).map(mode => (
+                        <fieldset
+                          key={mode}
+                          style={{
+                            border: "1px solid rgba(255,255,255,0.12)",
+                            borderRadius: "12px",
+                            padding: "12px",
+                            display: "grid",
+                            gap: "12px",
+                          }}
+                        >
+                          <legend style={{ padding: "0 8px", fontWeight: 600, textTransform: "capitalize" }}>{mode} mode</legend>
+                          {timerFields.map(field => (
+                            <label key={field.key} style={{ display: "grid", gap: "4px" }}>
+                              <span style={{ fontSize: "0.85rem" }}>{field.label}</span>
+                              <input
+                                type="number"
+                                min={100}
+                                step={50}
+                                value={timingDraft[mode][field.key]}
+                                onChange={e => handleTimingFieldChange(mode, field.key, e.target.value)}
+                                style={{
+                                  padding: "8px 10px",
+                                  borderRadius: "8px",
+                                  border: "1px solid rgba(255,255,255,0.18)",
+                                  background: "rgba(15,20,35,0.9)",
+                                  color: "inherit",
+                                }}
+                              />
+                              <span style={{ fontSize: "0.7rem", opacity: 0.6 }}>
+                                Baseline {MATCH_TIMING_DEFAULTS[mode][field.key]} ms · {field.helper}
+                              </span>
+                            </label>
+                          ))}
+                        </fieldset>
+                      ))}
+                    </div>
+                    <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.85rem" }}>
+                      <input
+                        type="checkbox"
+                        checked={makeDefault}
+                        onChange={e => setMakeDefault(e.target.checked)}
+                      />
+                      <span>Make these timings the default</span>
+                    </label>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                      <button
+                        type="submit"
+                        style={{
+                          background: "#2563eb",
+                          border: "none",
+                          color: "white",
+                          borderRadius: "8px",
+                          padding: "8px 18px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Save timings
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleRevertDraft}
+                        style={{
+                          background: "rgba(255,255,255,0.1)",
+                          border: "1px solid rgba(255,255,255,0.15)",
+                          color: "white",
+                          borderRadius: "8px",
+                          padding: "8px 14px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Revert to active
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleResetTimings}
+                        style={{
+                          background: "rgba(59,130,246,0.12)",
+                          border: "1px solid rgba(59,130,246,0.4)",
+                          color: "#93c5fd",
+                          borderRadius: "8px",
+                          padding: "8px 14px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Restore baseline defaults
+                      </button>
+                    </div>
+                  </div>
+                </form>
               )}
 
               {tab === "audit" && (

@@ -6,6 +6,14 @@ import { PlayersProvider, usePlayers, Grade, Gender, PlayerProfile, CONSENT_TEXT
 import { DEV_MODE_ENABLED } from "./devMode";
 import { DeveloperConsole } from "./DeveloperConsole";
 import { lockSecureStore } from "./secureStore";
+import {
+  MATCH_TIMING_DEFAULTS,
+  MatchTimings,
+  clearSavedMatchTimings,
+  loadMatchTimings,
+  normalizeMatchTimings,
+  saveMatchTimings,
+} from "./matchTimings";
 import LeaderboardModal from "./LeaderboardModal";
 import { computeMatchScore } from "./leaderboard";
 
@@ -528,6 +536,13 @@ function RPSDoodleAppInner(){
     setDeveloperOpen(false);
   }, [lockSecureStore, setDeveloperOpen]);
 
+  const handlePredictorToggle = useCallback((checked: boolean) => {
+    setPredictorMode(checked);
+    if (currentProfile) {
+      updateStatsProfile(currentProfile.id, { predictorDefault: checked });
+    }
+  }, [currentProfile, updateStatsProfile]);
+
   const style = `
   :root{ --challenge:#FF77AA; --practice:#88AA66; }
   .mode-grid{ display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:12px; width:min(92vw,640px); }
@@ -559,7 +574,23 @@ function RPSDoodleAppInner(){
   const [audioOn, setAudioOn] = useState(true);
   const [textScale, setTextScale] = useState(1);
 
-  const [predictorMode, setPredictorMode] = useState(false);
+  const [matchTimings, setMatchTimings] = useState<MatchTimings>(() => normalizeMatchTimings(loadMatchTimings()));
+  const updateMatchTimings = useCallback((next: MatchTimings, options?: { persist?: boolean; clearSaved?: boolean }) => {
+    const normalized = normalizeMatchTimings(next);
+    setMatchTimings(normalized);
+    if (options?.persist) {
+      saveMatchTimings(normalized);
+    } else if (options?.clearSaved) {
+      clearSavedMatchTimings();
+    }
+  }, []);
+  const resetMatchTimings = useCallback(() => {
+    const defaults = normalizeMatchTimings(MATCH_TIMING_DEFAULTS);
+    setMatchTimings(defaults);
+    clearSavedMatchTimings();
+  }, []);
+
+  const [predictorMode, setPredictorMode] = useState<boolean>(currentProfile?.predictorDefault ?? true);
   const [aiMode, setAiMode] = useState<AIMode>("normal");
   const TRAIN_ROUNDS = 10;
   const trainingCount = currentProfile?.trainingCount ?? 0;
@@ -606,18 +637,26 @@ function RPSDoodleAppInner(){
     trainingAnnouncementsRef.current.clear();
   }, [currentProfile?.id]);
   const clearCountdown = ()=>{ if (countdownRef.current!==null){ clearInterval(countdownRef.current); countdownRef.current=null; } };
-  const startCountdown = ()=>{ setPhase("countdown"); setCount(3); clearCountdown(); countdownRef.current = window.setInterval(()=>{
-    setCount(prev=>{
-      const next = prev - 1;
-      audio.tick();
-      if (!reducedMotion) tryVibrate(6);
-      if (next <= 0){
-        clearCountdown();
-        reveal();
-      }
-      return next;
-    });
-  }, 300); };
+  const startCountdown = ()=>{
+    const modeForTiming: Mode = selectedMode ?? "practice";
+    const baseInterval = matchTimings[modeForTiming].countdownTickMs;
+    const interval = reducedMotion ? Math.min(300, baseInterval) : baseInterval;
+    setPhase("countdown");
+    setCount(3);
+    clearCountdown();
+    countdownRef.current = window.setInterval(()=>{
+      setCount(prev=>{
+        const next = prev - 1;
+        audio.tick();
+        if (!reducedMotion) tryVibrate(6);
+        if (next <= 0){
+          clearCountdown();
+          reveal();
+        }
+        return next;
+      });
+    }, interval);
+  };
 
   const [selectedMode, setSelectedMode] = useState<Mode|null>(null);
   const [wipeRun, setWipeRun] = useState(false);
@@ -675,9 +714,17 @@ function RPSDoodleAppInner(){
 
   useEffect(() => {
     if (!needsTraining && !trainingActive) return;
-    if (predictorMode) setPredictorMode(false);
     if (aiMode !== "fair") setAiMode("fair");
-  }, [needsTraining, trainingActive, predictorMode, aiMode]);
+  }, [needsTraining, trainingActive, aiMode]);
+
+  useEffect(() => {
+    if (needsTraining || trainingActive) {
+      if (predictorMode) setPredictorMode(false);
+      return;
+    }
+    const preferred = currentProfile?.predictorDefault ?? true;
+    setPredictorMode(preferred);
+  }, [currentProfile?.id, currentProfile?.predictorDefault, needsTraining, trainingActive, predictorMode]);
 
   useEffect(() => {
     if (scene !== "MATCH") return;
@@ -1125,6 +1172,9 @@ function RPSDoodleAppInner(){
   function reveal(){
     const player = playerPick; if (!player) return;
     const ai = aiChoose(); setAiPick(ai); setAiHistory(h=>[...h, ai]); setPhase("reveal");
+    const modeForTiming: Mode = selectedMode ?? "practice";
+    const baseHold = matchTimings[modeForTiming].revealHoldMs;
+    const holdMs = reducedMotion ? Math.min(600, baseHold) : baseHold;
     setTimeout(()=>{
       const res = resolveOutcome(player, ai); setOutcome(res); setPhase("resolve");
       // Online update mixer with context prior to adding current move
@@ -1145,7 +1195,7 @@ function RPSDoodleAppInner(){
         setPhase("feedback");
         setLastMoves(prev=>[...prev, player]);
       }, 150);
-    }, 240);
+    }, holdMs);
   }
 
   // Commit score once when outcome resolved
@@ -1184,13 +1234,24 @@ function RPSDoodleAppInner(){
 
   // Failsafes: if something stalls, advance automatically
   useEffect(()=>{ if (phase === "selected"){ const t = setTimeout(()=>{ if (phase === "selected") startCountdown(); }, 500); return ()=> clearTimeout(t); } }, [phase]);
-  useEffect(()=>{ if (phase === "countdown"){ const t = setTimeout(()=>{ if (phase === "countdown"){ clearCountdown(); reveal(); } }, 2200); return ()=> clearTimeout(t); } }, [phase]);
+  useEffect(()=>{
+    if (phase !== "countdown") return;
+    const modeForTiming: Mode = selectedMode ?? "practice";
+    const baseInterval = matchTimings[modeForTiming].countdownTickMs;
+    const interval = reducedMotion ? Math.min(300, baseInterval) : baseInterval;
+    const failSafeMs = Math.max(interval * 4, interval * 3 + 600);
+    const t = setTimeout(()=>{ if (phase === "countdown"){ clearCountdown(); reveal(); } }, failSafeMs);
+    return ()=> clearTimeout(t);
+  }, [phase, selectedMode, matchTimings, reducedMotion]);
   useEffect(()=>{ return ()=> clearCountdown(); },[]);
 
   // Next round or end match
   useEffect(() => {
     if (phase !== "feedback") return;
-    const delay = trainingActive ? 260 : (reducedMotion ? 300 : 520);
+    const modeForTiming: Mode = selectedMode ?? "practice";
+    const baseDelay = matchTimings[modeForTiming].resultBannerMs;
+    const delayBase = reducedMotion ? Math.min(300, baseDelay) : baseDelay;
+    const delay = trainingActive ? Math.min(delayBase, 600) : delayBase;
     const t = setTimeout(() => {
       if (trainingActive) {
         setRound(r => r + 1);
@@ -1244,7 +1305,7 @@ function RPSDoodleAppInner(){
       setPhase("idle");
     }, delay);
     return () => clearTimeout(t);
-  }, [phase, trainingActive, playerScore, aiScore, bestOf, reducedMotion]);
+  }, [phase, trainingActive, playerScore, aiScore, bestOf, reducedMotion, matchTimings, selectedMode]);
 
   // Helpers
   function tryVibrate(ms:number){ if ((navigator as any).vibrate) (navigator as any).vibrate(ms); }
@@ -1355,7 +1416,7 @@ function RPSDoodleAppInner(){
               <label className="flex items-center justify-between gap-4"><span>Reduced motion</span><input type="checkbox" checked={reducedMotion} onChange={e=> setReducedMotion(e.target.checked)} /></label>
               <label className="flex items-center justify-between gap-4"><span>Text size</span><input type="range" min={0.9} max={1.4} step={0.05} value={textScale} onChange={e=> setTextScale(parseFloat(e.target.value))} /></label>
               <hr className="my-2" />
-              <label className="flex items-center justify-between gap-4"><span>AI Predictor</span><input type="checkbox" checked={predictorMode} onChange={e=> setPredictorMode(e.target.checked)} disabled={!isTrained} /></label>
+              <label className="flex items-center justify-between gap-4" title="When ON, the AI studies your recent moves to predict—and counter—your next move."><span>AI Predictor</span><input type="checkbox" checked={predictorMode} onChange={e=> handlePredictorToggle(e.target.checked)} disabled={!isTrained} /></label>
               <label className="flex items-center justify-between gap-4"><span>AI Difficulty</span>
                 <select value={aiMode} onChange={e=> setAiMode(e.target.value as AIMode)} disabled={!isTrained || !predictorMode} className="px-2 py-1 rounded bg-white shadow-inner">
                   <option value="fair">Fair</option>
@@ -1931,7 +1992,13 @@ function RPSDoodleAppInner(){
             className="fixed bottom-0 left-0 z-[60] h-8 w-8"
             onClick={handleDeveloperHotspotClick}
           />
-          <DeveloperConsole open={developerOpen} onClose={handleDeveloperClose} />
+          <DeveloperConsole
+            open={developerOpen}
+            onClose={handleDeveloperClose}
+            timings={matchTimings}
+            onTimingsUpdate={updateMatchTimings}
+            onTimingsReset={resetMatchTimings}
+          />
         </>
       )}
     </div>
