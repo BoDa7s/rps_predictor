@@ -542,7 +542,7 @@ function RPSDoodleAppInner(){
   const [helpGuideOpen, setHelpGuideOpen] = useState(false);
   const [robotHovered, setRobotHovered] = useState(false);
   const [robotFocused, setRobotFocused] = useState(false);
-  const [robotResultReaction, setRobotResultReaction] = useState<{ message: string; label: string } | null>(null);
+  const [robotResultReaction, setRobotResultReaction] = useState<{ emoji: string; body?: string; label: string } | null>(null);
   const robotResultTimeoutRef = useRef<number | null>(null);
   const [trainingCelebrationActive, setTrainingCelebrationActive] = useState(false);
   const robotButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -904,7 +904,7 @@ function RPSDoodleAppInner(){
   const overallWinRate = totalMatches ? playerWins / totalMatches : 0;
   const trainingRoundDisplay = Math.min(trainingCount + 1, TRAIN_ROUNDS);
   const shouldShowIdleBubble = !trainingActive && !trainingCelebrationActive && !robotResultReaction && (robotHovered || robotFocused || helpGuideOpen);
-  const robotBubbleContent: { message: string; buttons?: { label: string; onClick: () => void }[]; ariaLabel?: string; emphasise?: boolean } | null = trainingCelebrationActive
+  const robotBubbleContent: { message: React.ReactNode; buttons?: { label: string; onClick: () => void }[]; ariaLabel?: string; emphasise?: boolean } | null = trainingCelebrationActive
     ? {
         message: "Training complete! You can now play Modes (Challenge or Practice).",
         buttons: [
@@ -930,7 +930,18 @@ function RPSDoodleAppInner(){
       }
     : robotResultReaction
       ? {
-          message: robotResultReaction.message,
+          message: (
+            <div className="flex flex-col items-center gap-1 text-center text-slate-800">
+              <span className="text-3xl leading-none" aria-hidden="true">
+                {robotResultReaction.emoji}
+              </span>
+              {robotResultReaction.body && (
+                <span className="text-sm font-medium text-slate-800">
+                  {robotResultReaction.body}
+                </span>
+              )}
+            </div>
+          ),
           ariaLabel: robotResultReaction.label,
           emphasise: true,
         }
@@ -1614,19 +1625,20 @@ function RPSDoodleAppInner(){
     const reaction = (() => {
       if (modeForReaction === "practice") {
         return resultBanner === "Victory"
-          ? { message: "😊 Nice counter!", label: "Robot encourages you: Nice counter." }
+          ? { emoji: "😊", body: "Nice counter!", label: "Robot encourages you: Nice counter." }
           : resultBanner === "Defeat"
             ? {
-                message: "🤍 I saw a pattern—can you break it?",
+                emoji: "🤍",
+                body: "I saw a pattern—can you break it?",
                 label: "Robot reflects on the loss and encourages you to break the pattern.",
               }
-            : { message: "🤝 Even match—try mixing it up.", label: "Robot suggests mixing it up after an even match." };
+            : { emoji: "🤝", body: "Even match—try mixing it up.", label: "Robot suggests mixing it up after an even match." };
       }
       return resultBanner === "Victory"
-        ? { message: "👍", label: "Robot celebrates your win." }
+        ? { emoji: "👍", label: "Robot celebrates your win." }
         : resultBanner === "Defeat"
-          ? { message: "😮", label: "Robot is surprised by the loss." }
-          : { message: "🤔", label: "Robot is thinking about the tie." };
+          ? { emoji: "😮", label: "Robot is surprised by the loss." }
+          : { emoji: "🤔", label: "Robot is thinking about the tie." };
     })();
     setRobotResultReaction(reaction);
     if (robotResultTimeoutRef.current) {
@@ -3000,9 +3012,12 @@ function RPSDoodleAppInner(){
               className="pointer-events-auto relative max-w-xs rounded-2xl bg-white/95 px-4 py-2 text-sm text-slate-700 shadow-xl ring-1 ring-slate-200"
               role="status"
               aria-live="polite"
-              aria-label={robotBubbleContent.ariaLabel ?? robotBubbleContent.message}
+              aria-label={
+                robotBubbleContent.ariaLabel ??
+                (typeof robotBubbleContent.message === "string" ? robotBubbleContent.message : undefined)
+              }
             >
-              <div className={robotBubbleContent.emphasise ? "text-3xl text-center" : "text-sm font-medium text-slate-800"}>
+              <div className={robotBubbleContent.emphasise ? "text-slate-800" : "text-sm font-medium text-slate-800"}>
                 {robotBubbleContent.message}
               </div>
               {robotBubbleContent.buttons && (
