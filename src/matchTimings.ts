@@ -12,12 +12,12 @@ export const MATCH_TIMING_DEFAULTS: MatchTimings = {
   challenge: {
     countdownTickMs: 1100,
     revealHoldMs: 2200,
-    resultBannerMs: 1600,
+    resultBannerMs: 1200,
   },
   practice: {
     countdownTickMs: 1100,
     revealHoldMs: 2200,
-    resultBannerMs: 1600,
+    resultBannerMs: 1800,
   },
 };
 

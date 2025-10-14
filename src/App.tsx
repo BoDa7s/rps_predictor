@@ -542,7 +542,7 @@ function RPSDoodleAppInner(){
   const [helpGuideOpen, setHelpGuideOpen] = useState(false);
   const [robotHovered, setRobotHovered] = useState(false);
   const [robotFocused, setRobotFocused] = useState(false);
-  const [robotResultReaction, setRobotResultReaction] = useState<{ emoji: string; label: string } | null>(null);
+  const [robotResultReaction, setRobotResultReaction] = useState<{ message: string; label: string } | null>(null);
   const robotResultTimeoutRef = useRef<number | null>(null);
   const [trainingCelebrationActive, setTrainingCelebrationActive] = useState(false);
   const robotButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -930,7 +930,7 @@ function RPSDoodleAppInner(){
       }
     : robotResultReaction
       ? {
-          message: robotResultReaction.emoji,
+          message: robotResultReaction.message,
           ariaLabel: robotResultReaction.label,
           emphasise: true,
         }
@@ -1610,26 +1610,40 @@ function RPSDoodleAppInner(){
 
   useEffect(() => {
     if (scene !== "RESULTS" || !resultBanner) return;
-    const reaction = resultBanner === "Victory"
-      ? { emoji: "👍", label: "Robot celebrates your win." }
-      : resultBanner === "Defeat"
-        ? { emoji: "😮", label: "Robot is surprised by the loss." }
-        : { emoji: "🤔", label: "Robot is thinking about the tie." };
+    const modeForReaction: Mode = selectedMode ?? "practice";
+    const reaction = (() => {
+      if (modeForReaction === "practice") {
+        return resultBanner === "Victory"
+          ? { message: "😊 Nice counter!", label: "Robot encourages you: Nice counter." }
+          : resultBanner === "Defeat"
+            ? {
+                message: "🤍 I saw a pattern—can you break it?",
+                label: "Robot reflects on the loss and encourages you to break the pattern.",
+              }
+            : { message: "🤝 Even match—try mixing it up.", label: "Robot suggests mixing it up after an even match." };
+      }
+      return resultBanner === "Victory"
+        ? { message: "👍", label: "Robot celebrates your win." }
+        : resultBanner === "Defeat"
+          ? { message: "😮", label: "Robot is surprised by the loss." }
+          : { message: "🤔", label: "Robot is thinking about the tie." };
+    })();
     setRobotResultReaction(reaction);
     if (robotResultTimeoutRef.current) {
       window.clearTimeout(robotResultTimeoutRef.current);
     }
+    const reactionDuration = modeForReaction === "practice" ? 1800 : 1200;
     robotResultTimeoutRef.current = window.setTimeout(() => {
       setRobotResultReaction(null);
       robotResultTimeoutRef.current = null;
-    }, 1200);
+    }, reactionDuration);
     return () => {
       if (robotResultTimeoutRef.current) {
         window.clearTimeout(robotResultTimeoutRef.current);
         robotResultTimeoutRef.current = null;
       }
     };
-  }, [scene, resultBanner]);
+  }, [scene, resultBanner, selectedMode]);
 
   useEffect(() => {
     if (scene === "RESULTS") return;
