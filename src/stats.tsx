@@ -101,7 +101,7 @@ interface StatsContextValue {
   logRound: (round: Omit<RoundLog, "id" | "sessionId" | "playerId" | "profileId">) => RoundLog | null;
   logMatch: (match: Omit<MatchSummary, "id" | "sessionId" | "playerId" | "profileId">) => MatchSummary | null;
   selectProfile: (id: string) => void;
-  createProfile: (name: string) => StatsProfile | null;
+  createProfile: () => StatsProfile | null;
   updateProfile: (id: string, patch: StatsProfileUpdate) => void;
   forkProfileVersion: (id: string) => StatsProfile | null;
   exportJson: () => string;
@@ -122,14 +122,35 @@ const MATCH_KEY = "rps_stats_matches_v1";
 const PROFILE_KEY = "rps_stats_profiles_v1";
 const CURRENT_PROFILE_KEY = "rps_current_stats_profile_v1";
 const MAX_ROUNDS = 1000;
+const PRIMARY_BASE = "primary";
+
+function formatLineageBaseName(index: number): string {
+  const normalizedIndex = Number.isFinite(index) ? Math.max(1, Math.floor(index)) : 1;
+  return normalizedIndex <= 1 ? PRIMARY_BASE : `${PRIMARY_BASE} ${normalizedIndex}`;
+}
 
 function normalizeBaseName(name: string): string {
-  return name.replace(/\s+v\d+$/i, "").trim() || "Profile";
+  const trimmed = (name ?? "").replace(/\s+v\d+$/i, "").trim();
+  if (!trimmed) return PRIMARY_BASE;
+  const primaryMatch = trimmed.match(/^primary(?:\s+(\d+))?$/i);
+  if (primaryMatch) {
+    const parsed = primaryMatch[1] ? Number.parseInt(primaryMatch[1], 10) : 1;
+    return formatLineageBaseName(parsed || 1);
+  }
+  return trimmed;
 }
 
 function makeProfileDisplayName(baseName: string, version: number): string {
-  if (version <= 1) return baseName;
-  return `${baseName} v${version}`;
+  const normalizedBase = normalizeBaseName(baseName);
+  if (version <= 1) return normalizedBase;
+  return `${normalizedBase} v${version}`;
+}
+
+function getLineageIndex(baseName: string): number {
+  const match = normalizeBaseName(baseName).match(/^primary(?:\s+(\d+))?$/i);
+  if (!match) return Number.MAX_SAFE_INTEGER;
+  const parsed = match[1] ? Number.parseInt(match[1], 10) : 1;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
 function loadFromStorage<T>(key: string): T[] {
@@ -161,47 +182,34 @@ function loadProfiles(): StatsProfile[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.map((item: StatsProfile | any) => ({
-      id: typeof item?.id === "string" ? item.id : makeId("profile"),
-      playerId: typeof item?.playerId === "string" ? item.playerId : "",
-      baseName:
-        typeof item?.baseName === "string"
-          ? item.baseName
-          : normalizeBaseName(typeof item?.name === "string" ? item.name : "Profile"),
-      version:
-        typeof item?.version === "number"
-          ? item.version
-          : (() => {
-              if (typeof item?.name === "string") {
-                const match = item.name.match(/ v(\d+)$/i);
-                if (match) return Number.parseInt(match[1], 10) || 1;
-              }
-              return 1;
-            })(),
-      name: (() => {
-        const baseName =
-          typeof item?.baseName === "string"
-            ? item.baseName
-            : normalizeBaseName(typeof item?.name === "string" ? item.name : "Profile");
-        const version =
-          typeof item?.version === "number"
-            ? item.version
-            : (() => {
-                if (typeof item?.name === "string") {
-                  const match = item.name.match(/ v(\d+)$/i);
-                  if (match) return Number.parseInt(match[1], 10) || 1;
-                }
-                return 1;
-              })();
-        return makeProfileDisplayName(baseName, version);
-      })(),
-      createdAt: typeof item?.createdAt === "string" ? item.createdAt : new Date().toISOString(),
-      trainingCount: typeof item?.trainingCount === "number" ? item.trainingCount : 0,
-      trained: Boolean(item?.trained),
-      predictorDefault: typeof item?.predictorDefault === "boolean" ? item.predictorDefault : true,
-      previousProfileId: typeof item?.previousProfileId === "string" ? item.previousProfileId : null,
-      nextProfileId: typeof item?.nextProfileId === "string" ? item.nextProfileId : null,
-    }));
+    return parsed.map((item: StatsProfile | any) => {
+      const fallbackName = typeof item?.name === "string" ? item.name : PRIMARY_BASE;
+      const baseName = normalizeBaseName(typeof item?.baseName === "string" ? item.baseName : fallbackName);
+      const version = (() => {
+        if (typeof item?.version === "number" && Number.isFinite(item.version)) {
+          return Math.max(1, Math.floor(item.version));
+        }
+        const match = fallbackName.match(/ v(\d+)$/i);
+        if (match) {
+          const parsed = Number.parseInt(match[1], 10);
+          if (Number.isFinite(parsed) && parsed > 0) return parsed;
+        }
+        return 1;
+      })();
+      return {
+        id: typeof item?.id === "string" ? item.id : makeId("profile"),
+        playerId: typeof item?.playerId === "string" ? item.playerId : "",
+        baseName,
+        version,
+        name: makeProfileDisplayName(baseName, version),
+        createdAt: typeof item?.createdAt === "string" ? item.createdAt : new Date().toISOString(),
+        trainingCount: typeof item?.trainingCount === "number" ? item.trainingCount : 0,
+        trained: Boolean(item?.trained),
+        predictorDefault: item?.predictorDefault !== undefined ? Boolean(item.predictorDefault) : true,
+        previousProfileId: typeof item?.previousProfileId === "string" ? item.previousProfileId : null,
+        nextProfileId: typeof item?.nextProfileId === "string" ? item.nextProfileId : null,
+      } satisfies StatsProfile;
+    });
   } catch (err) {
     console.warn("Failed to read stats profiles", err);
     return [];
@@ -262,7 +270,30 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   const sessionId = sessionIdRef.current;
   const playerProfiles = useMemo(() => {
     if (!currentPlayerId) return [] as StatsProfile[];
-    return profiles.filter(p => p.playerId === currentPlayerId);
+    const filtered = profiles.filter(p => p.playerId === currentPlayerId);
+    const normalized = filtered.map(profile => {
+      const baseName = normalizeBaseName(profile.baseName ?? profile.name);
+      const rawVersion = profile.version;
+      const version = typeof rawVersion === "number" && Number.isFinite(rawVersion) ? Math.max(1, Math.floor(rawVersion)) : 1;
+      return {
+        ...profile,
+        baseName,
+        version,
+        name: makeProfileDisplayName(baseName, version),
+      } satisfies StatsProfile;
+    });
+    normalized.sort((a, b) => {
+      const indexDiff = getLineageIndex(a.baseName) - getLineageIndex(b.baseName);
+      if (indexDiff !== 0) return indexDiff;
+      const versionDiff = (b.version ?? 1) - (a.version ?? 1);
+      if (versionDiff !== 0) return versionDiff;
+      if (getLineageIndex(a.baseName) === Number.MAX_SAFE_INTEGER) {
+        const baseCompare = a.baseName.localeCompare(b.baseName);
+        if (baseCompare !== 0) return baseCompare;
+      }
+      return (a.createdAt || "").localeCompare(b.createdAt || "");
+    });
+    return normalized;
   }, [profiles, currentPlayerId]);
 
   useEffect(() => {
@@ -274,12 +305,13 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     if (playerProfiles.length === 0) {
+      const baseName = formatLineageBaseName(1);
       const defaultProfile: StatsProfile = {
         id: makeId("profile"),
         playerId: currentPlayerId,
-        baseName: "Primary",
+        baseName,
         version: 1,
-        name: makeProfileDisplayName("Primary", 1),
+        name: makeProfileDisplayName(baseName, 1),
         createdAt: new Date().toISOString(),
         trainingCount: 0,
         trained: false,
@@ -365,15 +397,22 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     saveCurrentProfileId(id);
   }, [playerProfiles]);
 
-  const createProfile = useCallback((name: string) => {
+  const createProfile = useCallback(() => {
     if (!currentPlayerId) return null;
-    const baseName = name.trim() || "Profile";
+    const highestVersion = playerProfiles.reduce((max, profile) => Math.max(max, profile.version ?? 1), 1);
+    const existingBaseNames = new Set(playerProfiles.map(profile => profile.baseName));
+    let index = 1;
+    while (existingBaseNames.has(formatLineageBaseName(index))) {
+      index += 1;
+    }
+    const baseName = formatLineageBaseName(index);
+    const version = highestVersion > 1 ? highestVersion : 1;
     const profile: StatsProfile = {
       id: makeId("profile"),
       playerId: currentPlayerId,
       baseName,
-      version: 1,
-      name: makeProfileDisplayName(baseName, 1),
+      version,
+      name: makeProfileDisplayName(baseName, version),
       createdAt: new Date().toISOString(),
       trainingCount: 0,
       trained: false,
@@ -386,15 +425,19 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     setCurrentProfileId(profile.id);
     saveCurrentProfileId(profile.id);
     return profile;
-  }, [currentPlayerId]);
+  }, [currentPlayerId, playerProfiles]);
 
   const updateProfile = useCallback((id: string, patch: StatsProfileUpdate) => {
     setProfiles(prev => prev.map(p => {
       if (p.id !== id) return p;
       const next = { ...p, ...patch };
       if (patch.baseName || patch.version) {
-        const baseName = patch.baseName ?? next.baseName;
-        const version = patch.version ?? next.version;
+        const baseName = normalizeBaseName(patch.baseName ?? next.baseName);
+        const rawVersion = patch.version ?? next.version ?? 1;
+        const version =
+          typeof rawVersion === "number" && Number.isFinite(rawVersion) ? Math.max(1, Math.floor(rawVersion)) : 1;
+        next.baseName = baseName;
+        next.version = version;
         next.name = makeProfileDisplayName(baseName, version);
       }
       return next;
@@ -406,8 +449,12 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     if (!currentPlayerId) return null;
     const source = profiles.find(p => p.id === id && p.playerId === currentPlayerId);
     if (!source) return null;
-    const sourceVersion = source.version ?? 1;
-    const baseName = source.baseName ?? normalizeBaseName(source.name);
+    const sourceVersionRaw = source.version;
+    const sourceVersion =
+      typeof sourceVersionRaw === "number" && Number.isFinite(sourceVersionRaw)
+        ? Math.max(1, Math.floor(sourceVersionRaw))
+        : 1;
+    const baseName = normalizeBaseName(source.baseName ?? source.name);
     const nextVersion = sourceVersion + 1;
     const newProfile: StatsProfile = {
       id: makeId("profile"),

@@ -507,6 +507,8 @@ function RPSDoodleAppInner(){
   const developerTriggerRef = useRef({ count: 0, lastClick: 0 });
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [resetDialogAcknowledged, setResetDialogAcknowledged] = useState(false);
+  const [createProfileDialogOpen, setCreateProfileDialogOpen] = useState(false);
+  const [createProfileDialogAcknowledged, setCreateProfileDialogAcknowledged] = useState(false);
   const handleDeveloperHotspotClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (!DEV_MODE_ENABLED) return;
@@ -950,7 +952,6 @@ function RPSDoodleAppInner(){
   }, [rounds]);
 
   const EXPORT_WARNING_TEXT = "Export may include personal/demographic info. You are responsible for how exported files are stored and shared. No liability is assumed.";
-  const PROFILE_WARNING_TEXT = "New statistics profile requires retraining (10 rounds) before normal play. Existing stats remain available but do not merge.";
   const RESET_TRAINING_TOAST =
     "You’re starting a new training run. Your previous results are archived and linked as Profile History. You can review past vs new results in Statistics.";
   const sanitizeForFile = useCallback((value: string) => {
@@ -967,15 +968,24 @@ function RPSDoodleAppInner(){
       setPlayerModalMode("create");
       return;
     }
-    if (!window.confirm(PROFILE_WARNING_TEXT)) return;
-    const defaultName = `Profile ${statsProfiles.length + 1}`;
-    const name = window.prompt("Name for new statistics profile?", defaultName)?.trim();
-    if (!name) return;
-    const created = createStatsProfile(name);
-    if (created) {
-      setLive("New statistics profile created. Complete training to enable challenge mode.");
-    }
-  }, [currentPlayer, statsProfiles.length, createStatsProfile, setLive]);
+    setCreateProfileDialogAcknowledged(false);
+    setCreateProfileDialogOpen(true);
+  }, [currentPlayer, setPlayerModalMode]);
+
+  const handleCloseCreateProfileDialog = useCallback(() => {
+    setCreateProfileDialogOpen(false);
+    setCreateProfileDialogAcknowledged(false);
+  }, []);
+
+  const handleConfirmCreateProfile = useCallback(() => {
+    const created = createStatsProfile();
+    if (!created) return;
+    setCreateProfileDialogOpen(false);
+    setCreateProfileDialogAcknowledged(false);
+    const message = `New profile created: ${created.name}. Training starts now (${TRAIN_ROUNDS} rounds). Your previous results remain available in Statistics.`;
+    setToastMessage(message);
+    setLive(`New statistics profile created: ${created.name}. Training starts now (${TRAIN_ROUNDS} rounds). Previous results remain available in Statistics.`);
+  }, [createStatsProfile, setToastMessage, setLive, TRAIN_ROUNDS]);
 
   const handleExportJson = useCallback(() => {
     if (!currentPlayer || !currentProfile) return;
@@ -1445,6 +1455,69 @@ function RPSDoodleAppInner(){
                     className={`rounded-lg px-4 py-2 text-sm font-medium text-white shadow ${resetDialogAcknowledged ? "bg-sky-600 hover:bg-sky-700" : "bg-slate-400 cursor-not-allowed"}`}
                   >
                     Reset training
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {createProfileDialogOpen && (
+          <motion.div
+            className="fixed inset-0 z-[90] grid place-items-center bg-slate-900/50 px-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={handleCloseCreateProfileDialog}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="w-[min(520px,100%)] rounded-2xl bg-white p-6 shadow-2xl"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="create-profile-title"
+              aria-describedby="create-profile-body"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <h2 id="create-profile-title" className="text-lg font-semibold text-slate-900">
+                    Create New Statistics Profile
+                  </h2>
+                  <p id="create-profile-body" className="text-sm text-slate-600">
+                    New statistics profile requires retraining ({TRAIN_ROUNDS} rounds) before normal play. Existing stats remain
+                    available in Statistics but do not merge.
+                  </p>
+                </div>
+                <label className="flex items-start gap-3 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={createProfileDialogAcknowledged}
+                    onChange={e => setCreateProfileDialogAcknowledged(e.target.checked)}
+                    className="mt-1"
+                  />
+                  <span>I understand retraining is required and past results won't merge.</span>
+                </label>
+                <div className="flex flex-wrap justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleCloseCreateProfileDialog}
+                    className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmCreateProfile}
+                    disabled={!createProfileDialogAcknowledged}
+                    className={`rounded-lg px-4 py-2 text-sm font-medium text-white shadow ${createProfileDialogAcknowledged ? "bg-sky-600 hover:bg-sky-700" : "bg-slate-400 cursor-not-allowed"}`}
+                  >
+                    Create Profile
                   </button>
                 </div>
               </div>
