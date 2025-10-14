@@ -100,13 +100,13 @@ export function DeveloperConsole({ open, onClose }: DeveloperConsoleProps) {
     });
     adminMatches.forEach(m => {
       const ref = byPlayer.get(m.playerId) || { name: m.playerId, rounds: 0, matches: 0 };
-      ref.name = players.find(p => p.id === m.playerId)?.displayName || ref.name;
+      ref.name = players.find(p => p.id === m.playerId)?.playerName || ref.name;
       ref.matches += 1;
       byPlayer.set(m.playerId, ref);
     });
     players.forEach(p => {
-      const ref = byPlayer.get(p.id) || { name: p.displayName, rounds: 0, matches: 0 };
-      ref.name = p.displayName;
+      const ref = byPlayer.get(p.id) || { name: p.playerName, rounds: 0, matches: 0 };
+      ref.name = p.playerName;
       byPlayer.set(p.id, ref);
     });
     const distribution = Array.from(byPlayer.entries()).map(([playerId, stats]) => ({
@@ -342,7 +342,7 @@ export function DeveloperConsole({ open, onClose }: DeveloperConsoleProps) {
                       style={{ background: "rgba(15,25,45,0.8)", borderRadius: "12px", padding: "16px", display: "grid", gap: "12px" }}
                     >
                       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <strong>{player.displayName}</strong>
+                        <strong>{player.playerName}</strong>
                         <button
                           onClick={() => handlePlayerDelete(player.id)}
                           style={{
@@ -443,18 +443,20 @@ interface PlayerEditorProps {
 
 function PlayerEditor({ player, playerId, onUpdate }: PlayerEditorProps) {
   const [form, setForm] = useState(() => ({
-    displayName: player.displayName,
-    gradeBand: player.gradeBand,
-    ageBand: player.ageBand ?? "",
+    playerName: player.playerName,
+    grade: player.grade,
+    age: player.age != null ? String(player.age) : "",
+    school: player.school ?? "",
     gender: player.gender ?? "",
     priorExperience: player.priorExperience ?? "",
   }));
 
   useEffect(() => {
     setForm({
-      displayName: player.displayName,
-      gradeBand: player.gradeBand,
-      ageBand: player.ageBand ?? "",
+      playerName: player.playerName,
+      grade: player.grade,
+      age: player.age != null ? String(player.age) : "",
+      school: player.school ?? "",
       gender: player.gender ?? "",
       priorExperience: player.priorExperience ?? "",
     });
@@ -465,10 +467,12 @@ function PlayerEditor({ player, playerId, onUpdate }: PlayerEditorProps) {
   };
 
   const handleSave = async () => {
+    const parsedAge = form.age ? Number.parseInt(form.age, 10) : undefined;
     await onUpdate(playerId, {
-      displayName: form.displayName,
-      gradeBand: form.gradeBand,
-      ageBand: form.ageBand || undefined,
+      playerName: form.playerName,
+      grade: form.grade,
+      age: Number.isFinite(parsedAge as number) ? parsedAge : undefined,
+      school: form.school || undefined,
       gender: form.gender || undefined,
       priorExperience: form.priorExperience || undefined,
     });
@@ -477,29 +481,38 @@ function PlayerEditor({ player, playerId, onUpdate }: PlayerEditorProps) {
   return (
     <div style={{ display: "grid", gap: "8px" }}>
       <label style={{ display: "grid", gap: "4px" }}>
-        <span style={{ fontSize: "0.75rem", opacity: 0.6 }}>Display name</span>
+        <span style={{ fontSize: "0.75rem", opacity: 0.6 }}>Player name</span>
         <input
           type="text"
-          value={form.displayName}
-          onChange={e => handleChange("displayName", e.target.value)}
+          value={form.playerName}
+          onChange={e => handleChange("playerName", e.target.value)}
           style={{ padding: "8px 10px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.2)", background: "rgba(8,13,25,0.8)", color: "inherit" }}
         />
       </label>
       <label style={{ display: "grid", gap: "4px" }}>
-        <span style={{ fontSize: "0.75rem", opacity: 0.6 }}>Grade band</span>
+        <span style={{ fontSize: "0.75rem", opacity: 0.6 }}>Grade</span>
         <input
           type="text"
-          value={form.gradeBand}
-          onChange={e => handleChange("gradeBand", e.target.value)}
+          value={form.grade}
+          onChange={e => handleChange("grade", e.target.value)}
           style={{ padding: "8px 10px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.2)", background: "rgba(8,13,25,0.8)", color: "inherit" }}
         />
       </label>
       <label style={{ display: "grid", gap: "4px" }}>
-        <span style={{ fontSize: "0.75rem", opacity: 0.6 }}>Age band</span>
+        <span style={{ fontSize: "0.75rem", opacity: 0.6 }}>Age</span>
         <input
           type="text"
-          value={form.ageBand}
-          onChange={e => handleChange("ageBand", e.target.value)}
+          value={form.age}
+          onChange={e => handleChange("age", e.target.value)}
+          style={{ padding: "8px 10px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.2)", background: "rgba(8,13,25,0.8)", color: "inherit" }}
+        />
+      </label>
+      <label style={{ display: "grid", gap: "4px" }}>
+        <span style={{ fontSize: "0.75rem", opacity: 0.6 }}>School</span>
+        <input
+          type="text"
+          value={form.school}
+          onChange={e => handleChange("school", e.target.value)}
           style={{ padding: "8px 10px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.2)", background: "rgba(8,13,25,0.8)", color: "inherit" }}
         />
       </label>

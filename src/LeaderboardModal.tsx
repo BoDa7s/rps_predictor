@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import { motion } from "framer-motion";
 import { useStats, RoundLog } from "./stats";
-import { usePlayers, GradeBand } from "./players";
+import { usePlayers, Grade } from "./players";
 import { AIMode, Mode } from "./gameTypes";
 import { computeMatchScore } from "./leaderboard";
 
@@ -16,7 +16,7 @@ interface LeaderboardMatchEntry {
   playerId: string;
   profileId: string;
   playerName: string;
-  gradeBand?: GradeBand;
+  grade?: Grade;
   score: number;
   streak: number;
   rounds: number;
@@ -99,11 +99,11 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
   }, [open, onClose]);
 
   const playersById = useMemo(() => {
-    const map = new Map<string, { name: string; grade?: GradeBand; consented: boolean }>();
+    const map = new Map<string, { name: string; grade?: Grade; consented: boolean }>();
     players.forEach(player => {
       map.set(player.id, {
-        name: player.displayName,
-        grade: player.gradeBand,
+        name: player.playerName,
+        grade: player.grade,
         consented: Boolean(player.consent?.agreed),
       });
     });
@@ -150,7 +150,7 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
         playerId: match.playerId,
         profileId: match.profileId,
         playerName: player.name,
-        gradeBand: player.grade,
+        grade: player.grade,
         score: totalScore,
         streak: maxStreak,
         rounds: roundCount,
@@ -238,9 +238,9 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
                       <td className="px-3 py-2">
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-slate-800">{row.playerName}</span>
-                          {row.gradeBand && (
+                          {row.grade && (
                             <span className="inline-flex items-center rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
-                              {row.gradeBand}
+                              Grade {row.grade === "Not applicable" ? "N/A" : row.grade}
                             </span>
                           )}
                         </div>

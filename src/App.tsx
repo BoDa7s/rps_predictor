@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, DecisionPolicy } from "./stats";
-import { PlayersProvider, usePlayers, GradeBand, AgeBand, Gender, PlayerProfile, CONSENT_TEXT_VERSION } from "./players";
+import { PlayersProvider, usePlayers, Grade, Gender, PlayerProfile, CONSENT_TEXT_VERSION, GRADE_OPTIONS, GENDER_OPTIONS } from "./players";
 import { DEV_MODE_ENABLED } from "./devMode";
 import { DeveloperConsole } from "./DeveloperConsole";
 import { lockSecureStore } from "./secureStore";
@@ -479,9 +479,21 @@ function RPSDoodleAppInner(){
   useEffect(() => { setRoundPage(0); }, [roundFilters, profileRounds]);
   const rounds = useMemo(() => profileRounds, [profileRounds]);
   const matches = useMemo(() => profileMatches, [profileMatches]);
-  const [showPlayerModal, setShowPlayerModal] = useState(false);
-  useEffect(() => { if (!hasConsented) setShowPlayerModal(true); }, [hasConsented]);
+  type PlayerModalMode = "hidden" | "create" | "edit";
+  const [playerModalMode, setPlayerModalMode] = useState<PlayerModalMode>("hidden");
+  const isPlayerModalOpen = playerModalMode !== "hidden";
+  useEffect(() => {
+    if (!hasConsented) {
+      setPlayerModalMode(currentPlayer ? "edit" : "create");
+    }
+  }, [hasConsented, currentPlayer]);
   useEffect(() => { if (!hasConsented) setLeaderboardOpen(false); }, [hasConsented]);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  useEffect(() => {
+    if (!toastMessage) return;
+    const id = window.setTimeout(() => setToastMessage(null), 4000);
+    return () => window.clearTimeout(id);
+  }, [toastMessage]);
   const [developerOpen, setDeveloperOpen] = useState(false);
   const developerTriggerRef = useRef({ count: 0, lastClick: 0 });
   const handleDeveloperHotspotClick = useCallback(
@@ -529,6 +541,12 @@ function RPSDoodleAppInner(){
   .wipe.run{ animation: wipeIn 400ms cubic-bezier(.22,.61,.36,1) forwards; }
   @keyframes wipeIn{ 0%{ transform:translateX(110%) rotate(.5deg) } 100%{ transform:translateX(0) rotate(0) } }
   `;
+
+  const gradeDisplay = currentPlayer ? (currentPlayer.grade === "Not applicable" ? "N/A" : currentPlayer.grade) : null;
+  const playerLabel = currentPlayer ? `Player: ${currentPlayer.playerName} (Grade ${gradeDisplay})` : "Player: Not set";
+  const demographicsNeedReview = Boolean(currentPlayer?.needsReview);
+  const resolvedModalMode: "create" | "edit" = playerModalMode === "edit" && currentPlayer ? "edit" : "create";
+  const modalPlayer = resolvedModalMode === "edit" ? currentPlayer : null;
 
   type Scene = "BOOT"|"MODE"|"MATCH"|"RESULTS";
   const [scene, setScene] = useState<Scene>("BOOT");
@@ -886,7 +904,7 @@ function RPSDoodleAppInner(){
 
   const handleCreateProfile = useCallback(() => {
     if (!currentPlayer) {
-      setShowPlayerModal(true);
+      setPlayerModalMode("create");
       return;
     }
     if (!window.confirm(PROFILE_WARNING_TEXT)) return;
@@ -897,7 +915,7 @@ function RPSDoodleAppInner(){
     if (created) {
       setLive("New statistics profile created. Complete training to enable challenge mode.");
     }
-  }, [currentPlayer, statsProfiles.length, createStatsProfile, setLive, setShowPlayerModal]);
+  }, [currentPlayer, statsProfiles.length, createStatsProfile, setLive]);
 
   const handleExportJson = useCallback(() => {
     if (!currentPlayer || !currentProfile) return;
@@ -1283,6 +1301,12 @@ function RPSDoodleAppInner(){
 
       <LiveRegion message={live} />
 
+      {toastMessage && (
+        <div className="fixed top-20 right-4 z-[95]" role="status" aria-live="polite">
+          <div className="rounded-lg bg-slate-900/90 px-4 py-2 text-sm text-white shadow-lg">{toastMessage}</div>
+        </div>
+      )}
+
       {/* Header / Settings */}
       <div className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between">
         <motion.h1 layout className="text-2xl font-extrabold tracking-tight text-sky-700 drop-shadow-sm">RPS Lab</motion.h1>
@@ -1301,10 +1325,29 @@ function RPSDoodleAppInner(){
             >
               Leaderboard
             </button>
-            <button onClick={() => setShowPlayerModal(true)} className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900">
-              {currentPlayer ? `${currentPlayer.displayName} (${currentPlayer.gradeBand})` : 'Set up profile'}
+            <div
+              className={"px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 text-slate-700 flex items-center gap-2 " + (demographicsNeedReview ? "ring-2 ring-amber-400" : "")}
+              aria-live="polite"
+            >
+              <span>{playerLabel}</span>
+              {demographicsNeedReview && (
+                <span className="text-xs font-semibold text-amber-600">Needs review</span>
+              )}
+            </div>
+            <button
+              onClick={() => {
+                if (!hasConsented) {
+                  setPlayerModalMode(currentPlayer ? "edit" : "create");
+                  return;
+                }
+                goToMode();
+              }}
+              title={!hasConsented ? "Check consent to continue." : undefined}
+              disabled={modesDisabled || !hasConsented}
+              className={"px-3 py-1.5 rounded-xl shadow text-sm " + ((modesDisabled || !hasConsented) ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900")}
+            >
+              Modes
             </button>
-            <button onClick={() => { if (!hasConsented) { setShowPlayerModal(true); return; } goToMode(); }} title={!hasConsented ? "Check consent to continue." : undefined} disabled={modesDisabled || !hasConsented} className={"px-3 py-1.5 rounded-xl shadow text-sm " + ((modesDisabled || !hasConsented) ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900")}>Modes</button>
           <details className="bg-white/70 rounded-xl shadow group">
             <summary className="list-none px-3 py-1.5 cursor-pointer text-sm text-slate-900">Settings ⚙️</summary>
             <div className="p-3 pt-0 space-y-2 text-sm">
@@ -1323,7 +1366,24 @@ function RPSDoodleAppInner(){
               <hr className="my-2" />
               <div className="space-y-2">
                 <div className="text-xs text-slate-500">Profile &amp; data</div>
-                <button className="px-2 py-1 rounded bg-sky-100 text-sky-700" onClick={()=> setShowPlayerModal(true)}>Edit demographics</button>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <button
+                    className="px-2 py-1 rounded bg-sky-100 text-sky-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    onClick={() => setPlayerModalMode(currentPlayer ? "edit" : "create")}
+                    disabled={!currentPlayer}
+                  >
+                    Edit demographics
+                  </button>
+                  <button
+                    className="px-2 py-1 rounded bg-white shadow text-slate-700 hover:bg-slate-50"
+                    onClick={() => setPlayerModalMode("create")}
+                  >
+                    Create new player
+                  </button>
+                </div>
+                {demographicsNeedReview && (
+                  <p className="text-xs text-amber-600">Demographics need review. Update grade and age from Edit demographics.</p>
+                )}
                 <p className="text-xs text-slate-500 max-w-xs">Use the Statistics panel to export your data. Exports always include your demographics alongside the selected statistics profile.</p>
               </div>
               <label className="flex items-center justify-between gap-4"><span>Best of</span>
@@ -1825,13 +1885,29 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
       {/* Player Setup Modal */}
       <AnimatePresence>
-        {showPlayerModal && (
-          <motion.div key="pmask" className="fixed inset-0 z-[70] bg-black/30 grid place-items-center" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onKeyDown={(e:any)=>{ if (e.key==='Escape' && hasConsented) setShowPlayerModal(false); }}>
+        {isPlayerModalOpen && (
+          <motion.div
+            key="pmask"
+            className="fixed inset-0 z-[70] bg-black/30 grid place-items-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onKeyDown={(e:any)=>{ if (e.key==='Escape' && hasConsented) setPlayerModalMode("hidden"); }}
+          >
             <motion.div role="dialog" aria-modal="true" aria-label="Player Setup" className="bg-white rounded-2xl shadow-xl w-[min(94vw,520px)]" initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 6, opacity: 0 }}>
               <PlayerSetupForm
-                currentPlayer={currentPlayer ?? null}
-                onClose={()=> { if (hasConsented) setShowPlayerModal(false); }}
-                onSaved={()=> { setShowPlayerModal(false); }}
+                mode={resolvedModalMode}
+                player={modalPlayer}
+                onClose={()=> { if (hasConsented) setPlayerModalMode("hidden"); }}
+                onSaved={(result) => {
+                  setPlayerModalMode("hidden");
+                  if (result.action === "create") {
+                    setToastMessage("New player starts a fresh training session (10 rounds).");
+                    setLive("New player created. Training required before challenge modes unlock.");
+                  } else {
+                    setLive("Player demographics updated.");
+                  }
+                }}
                 createPlayer={createPlayer}
                 updatePlayer={updatePlayer}
               />
@@ -1863,53 +1939,71 @@ function RPSDoodleAppInner(){
 }
 
 interface PlayerSetupFormProps {
-  currentPlayer: PlayerProfile | null;
+  mode: "create" | "edit";
+  player: PlayerProfile | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (result: { action: "create" | "update"; player: PlayerProfile }) => void;
   createPlayer: (input: Omit<PlayerProfile, "id">) => PlayerProfile;
   updatePlayer: (id: string, patch: Partial<Omit<PlayerProfile, "id">>) => void;
 }
 
-function PlayerSetupForm({ currentPlayer, onClose, onSaved, createPlayer, updatePlayer }: PlayerSetupFormProps){
-  const [displayName, setDisplayName] = useState(currentPlayer?.displayName ?? "");
-  const [gradeBand, setGradeBand] = useState<GradeBand>(currentPlayer?.gradeBand ?? "K-2");
-  const [ageBand, setAgeBand] = useState<AgeBand>(currentPlayer?.ageBand ?? "Prefer not to say");
-  const [gender, setGender] = useState<Gender>(currentPlayer?.gender ?? "Prefer not to say");
-  const [priorExperience, setPriorExperience] = useState(currentPlayer?.priorExperience ?? "");
-  const [consentChecked, setConsentChecked] = useState<boolean>(currentPlayer?.consent?.agreed ?? false);
+const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => 5 + index);
+
+function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updatePlayer }: PlayerSetupFormProps){
+  const [playerName, setPlayerName] = useState(player?.playerName ?? "");
+  const [grade, setGrade] = useState<Grade | "">(player?.grade ?? "");
+  const [age, setAge] = useState<string>(player?.age != null ? String(player.age) : "");
+  const [school, setSchool] = useState(player?.school ?? "");
+  const [gender, setGender] = useState<Gender>(player?.gender ?? "Prefer not to say");
+  const [priorExperience, setPriorExperience] = useState(player?.priorExperience ?? "");
+  const [consentChecked, setConsentChecked] = useState<boolean>(player?.consent?.agreed ?? false);
 
   useEffect(() => {
-    setDisplayName(currentPlayer?.displayName ?? "");
-    setGradeBand(currentPlayer?.gradeBand ?? "K-2");
-    setAgeBand(currentPlayer?.ageBand ?? "Prefer not to say");
-    setGender(currentPlayer?.gender ?? "Prefer not to say");
-    setPriorExperience(currentPlayer?.priorExperience ?? "");
-    setConsentChecked(currentPlayer?.consent?.agreed ?? false);
-  }, [currentPlayer]);
+    setPlayerName(player?.playerName ?? "");
+    setGrade(player?.grade ?? "");
+    setAge(player?.age != null ? String(player.age) : "");
+    setSchool(player?.school ?? "");
+    setGender(player?.gender ?? "Prefer not to say");
+    setPriorExperience(player?.priorExperience ?? "");
+    setConsentChecked(player?.consent?.agreed ?? false);
+  }, [player, mode]);
 
-  const saveDisabled = !displayName.trim() || !consentChecked;
-  const title = currentPlayer ? "Edit your profile" : "Create your profile";
+  const saveDisabled = !playerName.trim() || !grade || !age || !consentChecked;
+  const title = mode === "edit" ? "Edit player demographics" : "Create new player";
+  const showReviewNotice = mode === "edit" && player?.needsReview;
+  const genderOptions = GENDER_OPTIONS;
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-    const trimmed = displayName.trim();
-    if (!trimmed || !consentChecked) return;
+    const trimmedName = playerName.trim();
+    if (!trimmedName || !grade || !age || !consentChecked) return;
+    const parsedAge = Number.parseInt(age, 10);
+    if (!Number.isFinite(parsedAge)) return;
+    const schoolValue = school.trim();
+    const priorValue = priorExperience.trim();
     const consent = {
       agreed: consentChecked,
       timestamp: new Date().toISOString(),
       consentTextVersion: CONSENT_TEXT_VERSION,
     };
-    if (currentPlayer) {
-      updatePlayer(currentPlayer.id, { displayName: trimmed, gradeBand, ageBand, gender, priorExperience, consent });
+    const payload = {
+      playerName: trimmedName,
+      grade: grade as Grade,
+      age: parsedAge,
+      school: schoolValue ? schoolValue : undefined,
+      gender,
+      priorExperience: priorValue ? priorValue : undefined,
+      consent,
+      needsReview: false,
+    } satisfies Omit<PlayerProfile, "id">;
+    if (mode === "edit" && player) {
+      updatePlayer(player.id, payload);
+      onSaved({ action: "update", player: { ...player, ...payload } });
     } else {
-      const created = createPlayer({ displayName: trimmed, gradeBand, ageBand, gender, priorExperience, consent });
+      const created = createPlayer(payload);
+      onSaved({ action: "create", player: created });
     }
-    onSaved();
   };
-
-  const gradeOptions: GradeBand[] = ["K-2", "3-5", "6-8", "9-12"];
-  const ageOptions: AgeBand[] = ["<8", "8-10", "11-13", "14-18", "Prefer not to say"];
-  const genderOptions: Gender[] = ["Male", "Female", "Non-binary", "Prefer not to say"];
 
   return (
     <form onSubmit={handleSubmit} className="p-5 space-y-4" aria-label="Player setup form">
@@ -1918,32 +2012,72 @@ function PlayerSetupForm({ currentPlayer, onClose, onSaved, createPlayer, update
         <button type="button" onClick={onClose} className="text-sm text-slate-500 hover:text-slate-700">Close</button>
       </div>
       <div className="grid gap-3">
+        {showReviewNotice && (
+          <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+            Please confirm the player name, grade, and age to continue.
+          </div>
+        )}
+        {mode === "create" && (
+          <div className="rounded border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-700">
+            A new player will begin a fresh training session after saving.
+          </div>
+        )}
         <label className="text-sm font-medium text-slate-700">
-          Display name
+          Player name
           <input
             type="text"
-            value={displayName}
-            onChange={e => setDisplayName(e.target.value)}
+            value={playerName}
+            onChange={e => setPlayerName(e.target.value)}
             className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
             placeholder="e.g. Alex"
             required
           />
         </label>
         <label className="text-sm font-medium text-slate-700">
-          Grade band
-          <select value={gradeBand} onChange={e => setGradeBand(e.target.value as GradeBand)} className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner">
-            {gradeOptions.map(option => (
-              <option key={option} value={option}>{option}</option>
+          Grade
+          <select
+            value={grade}
+            onChange={e => setGrade(e.target.value as Grade | "")}
+            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+            required
+          >
+            <option value="" disabled>
+              Select grade
+            </option>
+            {GRADE_OPTIONS.map(option => (
+              <option key={option} value={option}>
+                {option}
+              </option>
             ))}
           </select>
         </label>
         <label className="text-sm font-medium text-slate-700">
-          Age range
-          <select value={ageBand} onChange={e => setAgeBand(e.target.value as AgeBand)} className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner">
-            {ageOptions.map(option => (
-              <option key={option} value={option}>{option}</option>
+          Age
+          <select
+            value={age}
+            onChange={e => setAge(e.target.value)}
+            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+            required
+          >
+            <option value="" disabled>
+              Select age
+            </option>
+            {AGE_OPTIONS.map(option => (
+              <option key={option} value={option}>
+                {option}
+              </option>
             ))}
           </select>
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          School (optional)
+          <input
+            type="text"
+            value={school}
+            onChange={e => setSchool(e.target.value)}
+            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+            placeholder="e.g. Roosevelt Elementary"
+          />
         </label>
         <label className="text-sm font-medium text-slate-700">
           Gender
@@ -1955,7 +2089,13 @@ function PlayerSetupForm({ currentPlayer, onClose, onSaved, createPlayer, update
         </label>
         <label className="text-sm font-medium text-slate-700">
           Prior experience (optional)
-          <textarea value={priorExperience} onChange={e => setPriorExperience(e.target.value)} rows={3} className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner" placeholder="Tell us about previous AI or RPS experience" />
+          <textarea
+            value={priorExperience}
+            onChange={e => setPriorExperience(e.target.value)}
+            rows={3}
+            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+            placeholder="Tell us about previous AI or RPS experience"
+          />
         </label>
       </div>
       <label className="flex items-start gap-3 text-sm text-slate-700">

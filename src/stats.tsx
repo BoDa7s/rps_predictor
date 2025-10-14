@@ -408,8 +408,9 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     const headers = [
       "playerId",
       "playerName",
-      "gradeBand",
-      "ageBand",
+      "grade",
+      "age",
+      "school",
       "gender",
       "priorExperience",
       "profileName",
@@ -427,9 +428,10 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       "streakYou",
     ];
     const lines = [headers.join(",")];
-    const playerName = currentPlayer?.displayName ?? "";
-    const grade = currentPlayer?.gradeBand ?? "";
-    const age = currentPlayer?.ageBand ?? "";
+    const playerName = currentPlayer?.playerName ?? "";
+    const grade = currentPlayer?.grade ?? "";
+    const age = currentPlayer?.age != null ? currentPlayer.age : "";
+    const school = currentPlayer?.school ?? "";
     const gender = currentPlayer?.gender ?? "";
     const prior = currentPlayer?.priorExperience ?? "";
     const profileName = currentProfile?.name ?? "";
@@ -438,7 +440,8 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         r.playerId,
         JSON.stringify(playerName),
         grade,
-        JSON.stringify(age ?? ""),
+        age,
+        JSON.stringify(school ?? ""),
         JSON.stringify(gender ?? ""),
         JSON.stringify(prior ?? ""),
         JSON.stringify(profileName),
