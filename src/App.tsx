@@ -1602,7 +1602,7 @@ function RPSDoodleAppInner(){
             {/* Outcome feedback */}
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .15 }} className="h-8 mt-2 text-lg font-semibold">
               <AnimatePresence mode="wait">
-                {phase === "resolve" && outcome && (
+                {(phase === "resolve" || phase === "feedback") && outcome && (
                   <motion.div key={outcome} initial={{ y: 8, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -8, opacity: 0 }} transition={{ duration: .22 }} className={ outcome === "win" ? "text-green-700" : outcome === "lose" ? "text-rose-700" : "text-amber-700" }>
                     {outcome === "win" ? "You win!" : outcome === "lose" ? "You lose." : "Tie."}
                   </motion.div>
