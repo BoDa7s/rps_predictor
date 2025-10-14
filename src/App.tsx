@@ -1627,22 +1627,25 @@ function RPSDoodleAppInner(){
     const modeForReaction: Mode = selectedMode ?? "practice";
     const reaction = modeForReaction === "challenge"
       ? outcome === "win"
-        ? {
-            emoji: "😎",
-            body: "“Too easy. Try to keep up.”",
-            label: "Robot boasts after you win the round: Too easy. Try to keep up.",
-          }
+        ? 
+            {
+              emoji: "😏",
+              body: "Lucky hit! Don’t get cocky!",
+              label: "Robot teases after winning the round: Lucky hit. Don’t get cocky.",
+            }
+        
         : outcome === "tie"
           ? {
               emoji: "🤨",
-              body: "“Not bad… but I’m still catching up.”",
+              body: "Not bad! but I’m still catching up!",
               label: "Robot comments on a tied round: Not bad, but still catching up.",
             }
+
           : {
-              emoji: "😏",
-              body: "“Lucky hit. Don’t get cocky.”",
-              label: "Robot teases after winning the round: Lucky hit. Don’t get cocky.",
-            }
+            emoji: "😎",
+            body: "Too easy! Try to keep up!",
+            label: "Robot boasts after you win the round: Too easy. Try to keep up.",
+          }
       : outcome === "win"
         ? {
             emoji: "😊",
@@ -1652,12 +1655,12 @@ function RPSDoodleAppInner(){
         : outcome === "tie"
           ? {
               emoji: "🤝",
-              body: "Even match—try mixing it up.",
+              body: "Even match! Try mixing it up!",
               label: "Robot suggests mixing it up after a tie.",
             }
           : {
               emoji: "🤍",
-              body: "I saw a pattern—can you break it?",
+              body: "I saw a pattern! Can you break it?",
               label: "Robot encourages you after a loss to break the pattern.",
             };
     setRobotResultReaction(reaction);
