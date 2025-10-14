@@ -539,6 +539,7 @@ function RPSDoodleAppInner(){
   useEffect(() => { if (!hasConsented) setLeaderboardOpen(false); }, [hasConsented]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastReaderOpen, setToastReaderOpen] = useState(false);
+  const [helpToast, setHelpToast] = useState<{ title: string; message: string } | null>(null);
   useEffect(() => {
     if (!toastMessage) return;
     if (toastReaderOpen) return;
@@ -1026,14 +1027,27 @@ function RPSDoodleAppInner(){
     selectProfile(id);
   }, [selectProfile]);
 
+  const handleOpenSettings = useCallback(() => {
+    setSettingsOpen(true);
+    setLive("Settings opened. Press Escape to close.");
+  }, [setLive]);
+
+  const handleCloseSettings = useCallback(() => {
+    setSettingsOpen(false);
+    setLive("Settings closed.");
+  }, [setLive]);
+
   const handleCreateProfile = useCallback(() => {
+    if (settingsOpen) {
+      handleCloseSettings();
+    }
     if (!currentPlayer) {
       setPlayerModalMode("create");
       return;
     }
     setCreateProfileDialogAcknowledged(false);
     setCreateProfileDialogOpen(true);
-  }, [currentPlayer, setPlayerModalMode]);
+  }, [currentPlayer, handleCloseSettings, setPlayerModalMode, settingsOpen]);
 
   const handleCloseCreateProfileDialog = useCallback(() => {
     setCreateProfileDialogOpen(false);
@@ -1067,6 +1081,9 @@ function RPSDoodleAppInner(){
   const handleExportCsv = useCallback(() => {
     if (!currentPlayer || !currentProfile) return;
     if (!window.confirm(EXPORT_WARNING_TEXT)) return;
+    if (settingsOpen) {
+      handleCloseSettings();
+    }
     const data = exportRoundsCsv();
     const blob = new Blob([data], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -1076,17 +1093,10 @@ function RPSDoodleAppInner(){
     a.download = `rps-${profileSegment}-rounds.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [currentPlayer, currentProfile, exportRoundsCsv, sanitizeForFile]);
-
-  const handleOpenSettings = useCallback(() => {
-    setSettingsOpen(true);
-    setLive("Settings opened. Press Escape to close.");
-  }, [setLive]);
-
-  const handleCloseSettings = useCallback(() => {
-    setSettingsOpen(false);
-    setLive("Settings closed.");
-  }, [setLive]);
+    const label = currentProfile.name ? ` for ${currentProfile.name}` : "";
+    setToastMessage(`CSV export ready${label}. Check your downloads.`);
+    setLive(`Rounds exported as CSV${label}. Download starting.`);
+  }, [currentPlayer, currentProfile, exportRoundsCsv, handleCloseSettings, sanitizeForFile, setLive, settingsOpen, setToastMessage]);
 
   useEffect(() => {
     if (!settingsOpen) {
@@ -1510,6 +1520,30 @@ function RPSDoodleAppInner(){
         </div>
       )}
 
+      {helpToast && (
+        <div className="fixed bottom-6 right-4 z-[94]">
+          <div
+            role="status"
+            aria-live="polite"
+            className="w-72 rounded-xl bg-white/95 px-4 py-3 text-sm text-slate-700 shadow-xl ring-1 ring-slate-200"
+          >
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-slate-900">{helpToast.title}</p>
+              <p className="text-sm leading-relaxed text-slate-600">{helpToast.message}</p>
+            </div>
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                className="inline-flex items-center rounded-lg bg-slate-900/90 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-slate-900"
+                onClick={() => setHelpToast(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <AnimatePresence>
         {toastReaderOpen && toastMessage && (
           <motion.div
@@ -1870,7 +1904,6 @@ function RPSDoodleAppInner(){
                   <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Training</h2>
                   <div className="space-y-3 rounded-lg border border-slate-200/80 bg-white/80 p-3">
                     <div className="space-y-2">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Action</span>
                       <button
                         type="button"
                         onClick={() => {
@@ -2013,8 +2046,11 @@ function RPSDoodleAppInner(){
                         className="text-xs font-semibold hover:underline"
                         onClick={() => {
                           goToMode();
-                          setToastMessage("Modes show different ways to play and practice.");
-                          setLive("Opening modes overview.");
+                          setHelpToast({
+                            title: "What are Modes?",
+                            message: "Modes show different ways to play and practice.",
+                          });
+                          setLive("Opening modes overview and showing help toast.");
                         }}
                       >
                         What are Modes?
@@ -2024,8 +2060,11 @@ function RPSDoodleAppInner(){
                         type="button"
                         className="text-xs font-semibold hover:underline"
                         onClick={() => {
-                          setToastMessage(`Training runs ${TRAIN_ROUNDS} rounds so the AI can learn your habits.`);
-                          setLive("Training overview shared.");
+                          setHelpToast({
+                            title: "How training works",
+                            message: `Training runs ${TRAIN_ROUNDS} rounds so the AI can learn your habits.`,
+                          });
+                          setLive("Training overview shared in help toast.");
                         }}
                       >
                         How training works
