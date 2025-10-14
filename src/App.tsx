@@ -539,6 +539,13 @@ function RPSDoodleAppInner(){
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastReaderOpen, setToastReaderOpen] = useState(false);
   const [helpToast, setHelpToast] = useState<{ title: string; message: string } | null>(null);
+  const [helpGuideOpen, setHelpGuideOpen] = useState(false);
+  const [robotHovered, setRobotHovered] = useState(false);
+  const [robotFocused, setRobotFocused] = useState(false);
+  const [robotResultReaction, setRobotResultReaction] = useState<{ emoji: string; label: string } | null>(null);
+  const robotResultTimeoutRef = useRef<number | null>(null);
+  const [trainingCelebrationActive, setTrainingCelebrationActive] = useState(false);
+  const robotButtonRef = useRef<HTMLButtonElement | null>(null);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [exportDialogAcknowledged, setExportDialogAcknowledged] = useState(false);
   const [exportDialogSource, setExportDialogSource] = useState<"settings" | "stats" | null>(null);
@@ -668,6 +675,7 @@ function RPSDoodleAppInner(){
   const TRAIN_ROUNDS = 10;
   const trainingCount = currentProfile?.trainingCount ?? 0;
   const isTrained = currentProfile?.trained ?? false;
+  const previousTrainingCountRef = useRef(trainingCount);
   const [trainingActive, setTrainingActive] = useState<boolean>(false);
 
   const trainingComplete = trainingCount >= TRAIN_ROUNDS;
@@ -842,6 +850,21 @@ function RPSDoodleAppInner(){
     { key: "insights", label: "Insights" },
   ] as const;
 
+  const helpGuideItems = useMemo(() => [
+    {
+      title: "How to start",
+      message: "Pick Challenge or Practice to launch a match against the AI.",
+    },
+    {
+      title: "What is Training",
+      message: `Training is a ${TRAIN_ROUNDS}-round warmup that lets the AI learn your style before tougher matches.`,
+    },
+    {
+      title: "What is statistics",
+      message: "Statistics saves your rounds and matches so you can review progress and trends anytime.",
+    },
+  ], [TRAIN_ROUNDS]);
+
   const matchesSorted = useMemo(() => {
     return [...matches].sort((a, b) => (b.endedAt || b.startedAt).localeCompare(a.endedAt || a.startedAt));
   }, [matches]);
@@ -879,6 +902,47 @@ function RPSDoodleAppInner(){
   const shouldShowNoExportMessage = !currentPlayer || !currentProfile || !hasExportData;
   const playerWins = matches.reduce((acc, m) => acc + (m.score.you > m.score.ai ? 1 : 0), 0);
   const overallWinRate = totalMatches ? playerWins / totalMatches : 0;
+  const trainingRoundDisplay = Math.min(trainingCount + 1, TRAIN_ROUNDS);
+  const shouldShowIdleBubble = !trainingActive && !trainingCelebrationActive && !robotResultReaction && (robotHovered || robotFocused || helpGuideOpen);
+  const robotBubbleContent: { message: string; buttons?: { label: string; onClick: () => void }[]; ariaLabel?: string; emphasise?: boolean } | null = trainingCelebrationActive
+    ? {
+        message: "Training complete! You can now play Modes (Challenge or Practice).",
+        buttons: [
+          {
+            label: "Play Challenge",
+            onClick: () => {
+              setTrainingCelebrationActive(false);
+              setHelpGuideOpen(false);
+              setLive("Opening Challenge mode from training completion.");
+              handleModeSelect("challenge");
+            },
+          },
+          {
+            label: "View My Stats",
+            onClick: () => {
+              setTrainingCelebrationActive(false);
+              setHelpGuideOpen(false);
+              setLive("Opening statistics after training completion.");
+              setStatsOpen(true);
+            },
+          },
+        ],
+      }
+    : robotResultReaction
+      ? {
+          message: robotResultReaction.emoji,
+          ariaLabel: robotResultReaction.label,
+          emphasise: true,
+        }
+      : trainingActive
+        ? {
+            message: `Training round ${Math.min(trainingRoundDisplay, TRAIN_ROUNDS)}/${TRAIN_ROUNDS}—keep going!`,
+          }
+        : shouldShowIdleBubble
+          ? {
+              message: "Ready! Choose a Mode to start.",
+            }
+          : null;
 
   const difficultySummary = useMemo(() => {
     const base = {
@@ -1459,6 +1523,18 @@ function RPSDoodleAppInner(){
     trainingAnnouncementsRef.current.clear();
   }, [trainingActive, trainingCount, currentProfile, updateStatsProfile]);
 
+  useEffect(() => {
+    if (previousTrainingCountRef.current < TRAIN_ROUNDS && trainingCount >= TRAIN_ROUNDS) {
+      setTrainingCelebrationActive(true);
+      setHelpGuideOpen(false);
+      setLive("Training complete. You can now play Challenge or Practice modes.");
+    }
+    if (trainingCount < TRAIN_ROUNDS) {
+      setTrainingCelebrationActive(false);
+    }
+    previousTrainingCountRef.current = trainingCount;
+  }, [trainingCount]);
+
   // Failsafes: if something stalls, advance automatically
   useEffect(()=>{ if (phase === "selected"){ const t = setTimeout(()=>{ if (phase === "selected") startCountdown(); }, 500); return ()=> clearTimeout(t); } }, [phase]);
   useEffect(()=>{
@@ -1532,6 +1608,38 @@ function RPSDoodleAppInner(){
     return () => clearTimeout(t);
   }, [phase, trainingActive, playerScore, aiScore, bestOf, matchTimings, selectedMode]);
 
+  useEffect(() => {
+    if (scene !== "RESULTS" || !resultBanner) return;
+    const reaction = resultBanner === "Victory"
+      ? { emoji: "👍", label: "Robot celebrates your win." }
+      : resultBanner === "Defeat"
+        ? { emoji: "😮", label: "Robot is surprised by the loss." }
+        : { emoji: "🤔", label: "Robot is thinking about the tie." };
+    setRobotResultReaction(reaction);
+    if (robotResultTimeoutRef.current) {
+      window.clearTimeout(robotResultTimeoutRef.current);
+    }
+    robotResultTimeoutRef.current = window.setTimeout(() => {
+      setRobotResultReaction(null);
+      robotResultTimeoutRef.current = null;
+    }, 1200);
+    return () => {
+      if (robotResultTimeoutRef.current) {
+        window.clearTimeout(robotResultTimeoutRef.current);
+        robotResultTimeoutRef.current = null;
+      }
+    };
+  }, [scene, resultBanner]);
+
+  useEffect(() => {
+    if (scene === "RESULTS") return;
+    setRobotResultReaction(null);
+    if (robotResultTimeoutRef.current) {
+      window.clearTimeout(robotResultTimeoutRef.current);
+      robotResultTimeoutRef.current = null;
+    }
+  }, [scene]);
+
   // Helpers
   function tryVibrate(ms:number){ if ((navigator as any).vibrate) (navigator as any).vibrate(ms); }
   function bannerColor(){ if (resultBanner === "Victory") return "bg-green-500"; if (resultBanner === "Defeat") return "bg-rose-500"; return "bg-amber-500"; }
@@ -1585,6 +1693,59 @@ function RPSDoodleAppInner(){
       </div>
 
       <LiveRegion message={live} />
+
+      <AnimatePresence>
+        {trainingCelebrationActive && (
+          <motion.div
+            key="training-complete-toast"
+            className="fixed top-4 left-1/2 z-[95] w-[min(90vw,480px)] -translate-x-1/2"
+            initial={{ y: -16, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -16, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <div className="rounded-2xl bg-white/95 px-4 py-4 text-sm text-slate-700 shadow-2xl ring-1 ring-slate-200">
+              <div className="text-sm font-semibold text-slate-900">Training complete!</div>
+              <p className="mt-1 text-sm text-slate-600">
+                You can now play Modes (Challenge or Practice).
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="rounded-full bg-sky-600 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-sky-700"
+                  onClick={() => {
+                    setTrainingCelebrationActive(false);
+                    setHelpGuideOpen(false);
+                    setLive("Opening Challenge mode from training completion.");
+                    handleModeSelect("challenge");
+                  }}
+                >
+                  Play Challenge
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full bg-slate-900/90 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-slate-900"
+                  onClick={() => {
+                    setTrainingCelebrationActive(false);
+                    setHelpGuideOpen(false);
+                    setLive("Opening statistics after training completion.");
+                    setStatsOpen(true);
+                  }}
+                >
+                  View My Stats
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                  onClick={() => setTrainingCelebrationActive(false)}
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {toastMessage && (
         <div className="fixed top-20 right-4 z-[95] flex flex-col items-end gap-2">
@@ -2407,20 +2568,71 @@ function RPSDoodleAppInner(){
 
         {/* RESULTS */}
         {scene === "RESULTS" && (
-          <motion.section key="results" initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -20, opacity: 0 }} transition={{ duration: .32 }} className="min-h-screen pt-28 flex flex-col items-center">
-            <div className={`px-4 py-2 rounded-2xl text-white font-black text-2xl ${bannerColor()}`}>{resultBanner}</div>
-            <div className="mt-4 bg-white/80 rounded-2xl shadow p-4 w-[min(92vw,520px)]">
-              <div className="flex items-center justify-around text-xl">
-                <div className="flex flex-col items-center"><div className="text-slate-500 text-sm">You</div><div className="font-bold">{playerScore}</div></div>
-                <div className="flex flex-col items-center"><div className="text-slate-500 text-sm">AI</div><div className="font-bold">{aiScore}</div></div>
+          <motion.div
+            key="results"
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/40 px-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ duration: 0.22 }}
+              className="relative w-[min(520px,95vw)] rounded-3xl bg-white/95 p-6 text-slate-800 shadow-2xl ring-1 ring-slate-200"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="match-results-title"
+            >
+              <div id="match-results-title" className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold text-white ${bannerColor()}`}>
+                {resultBanner}
               </div>
-              <div className="mt-4 flex items-center justify-center gap-3">
-                <button onClick={()=>{ resetMatch(); setScene("MATCH"); }} className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white shadow">Rematch</button>
-                <button onClick={()=> goToMode()} className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 shadow">Modes</button>
+              <div className="mt-4 rounded-2xl bg-slate-50/80 p-4">
+                <div className="flex items-center justify-around text-xl">
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="text-slate-500 text-sm">You</div>
+                    <div className="text-3xl font-semibold text-slate-900">{playerScore}</div>
+                  </div>
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="text-slate-500 text-sm">AI</div>
+                    <div className="text-3xl font-semibold text-slate-900">{aiScore}</div>
+                  </div>
+                </div>
               </div>
-            </div>
-            <Confetti />
-          </motion.section>
+              <div className="mt-5 flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  className="rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-700"
+                  onClick={() => {
+                    resetMatch();
+                    setScene("MATCH");
+                  }}
+                >
+                  Play Again
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow hover:bg-slate-50"
+                  onClick={() => goToMode()}
+                >
+                  Change Mode
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full bg-slate-900/90 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-900"
+                  onClick={() => {
+                    setLeaderboardOpen(true);
+                  }}
+                >
+                  View Leaderboard
+                </button>
+              </div>
+              <div className="pointer-events-none absolute -top-10 right-6">
+                <Confetti />
+              </div>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
 
@@ -2762,12 +2974,105 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
 
       {/* Footer robot idle (personality beat) */}
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: .4 }} className="fixed bottom-3 right-3 bg-white/70 rounded-2xl shadow px-3 py-2 flex items-center gap-2">
-        <motion.span animate={{ y: [0,-1,0] }} transition={{ repeat: Infinity, duration: 2.6, ease: "easeInOut" }}>
-          <span>🤖</span>
-        </motion.span>
-        <span className="text-sm text-slate-700">Ready!</span>
-      </motion.div>
+      <div className="pointer-events-none fixed bottom-3 right-3 z-[90] flex flex-col items-end gap-3">
+        <AnimatePresence>
+          {robotBubbleContent && (
+            <motion.div
+              key="robot-bubble"
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              transition={{ duration: 0.2 }}
+              className="pointer-events-auto relative max-w-xs rounded-2xl bg-white/95 px-4 py-2 text-sm text-slate-700 shadow-xl ring-1 ring-slate-200"
+              role="status"
+              aria-live="polite"
+              aria-label={robotBubbleContent.ariaLabel ?? robotBubbleContent.message}
+            >
+              <div className={robotBubbleContent.emphasise ? "text-3xl text-center" : "text-sm font-medium text-slate-800"}>
+                {robotBubbleContent.message}
+              </div>
+              {robotBubbleContent.buttons && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {robotBubbleContent.buttons.map(button => (
+                    <button
+                      key={button.label}
+                      type="button"
+                      className="rounded-full bg-sky-600 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-sky-700"
+                      onClick={button.onClick}
+                    >
+                      {button.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <span className="pointer-events-none absolute bottom-[-6px] right-5 h-3 w-3 rotate-45 bg-white/95 ring-1 ring-slate-200/70" />
+            </motion.div>
+          )}
+        </AnimatePresence>
+        <motion.button
+          type="button"
+          ref={robotButtonRef}
+          className="pointer-events-auto relative flex h-14 w-14 items-center justify-center rounded-full bg-white/80 shadow-lg ring-1 ring-slate-200 backdrop-blur transition hover:bg-white"
+          onClick={() => {
+            setHelpGuideOpen(prev => {
+              const next = !prev;
+              setLive(next ? "Ready robot help guide opened." : "Ready robot help guide closed.");
+              return next;
+            });
+          }}
+          onMouseEnter={() => setRobotHovered(true)}
+          onMouseLeave={() => setRobotHovered(false)}
+          onFocus={() => setRobotFocused(true)}
+          onBlur={() => setRobotFocused(false)}
+          aria-label="Ready robot help"
+          aria-expanded={helpGuideOpen}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+        >
+          <motion.span
+            animate={{ y: [0, -4, 0], scaleY: [1, 0.88, 1], scaleX: [1, 1.04, 1] }}
+            transition={{ repeat: Infinity, duration: 3.2, ease: "easeInOut" }}
+            className="text-2xl"
+          >
+            🤖
+          </motion.span>
+        </motion.button>
+        <AnimatePresence>
+          {helpGuideOpen && (
+            <motion.div
+              key="robot-help"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 8 }}
+              transition={{ duration: 0.2 }}
+              className="pointer-events-auto w-[min(280px,80vw)] rounded-2xl bg-white/95 p-4 text-sm text-slate-700 shadow-2xl ring-1 ring-slate-200"
+            >
+              <div className="space-y-3">
+                {helpGuideItems.map(item => (
+                  <div key={item.title} className="rounded-xl bg-slate-50/80 p-3 shadow-inner">
+                    <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                    <p className="mt-1 text-sm text-slate-600">{item.message}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 flex justify-end">
+                <button
+                  type="button"
+                  className="rounded-lg bg-slate-900/90 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-slate-900"
+                  onClick={() => {
+                    setHelpGuideOpen(false);
+                    setLive("Ready robot help guide closed.");
+                    requestAnimationFrame(() => robotButtonRef.current?.focus());
+                  }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
       {DEV_MODE_ENABLED && (
         <>
           <div
