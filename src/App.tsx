@@ -1631,20 +1631,20 @@ function RPSDoodleAppInner(){
             {
               emoji: "😏",
               body: "Lucky hit! Don’t get cocky!",
-              label: "Robot teases after winning the round: Lucky hit. Don’t get cocky.",
+              label: "Robot teases after you winning the round: Lucky hit. Don’t get cocky.",
             }
         
         : outcome === "tie"
           ? {
               emoji: "🤨",
-              body: "Not bad! but I’m still catching up!",
+              body: "Not bad! But I’m still catching up!",
               label: "Robot comments on a tied round: Not bad, but still catching up.",
             }
 
           : {
             emoji: "😎",
             body: "Too easy! Try to keep up!",
-            label: "Robot boasts after you win the round: Too easy. Try to keep up.",
+            label: "Robot boasts after you losing the round: Too easy. Try to keep up.",
           }
       : outcome === "win"
         ? {
@@ -1698,9 +1698,9 @@ function RPSDoodleAppInner(){
             : { emoji: "🤝", body: "Even match—try mixing it up.", label: "Robot suggests mixing it up after an even match." };
       }
       return resultBanner === "Victory"
-        ? { emoji: "😄", label: "Robot celebrates your win." }
+        ? { emoji: "😮", label: "Robot is surprised by the loss." }
         : resultBanner === "Defeat"
-          ? { emoji: "😮", label: "Robot is surprised by the loss." }
+          ? { emoji: "😄", label: "Robot celebrates the win." }
           : { emoji: "🤔", label: "Robot is thinking about the tie." };
     })();
     setRobotResultReaction(reaction);
