@@ -1624,12 +1624,9 @@ function RPSDoodleAppInner(){
     if (phase !== "feedback") return;
     const modeForTiming: Mode = selectedMode ?? "practice";
     const delayBase = matchTimings[modeForTiming].resultBannerMs;
-    const robotReactionDuration = matchTimings[modeForTiming].robotRoundReactionMs;
-    const robotRestDuration = matchTimings[modeForTiming].robotRoundRestMs;
-    const robotTimeline = robotReactionDuration + robotRestDuration;
     const delay = trainingActive
       ? Math.min(delayBase, 600)
-      : Math.max(delayBase, robotTimeline);
+      : delayBase;
     const t = setTimeout(() => {
       if (trainingActive) {
         setRound(r => r + 1);
@@ -1739,12 +1736,6 @@ function RPSDoodleAppInner(){
       startRobotRest(restDuration, "round");
     }, reactionDuration);
     robotResultTimeoutRef.current = timeoutId;
-    return () => {
-      if (robotResultTimeoutRef.current === timeoutId) {
-        window.clearTimeout(timeoutId);
-        robotResultTimeoutRef.current = null;
-      }
-    };
   }, [
     scene,
     phase,
@@ -1787,12 +1778,6 @@ function RPSDoodleAppInner(){
       startRobotRest(restDuration, "result");
     }, reactionDuration);
     robotResultTimeoutRef.current = timeoutId;
-    return () => {
-      if (robotResultTimeoutRef.current === timeoutId) {
-        window.clearTimeout(timeoutId);
-        robotResultTimeoutRef.current = null;
-      }
-    };
   }, [scene, resultBanner, selectedMode, matchTimings, clearRobotReactionTimers, startRobotRest]);
 
   useEffect(() => {
@@ -1800,6 +1785,12 @@ function RPSDoodleAppInner(){
     setRobotResultReaction(null);
     clearRobotReactionTimers();
   }, [scene, clearRobotReactionTimers]);
+
+  useEffect(() => {
+    return () => {
+      clearRobotReactionTimers();
+    };
+  }, [clearRobotReactionTimers]);
 
   // Helpers
   function tryVibrate(ms:number){ if ((navigator as any).vibrate) (navigator as any).vibrate(ms); }
