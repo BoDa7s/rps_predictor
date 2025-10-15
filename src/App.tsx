@@ -53,6 +53,7 @@ const DIFFICULTY_INFO: Record<AIMode, { label: string; helper: string }> = {
 
 const DIFFICULTY_SEQUENCE: AIMode[] = ["fair", "normal", "ruthless"];
 const BEST_OF_OPTIONS: BestOf[] = [3, 5, 7];
+const WELCOME_SEEN_KEY = "rps_welcome_seen_v1";
 
 // ---- Core game logic (pure) ----
 export function resolveOutcome(player: Move, ai: Move): Outcome {
@@ -502,7 +503,18 @@ function RPSDoodleAppInner(){
     updateProfile: updateStatsProfile,
     forkProfileVersion,
   } = useStats();
-  const { currentPlayer, hasConsented, createPlayer, updatePlayer } = usePlayers();
+  const { players, currentPlayer, hasConsented, createPlayer, updatePlayer, setCurrentPlayer } = usePlayers();
+  const [welcomeSeen, setWelcomeSeen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(WELCOME_SEEN_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
+  const initialWelcomeActive = !welcomeSeen;
+  const [welcomeActive, setWelcomeActive] = useState(initialWelcomeActive);
+  const [welcomeSlide, setWelcomeSlide] = useState(0);
   const [statsOpen, setStatsOpen] = useState(false);
   const [leaderboardOpen, setLeaderboardOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -530,11 +542,14 @@ function RPSDoodleAppInner(){
   type PlayerModalMode = "hidden" | "create" | "edit";
   const [playerModalMode, setPlayerModalMode] = useState<PlayerModalMode>("hidden");
   const isPlayerModalOpen = playerModalMode !== "hidden";
+  const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
+  const [restoreSelectedPlayerId, setRestoreSelectedPlayerId] = useState<string | null>(null);
   useEffect(() => {
+    if (welcomeActive || restoreDialogOpen) return;
     if (!hasConsented) {
       setPlayerModalMode(currentPlayer ? "edit" : "create");
     }
-  }, [hasConsented, currentPlayer]);
+  }, [hasConsented, currentPlayer, welcomeActive, restoreDialogOpen]);
   useEffect(() => { if (!hasConsented) setLeaderboardOpen(false); }, [hasConsented]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastReaderOpen, setToastReaderOpen] = useState(false);
@@ -547,6 +562,8 @@ function RPSDoodleAppInner(){
   const robotRestTimeoutRef = useRef<number | null>(null);
   const [trainingCelebrationActive, setTrainingCelebrationActive] = useState(false);
   const robotButtonRef = useRef<HTMLButtonElement | null>(null);
+  const welcomeToastShownRef = useRef(false);
+  const welcomeFinalToastShownRef = useRef(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [exportDialogAcknowledged, setExportDialogAcknowledged] = useState(false);
   const [exportDialogSource, setExportDialogSource] = useState<"settings" | "stats" | null>(null);
@@ -575,6 +592,23 @@ function RPSDoodleAppInner(){
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [toastReaderOpen]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      if (welcomeSeen) {
+        window.localStorage.setItem(WELCOME_SEEN_KEY, "true");
+      } else {
+        window.localStorage.removeItem(WELCOME_SEEN_KEY);
+      }
+    } catch {
+      /* noop */
+    }
+  }, [welcomeSeen]);
+  useEffect(() => {
+    if (welcomeActive) {
+      setWelcomeSlide(0);
+    }
+  }, [welcomeActive]);
   const [developerOpen, setDeveloperOpen] = useState(false);
   const developerTriggerRef = useRef({ count: 0, lastClick: 0 });
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
@@ -609,6 +643,23 @@ function RPSDoodleAppInner(){
     resetTraining();
     handleResetDialogClose();
   }, [resetTraining, handleResetDialogClose]);
+
+  useEffect(() => {
+    if (!restoreDialogOpen) return;
+    if (!players.length) {
+      if (restoreSelectedPlayerId !== null) setRestoreSelectedPlayerId(null);
+      return;
+    }
+    const preferredId =
+      (restoreSelectedPlayerId && players.some(p => p.id === restoreSelectedPlayerId))
+        ? restoreSelectedPlayerId
+        : currentPlayer?.id && players.some(p => p.id === currentPlayer.id)
+          ? currentPlayer.id
+          : players[0].id;
+    if (preferredId !== restoreSelectedPlayerId) {
+      setRestoreSelectedPlayerId(preferredId);
+    }
+  }, [restoreDialogOpen, players, currentPlayer?.id, restoreSelectedPlayerId]);
 
   useEffect(() => {
     if (!developerOpen) {
@@ -647,9 +698,10 @@ function RPSDoodleAppInner(){
   const demographicsNeedReview = Boolean(currentPlayer?.needsReview);
   const resolvedModalMode: "create" | "edit" = playerModalMode === "edit" && currentPlayer ? "edit" : "create";
   const modalPlayer = resolvedModalMode === "edit" ? currentPlayer : null;
+  const hasLocalProfiles = players.length > 0;
 
-  type Scene = "BOOT"|"MODE"|"MATCH"|"RESULTS";
-  const [scene, setScene] = useState<Scene>("BOOT");
+  type Scene = "WELCOME"|"BOOT"|"MODE"|"MATCH"|"RESULTS";
+  const [scene, setScene] = useState<Scene>(initialWelcomeActive ? "WELCOME" : "BOOT");
 
   const [audioOn, setAudioOn] = useState(true);
   const [textScale, setTextScale] = useState(1);
@@ -679,6 +731,22 @@ function RPSDoodleAppInner(){
   const previousTrainingCountRef = useRef(trainingCount);
   const [trainingActive, setTrainingActive] = useState<boolean>(false);
   const [trainingCalloutQueue, setTrainingCalloutQueue] = useState<string[]>([]);
+  const welcomeSlides = useMemo(
+    () => [
+      {
+        title: "Welcome to RPS AI Lab",
+        body: `You’ll train for ${TRAIN_ROUNDS} rounds, then choose a Mode: Challenge (Smarter AI prediction) or Practice (Experiment and learn).`,
+      },
+      {
+        title: "Your data",
+        body: "We collect gameplay for learning. Exports will include your data and demographics.",
+      },
+    ],
+    [TRAIN_ROUNDS],
+  );
+  const welcomeSlideCount = welcomeSlides.length;
+  const welcomeProgress = welcomeSlideCount ? ((welcomeSlide + 1) / welcomeSlideCount) * 100 : 100;
+  const isWelcomeLastSlide = welcomeSlide >= welcomeSlideCount - 1;
 
   const trainingComplete = trainingCount >= TRAIN_ROUNDS;
   const needsTraining = !isTrained && !trainingComplete;
@@ -723,6 +791,29 @@ function RPSDoodleAppInner(){
   const [outcome, setOutcome] = useState<Outcome|undefined>();
   const [resultBanner, setResultBanner] = useState<"Victory"|"Defeat"|"Tie"|null>(null);
   const [live, setLive] = useState("");
+  useEffect(() => {
+    if (welcomeActive) {
+      if (!welcomeToastShownRef.current) {
+        if (!toastMessage) {
+          setToastMessage("Use Next to review the intro, then choose how to continue.");
+        }
+        setLive(`Welcome intro opened. Slide 1 of ${welcomeSlideCount}.`);
+        welcomeToastShownRef.current = true;
+      }
+    } else {
+      welcomeToastShownRef.current = false;
+      welcomeFinalToastShownRef.current = false;
+    }
+  }, [welcomeActive, toastMessage, welcomeSlideCount, setLive, setToastMessage]);
+  useEffect(() => {
+    if (!welcomeActive) return;
+    if (welcomeSlide === welcomeSlideCount - 1 && !welcomeFinalToastShownRef.current) {
+      if (!toastMessage) {
+        setToastMessage("Choose Get started to set up or Load my data to continue where you left off.");
+      }
+      welcomeFinalToastShownRef.current = true;
+    }
+  }, [welcomeActive, welcomeSlide, welcomeSlideCount, toastMessage, setToastMessage]);
   const countdownRef = useRef<number | null>(null);
   const trainingAnnouncementsRef = useRef<Set<number>>(new Set());
   const clearRobotReactionTimers = useCallback(() => {
@@ -795,6 +886,181 @@ function RPSDoodleAppInner(){
   const [selectedMode, setSelectedMode] = useState<Mode|null>(null);
   const [wipeRun, setWipeRun] = useState(false);
   const modeLabel = (m:Mode)=> m.charAt(0).toUpperCase()+m.slice(1);
+
+  const goToWelcomeSlide = useCallback(
+    (delta: number) => {
+      setWelcomeSlide(prev => {
+        const next = Math.min(Math.max(0, prev + delta), Math.max(0, welcomeSlideCount - 1));
+        if (next !== prev) {
+          setLive(`Intro slide ${next + 1} of ${welcomeSlideCount}.`);
+        }
+        return next;
+      });
+    },
+    [welcomeSlideCount, setLive],
+  );
+
+  const handleWelcomeNext = useCallback(() => {
+    goToWelcomeSlide(1);
+  }, [goToWelcomeSlide]);
+
+  const handleWelcomePrevious = useCallback(() => {
+    goToWelcomeSlide(-1);
+  }, [goToWelcomeSlide]);
+
+  const openWelcome = useCallback(
+    (options: { announce?: string; resetPlayer?: boolean } = {}) => {
+      clearCountdown();
+      setPhase("idle");
+      setCount(3);
+      setPlayerPick(undefined);
+      setAiPick(undefined);
+      setOutcome(undefined);
+      setResultBanner(null);
+      setSelectedMode(null);
+      setWipeRun(false);
+      setPlayerScore(0);
+      setAiScore(0);
+      setRound(1);
+      setLastMoves([]);
+      setAiHistory([]);
+      setOutcomesHist([]);
+      currentMatchRoundsRef.current = [];
+      setTrainingActive(false);
+      setTrainingCalloutQueue([]);
+      trainingAnnouncementsRef.current.clear();
+      setTrainingCelebrationActive(false);
+      clearRobotReactionTimers();
+      setRobotResultReaction(null);
+      setRobotHovered(false);
+      setRobotFocused(false);
+      setStatsOpen(false);
+      setLeaderboardOpen(false);
+      setSettingsOpen(false);
+      setHelpGuideOpen(false);
+      setHelpToast(null);
+      setToastReaderOpen(false);
+      setToastMessage(null);
+      setResetDialogOpen(false);
+      setResetDialogAcknowledged(false);
+      setCreateProfileDialogOpen(false);
+      setCreateProfileDialogAcknowledged(false);
+      setExportDialogOpen(false);
+      setExportDialogAcknowledged(false);
+      setExportDialogSource(null);
+      setRestoreDialogOpen(false);
+      setRestoreSelectedPlayerId(null);
+      setDeveloperOpen(false);
+      setPlayerModalMode("hidden");
+      if (options.resetPlayer) {
+        setCurrentPlayer(null);
+      }
+      setWelcomeSeen(false);
+      setWelcomeSlide(0);
+      setScene("WELCOME");
+      setWelcomeActive(true);
+      welcomeToastShownRef.current = false;
+      welcomeFinalToastShownRef.current = false;
+      if (options.announce) {
+        setLive(options.announce);
+      }
+    },
+    [
+      clearCountdown,
+      clearRobotReactionTimers,
+      setAiHistory,
+      setAiPick,
+      setAiScore,
+      setCount,
+      setCreateProfileDialogAcknowledged,
+      setCreateProfileDialogOpen,
+      setCurrentPlayer,
+      setDeveloperOpen,
+      setExportDialogAcknowledged,
+      setExportDialogOpen,
+      setExportDialogSource,
+      setHelpGuideOpen,
+      setHelpToast,
+      setLeaderboardOpen,
+      setLastMoves,
+      setOutcomesHist,
+      setPhase,
+      setPlayerModalMode,
+      setPlayerPick,
+      setPlayerScore,
+      setResetDialogAcknowledged,
+      setResetDialogOpen,
+      setResultBanner,
+      setRobotFocused,
+      setRobotHovered,
+      setRobotResultReaction,
+      setRound,
+      setScene,
+      setSelectedMode,
+      setSettingsOpen,
+      setStatsOpen,
+      setToastMessage,
+      setToastReaderOpen,
+      setTrainingActive,
+      setTrainingCalloutQueue,
+      setTrainingCelebrationActive,
+      setWelcomeActive,
+      setWelcomeSeen,
+      setWelcomeSlide,
+      setWipeRun,
+      setLive,
+    ],
+  );
+
+  const completeWelcome = useCallback(
+    (mode: "setup" | "restore" | "dismiss") => {
+      setWelcomeActive(false);
+      setWelcomeSlide(0);
+      setScene("BOOT");
+      setWelcomeSeen(true);
+      welcomeToastShownRef.current = false;
+      welcomeFinalToastShownRef.current = false;
+      if (mode === "setup") {
+        setPlayerModalMode("create");
+        setToastMessage("Let’s set up your player profile.");
+        setLive("Opening player setup from welcome intro.");
+      } else if (mode === "restore") {
+        if (players.length > 0) {
+          setRestoreDialogOpen(true);
+          setToastMessage("Pick your saved player to continue.");
+          setLive("Opening saved player picker.");
+        } else {
+          setToastMessage("No saved data found on this device.");
+          setLive("No saved player profiles available.");
+        }
+      } else {
+        setToastMessage("Welcome dismissed. You can replay it from Settings → Help.");
+        setLive("Welcome intro dismissed.");
+      }
+    },
+    [players.length, setLive, setPlayerModalMode, setRestoreDialogOpen, setScene, setToastMessage, setWelcomeActive, setWelcomeSeen, setWelcomeSlide],
+  );
+
+  const selectedRestorePlayer = useMemo(() => {
+    if (!restoreSelectedPlayerId) return null;
+    return players.find(player => player.id === restoreSelectedPlayerId) ?? null;
+  }, [players, restoreSelectedPlayerId]);
+
+  const handleRestoreCancel = useCallback(() => {
+    setRestoreDialogOpen(false);
+    setRestoreSelectedPlayerId(null);
+    setLive("Profile restore cancelled.");
+  }, [setRestoreDialogOpen, setRestoreSelectedPlayerId, setLive]);
+
+  const handleRestoreConfirm = useCallback(() => {
+    if (!restoreSelectedPlayerId) return;
+    const target = players.find(player => player.id === restoreSelectedPlayerId);
+    if (!target) return;
+    setRestoreDialogOpen(false);
+    setToastMessage(`Welcome back, ${target.playerName}! Choose a mode when you're ready.`);
+    setLive(`Loaded saved player ${target.playerName}.`);
+    setCurrentPlayer(target.id);
+  }, [players, restoreSelectedPlayerId, setCurrentPlayer, setLive, setRestoreDialogOpen, setToastMessage]);
 
   const recordRound = useCallback((playerMove: Move, aiMove: Move, outcomeForPlayer: Outcome) => {
     const trace = decisionTraceRef.current;
@@ -1154,6 +1420,21 @@ function RPSDoodleAppInner(){
     selectProfile(id);
   }, [selectProfile]);
 
+  const handleWelcomeReplayToggle = useCallback(
+    (value: boolean) => {
+      const shouldShowIntro = value;
+      setWelcomeSeen(!shouldShowIntro);
+      if (shouldShowIntro) {
+        setToastMessage("The welcome intro will show next time you open RPS AI Lab.");
+        setLive("Welcome intro scheduled to replay on the next launch.");
+      } else {
+        setToastMessage("The welcome intro will stay hidden on launch.");
+        setLive("Welcome intro replay disabled.");
+      }
+    },
+    [setLive, setToastMessage, setWelcomeSeen],
+  );
+
   const handleOpenSettings = useCallback(() => {
     setSettingsOpen(true);
     setLive("Settings opened. Press Escape to close.");
@@ -1168,6 +1449,12 @@ function RPSDoodleAppInner(){
     },
     [setLive]
   );
+
+  const handleReboot = useCallback(() => {
+    handleCloseSettings(false);
+    openWelcome({ announce: "Welcome intro reopened from settings.", resetPlayer: true });
+    setToastMessage("Rebooted. The welcome intro is ready again.");
+  }, [handleCloseSettings, openWelcome, setToastMessage]);
 
   const handleCreateProfile = useCallback(() => {
     if (settingsOpen) {
@@ -2202,6 +2489,93 @@ function RPSDoodleAppInner(){
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {restoreDialogOpen && (
+          <motion.div
+            className="fixed inset-0 z-[91] grid place-items-center bg-slate-900/45 px-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={handleRestoreCancel}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="w-[min(520px,100%)] rounded-2xl bg-white p-6 shadow-2xl"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="restore-profile-title"
+              aria-describedby="restore-profile-body"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <h2 id="restore-profile-title" className="text-lg font-semibold text-slate-900">
+                    Load saved player
+                  </h2>
+                  <p id="restore-profile-body" className="text-sm text-slate-600">
+                    Choose an existing player profile stored on this device.
+                  </p>
+                </div>
+                <label className="text-sm font-medium text-slate-700">
+                  Player
+                  <select
+                    value={restoreSelectedPlayerId ?? ""}
+                    onChange={e => setRestoreSelectedPlayerId(e.target.value || null)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-inner"
+                  >
+                    {players.length === 0 ? (
+                      <option value="">No saved players</option>
+                    ) : (
+                      players.map(player => (
+                        <option key={player.id} value={player.id}>
+                          {player.playerName}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </label>
+                {selectedRestorePlayer ? (
+                  <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
+                    <p>
+                      <span className="font-semibold text-slate-800">{selectedRestorePlayer.playerName}</span>
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Grade {selectedRestorePlayer.grade}
+                      {selectedRestorePlayer.age ? ` • Age ${selectedRestorePlayer.age}` : ""}
+                      {selectedRestorePlayer.needsReview ? " • Needs review" : ""}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-dashed border-slate-200 p-3 text-xs text-slate-500">
+                    No saved players yet.
+                  </div>
+                )}
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={handleRestoreCancel}
+                    className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRestoreConfirm}
+                    disabled={!restoreSelectedPlayerId}
+                    className={`rounded-lg px-4 py-2 text-sm font-medium text-white shadow ${restoreSelectedPlayerId ? "bg-sky-600 hover:bg-sky-700" : "bg-slate-400 cursor-not-allowed"}`}
+                  >
+                    Load profile
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header / Settings */}
       <div className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between">
         <motion.h1 layout className="text-2xl font-extrabold tracking-tight text-sky-700 drop-shadow-sm">RPS Lab</motion.h1>
@@ -2559,6 +2933,28 @@ function RPSDoodleAppInner(){
                         How training works
                       </button>
                     </div>
+                    <div className="mt-4 space-y-4 border-t border-slate-200 pt-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-800">Show welcome again</div>
+                          <p className="text-xs text-slate-500">Replay the intro on the next launch.</p>
+                        </div>
+                        <OnOffToggle value={!welcomeSeen} onChange={value => handleWelcomeReplayToggle(value)} />
+                      </div>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-800">Reboot</div>
+                          <p className="text-xs text-slate-500">Return to the welcome intro now.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleReboot}
+                          className="rounded-full bg-slate-900/90 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-slate-900"
+                        >
+                          Reboot
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </section>
               </div>
@@ -2567,8 +2963,107 @@ function RPSDoodleAppInner(){
         )}
       </AnimatePresence>
 
-      {/* BOOT */}
       <AnimatePresence mode="wait">
+        {scene === "WELCOME" && (
+          <motion.main
+            key="welcome"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3, ease: [0.22, 0.61, 0.36, 1] }}
+            className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-sky-100 px-6 py-12 text-slate-800"
+          >
+            <div className="mx-auto flex w-[min(560px,100%)] max-w-full flex-col gap-8 rounded-3xl bg-white/90 p-8 shadow-2xl ring-1 ring-slate-200">
+              <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-400">
+                <span>Intro</span>
+                <span>
+                  {welcomeSlide + 1} / {welcomeSlideCount}
+                </span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200" role="progressbar" aria-valuemin={1} aria-valuemax={welcomeSlideCount} aria-valuenow={welcomeSlide + 1}>
+                <motion.div
+                  className="h-full rounded-full bg-sky-500"
+                  initial={false}
+                  animate={{ width: `${welcomeProgress}%` }}
+                  transition={{ duration: 0.25 }}
+                />
+              </div>
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={welcomeSlide}
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -12 }}
+                  transition={{ duration: 0.25, ease: [0.22, 0.61, 0.36, 1] }}
+                  className="space-y-4"
+                >
+                  <h2 className="text-3xl font-bold text-slate-900">{welcomeSlides[welcomeSlide]?.title}</h2>
+                  <p className="text-base leading-relaxed text-slate-700">{welcomeSlides[welcomeSlide]?.body}</p>
+                </motion.div>
+              </AnimatePresence>
+              {isWelcomeLastSlide ? (
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <button
+                      type="button"
+                      onClick={handleWelcomePrevious}
+                      className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100"
+                    >
+                      Back
+                    </button>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <button
+                        type="button"
+                        className="rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-700"
+                        onClick={() => completeWelcome("setup")}
+                      >
+                        Get started
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        onClick={() => completeWelcome("restore")}
+                        disabled={!hasLocalProfiles}
+                      >
+                        Already played? Load my data
+                      </button>
+                    </div>
+                  </div>
+                  {!hasLocalProfiles && (
+                    <p className="text-xs text-slate-500">No saved profiles detected on this device.</p>
+                  )}
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => completeWelcome("dismiss")}
+                      className="text-sm font-semibold text-slate-500 transition hover:text-slate-700"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={handleWelcomePrevious}
+                    disabled={welcomeSlide === 0}
+                    className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleWelcomeNext}
+                    className="rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-700"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+            </div>
+          </motion.main>
+        )}
         {scene === "BOOT" && (
           <motion.div key="boot" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }} className="grid place-items-center min-h-screen">
             <div className="flex flex-col items-center gap-4">
