@@ -1463,6 +1463,8 @@ function RPSDoodleAppInner(){
       armAudio();
       audio.whoosh();
     }
+    clearRobotReactionTimers();
+    setRobotResultReaction(null);
     resetMatch();
     aiStreakRef.current = 0;
     youStreakRef.current = 0;
@@ -1781,7 +1783,7 @@ function RPSDoodleAppInner(){
   }, [scene, resultBanner, selectedMode, matchTimings, clearRobotReactionTimers, startRobotRest]);
 
   useEffect(() => {
-    if (scene === "RESULTS" || scene === "MATCH") return;
+    if (scene === "RESULTS" || scene === "MATCH" || scene === "MODE") return;
     setRobotResultReaction(null);
     clearRobotReactionTimers();
   }, [scene, clearRobotReactionTimers]);
@@ -1802,8 +1804,6 @@ function RPSDoodleAppInner(){
   function goToMode(){
     clearCountdown();
     clearTimers();
-    clearRobotReactionTimers();
-    setRobotResultReaction(null);
     resetMatch();
     setWipeRun(false);
     setSelectedMode(null);
@@ -2766,6 +2766,8 @@ function RPSDoodleAppInner(){
                   type="button"
                   className="rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-700"
                   onClick={() => {
+                    clearRobotReactionTimers();
+                    setRobotResultReaction(null);
                     resetMatch();
                     setScene("MATCH");
                   }}
