@@ -36,6 +36,18 @@ const TAB_OPTIONS = ["overview", "data", "timers", "audit"] as const;
 type TabKey = typeof TAB_OPTIONS[number];
 type TimingField = keyof MatchTimings["challenge"];
 
+function countTimingDifferences(base: MatchTimings, compare: MatchTimings): number {
+  let changes = 0;
+  (["challenge", "practice"] as const).forEach(mode => {
+    (Object.keys(base[mode]) as TimingField[]).forEach(field => {
+      if (base[mode][field] !== compare[mode][field]) {
+        changes += 1;
+      }
+    });
+  });
+  return changes;
+}
+
 interface ControlFilters {
   playerId: string | null;
   profileId: string | null;
@@ -88,7 +100,7 @@ interface ProfileSummaryData {
 }
 
 export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTimingsReset }: DeveloperConsoleProps) {
-  const { players, updatePlayer, deletePlayer, setCurrentPlayer } = usePlayers();
+  const { players, updatePlayer, deletePlayer, setCurrentPlayer, currentPlayerId } = usePlayers();
   const {
     adminRounds,
     adminMatches,
@@ -100,6 +112,8 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     adminDeleteRound,
     adminUpdateMatch,
     adminDeleteMatch,
+    currentProfileId,
+    currentProfile,
   } = useStats();
   const [tab, setTab] = useState<TabKey>("data");
   const [pin, setPin] = useState("");
@@ -123,6 +137,21 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
   const [focusedRoundId, setFocusedRoundId] = useState<string | null>(null);
   const [roundMatchFilter, setRoundMatchFilter] = useState<string | null>(null);
   const [auditActionFilter, setAuditActionFilter] = useState<string>("all");
+  const [overrideState, setOverrideState] = useState<
+    | {
+        origin: { playerId: string | null; profileId: string | null };
+        active: { playerId: string; profileId: string | null };
+      }
+    | null
+  >(null);
+  const [pendingProfileSelection, setPendingProfileSelection] = useState<string | null>(null);
+  const [jumpDialogOpen, setJumpDialogOpen] = useState(false);
+  const [jumpSelection, setJumpSelection] = useState<{ playerId: string | null; profileId: string | null }>(
+    () => ({ playerId: null, profileId: null })
+  );
+  const [timingConfirmOpen, setTimingConfirmOpen] = useState(false);
+  const [timingConfirmAction, setTimingConfirmAction] = useState<"save" | "revert" | "restore" | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const hashInitialized = useRef(false);
 
   const timerFields = useMemo(
@@ -192,6 +221,13 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     setTimingDraft(cloneTimings(timings));
     setMakeDefault(false);
   }, [timings, open]);
+
+  useEffect(() => {
+    if (!toastMessage) return;
+    if (typeof window === "undefined") return;
+    const timer = window.setTimeout(() => setToastMessage(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [toastMessage]);
 
   useEffect(() => {
     if (!open || !ready || !DEV_MODE_SECURE) return;
@@ -316,6 +352,67 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     ? playerSummaries.find(summary => summary.player.id === selectedPlayer.id) ?? null
     : null;
   const selectedProfileSummary = selectedProfile ? profileSummaryMap.get(selectedProfile.id) ?? null : null;
+  const jumpProfileOptions = useMemo(() => {
+    if (!jumpSelection.playerId) return [] as StatsProfile[];
+    return adminProfiles.filter(profile => profile.playerId === jumpSelection.playerId);
+  }, [jumpSelection.playerId, adminProfiles]);
+  const overrideDisplay = useMemo(() => {
+    if (!overrideState) return null;
+    const playerName = playerMap.get(overrideState.active.playerId)?.playerName ?? "Unknown player";
+    const profileLabel = overrideState.active.profileId
+      ? profileMap.get(overrideState.active.profileId)?.name ?? overrideState.active.profileId
+      : "Default profile";
+    return `${playerName} • ${profileLabel}`;
+  }, [overrideState, playerMap, profileMap]);
+  const normalizedActiveTimings = useMemo(() => normalizeMatchTimings(timings), [timings]);
+  const normalizedTimingDraft = useMemo(() => normalizeMatchTimings(timingDraft), [timingDraft]);
+  const timingChangesCount = useMemo(
+    () => countTimingDifferences(normalizedActiveTimings, normalizedTimingDraft),
+    [normalizedActiveTimings, normalizedTimingDraft]
+  );
+  const hasTimingChanges = timingChangesCount > 0;
+  const timingSummaryLine = `${timingChangesCount} change${timingChangesCount === 1 ? "" : "s"}`;
+  const hasOverride = Boolean(overrideState);
+  const jumpSelectedPlayerName = jumpSelection.playerId
+    ? playerMap.get(jumpSelection.playerId)?.playerName ?? "Unknown player"
+    : null;
+  const jumpSelectedProfileName = jumpSelection.playerId
+    ? jumpSelection.profileId
+      ? profileMap.get(jumpSelection.profileId)?.name ?? "Unknown profile"
+      : "Default profile"
+    : null;
+  const timingConfirmTitle =
+    timingConfirmAction === "save"
+      ? "Apply timer changes?"
+      : timingConfirmAction === "revert"
+      ? "Revert changes?"
+      : timingConfirmAction === "restore"
+      ? "Restore defaults?"
+      : "";
+  const timingConfirmBody =
+    timingConfirmAction === "save"
+      ? `You’re about to update timings for this session.${
+          makeDefault ? " These values will also become the default for future sessions." : ""
+        }`
+      : timingConfirmAction === "revert"
+      ? "This will discard the pending edits and restore the active timings."
+      : timingConfirmAction === "restore"
+      ? "This will replace the current timings with the baseline defaults."
+      : "";
+  const timingConfirmDisabled = timingConfirmAction === "save" && !hasTimingChanges;
+
+  useEffect(() => {
+    if (!ready) return;
+    if (!pendingProfileSelection) return;
+    const profile = profileMap.get(pendingProfileSelection);
+    if (!profile) {
+      setPendingProfileSelection(null);
+      return;
+    }
+    if (profile.playerId !== currentPlayerId) return;
+    selectProfile(pendingProfileSelection);
+    setPendingProfileSelection(null);
+  }, [pendingProfileSelection, profileMap, currentPlayerId, selectProfile, ready]);
 
   const profilesForList = useMemo(() => {
     const scopedProfiles = filters.playerId
@@ -515,20 +612,6 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     }
   }, [roundMatchFilter, matchMap, filters.playerId, filters.profileId]);
 
-  useEffect(() => {
-    if (!ready) return;
-    setCurrentPlayer(filters.playerId);
-  }, [filters.playerId, setCurrentPlayer, ready]);
-
-  useEffect(() => {
-    if (!ready) return;
-    if (!filters.profileId) return;
-    const profile = profileMap.get(filters.profileId);
-    if (profile && (!filters.playerId || profile.playerId === filters.playerId)) {
-      selectProfile(filters.profileId);
-    }
-  }, [filters.profileId, filters.playerId, profileMap, selectProfile, ready]);
-
   const handleSelectPlayer = useCallback(
     (playerId: string | null) => {
       setFilters(prev => ({
@@ -538,12 +621,11 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
           playerId && prev.profileId && profileMap.get(prev.profileId)?.playerId === playerId ? prev.profileId : null,
         dateRange: { ...prev.dateRange },
       }));
-      setCurrentPlayer(playerId);
       setRoundMatchFilter(null);
       setFocusedMatchId(null);
       setFocusedRoundId(null);
     },
-    [profileMap, setCurrentPlayer, selectProfile]
+    [profileMap]
   );
 
   const handleSelectProfile = useCallback(
@@ -567,13 +649,11 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
         profileId: profile.id,
         dateRange: { ...prev.dateRange },
       }));
-      setCurrentPlayer(profile.playerId);
-      selectProfile(profile.id);
       setRoundMatchFilter(null);
       setFocusedMatchId(null);
       setFocusedRoundId(null);
     },
-    [profileMap, setCurrentPlayer, selectProfile]
+    [profileMap]
   );
 
   const handleModeFilterChange = useCallback((value: Mode | "") => {
@@ -616,8 +696,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     setFocusedMatchId(null);
     setFocusedRoundId(null);
     setRoundMatchFilter(null);
-    setCurrentPlayer(null);
-  }, [setCurrentPlayer]);
+  }, []);
 
   const handleMatchSearchChange = useCallback((field: keyof MatchSearchFilters, value: string) => {
     setMatchSearch(prev => ({ ...prev, [field]: value }));
@@ -652,6 +731,67 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     },
     [matchMap]
   );
+
+  const handleOpenJumpDialog = useCallback(() => {
+    setJumpSelection({
+      playerId: filters.playerId,
+      profileId: filters.profileId,
+    });
+    setJumpDialogOpen(true);
+  }, [filters.playerId, filters.profileId]);
+
+  const handleJumpPlayerChange = useCallback((playerId: string) => {
+    setJumpSelection(prev => ({
+      playerId: playerId || null,
+      profileId:
+        prev.profileId && profileMap.get(prev.profileId)?.playerId === playerId ? prev.profileId : null,
+    }));
+  }, [profileMap]);
+
+  const handleJumpProfileChange = useCallback((profileId: string) => {
+    setJumpSelection(prev => ({
+      ...prev,
+      profileId: profileId || null,
+    }));
+  }, []);
+
+  const handleCancelJump = useCallback(() => {
+    setJumpDialogOpen(false);
+  }, []);
+
+  const handleConfirmJump = useCallback(() => {
+    if (!ready) return;
+    if (!jumpSelection.playerId) return;
+    const targetPlayerId = jumpSelection.playerId;
+    const profileCandidate =
+      jumpSelection.profileId && profileMap.get(jumpSelection.profileId)?.playerId === targetPlayerId
+        ? jumpSelection.profileId
+        : null;
+    const originPlayerId = overrideState?.origin.playerId ?? currentPlayerId ?? null;
+    const originProfileId =
+      overrideState?.origin.profileId ?? (currentProfile?.id ?? currentProfileId ?? null);
+
+    const nextOverride = {
+      origin: { playerId: originPlayerId, profileId: originProfileId },
+      active: { playerId: targetPlayerId, profileId: profileCandidate },
+    };
+
+    setOverrideState(nextOverride);
+    setCurrentPlayer(targetPlayerId);
+    setPendingProfileSelection(profileCandidate);
+    setJumpDialogOpen(false);
+    onClose();
+  }, [ready, jumpSelection.playerId, jumpSelection.profileId, profileMap, overrideState, currentPlayerId, currentProfile, currentProfileId, setCurrentPlayer, setPendingProfileSelection, onClose]);
+
+  const handleReleaseOverride = useCallback(() => {
+    if (!ready) return;
+    if (!overrideState) return;
+    const { origin } = overrideState;
+    setOverrideState(null);
+    setCurrentPlayer(origin.playerId);
+    setPendingProfileSelection(origin.profileId);
+    onClose();
+  }, [overrideState, setCurrentPlayer, setPendingProfileSelection, onClose, ready]);
 
   const recordAudit = useCallback(async (entry: Omit<AuditEntry, "timestamp">) => {
     const fullEntry: AuditEntry = {
@@ -688,10 +828,9 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
   const handleResetProfileTraining = useCallback(async () => {
     if (!selectedProfile) return;
     if (typeof window !== "undefined" && !window.confirm("Reset training progress for this profile?")) return;
-    setCurrentPlayer(selectedProfile.playerId);
     updateProfile(selectedProfile.id, { trainingCount: 0, trained: false });
     await recordAudit({ action: "reset-profile-training", target: selectedProfile.id });
-  }, [selectedProfile, setCurrentPlayer, updateProfile, recordAudit]);
+  }, [selectedProfile, updateProfile, recordAudit]);
 
   const handleRenameProfile = useCallback(async () => {
     if (!selectedProfile) return;
@@ -700,19 +839,17 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     if (!nextName) return;
     const trimmed = nextName.trim();
     if (!trimmed || trimmed === selectedProfile.name) return;
-    setCurrentPlayer(selectedProfile.playerId);
     updateProfile(selectedProfile.id, { name: trimmed });
     await recordAudit({ action: "rename-profile", target: selectedProfile.id, notes: JSON.stringify({ name: trimmed }) });
-  }, [selectedProfile, setCurrentPlayer, updateProfile, recordAudit]);
+  }, [selectedProfile, updateProfile, recordAudit]);
 
   const handleCreateProfileForPlayer = useCallback(async () => {
     if (!selectedPlayer) return;
-    setCurrentPlayer(selectedPlayer.id);
-    const created = createProfile();
+    const created = createProfile(selectedPlayer.id);
     if (!created) return;
     await recordAudit({ action: "create-profile", target: created.id, notes: JSON.stringify({ playerId: created.playerId }) });
     handleSelectProfile(created.id);
-  }, [selectedPlayer, setCurrentPlayer, createProfile, recordAudit, handleSelectProfile]);
+  }, [selectedPlayer, createProfile, recordAudit, handleSelectProfile]);
 
   const filteredAuditLogs = useMemo(() => {
     if (auditActionFilter === "all") return auditLogs;
@@ -785,24 +922,48 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
   const handleTimingSubmit = useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      const sanitized = normalizeMatchTimings(timingDraft);
-      setTimingDraft(cloneTimings(sanitized));
-      onTimingsUpdate(sanitized, { persist: makeDefault });
+      if (!hasTimingChanges) return;
+      setTimingConfirmAction("save");
+      setTimingConfirmOpen(true);
     },
-    [timingDraft, makeDefault, onTimingsUpdate]
+    [hasTimingChanges]
   );
 
   const handleRevertDraft = useCallback(() => {
-    setTimingDraft(cloneTimings(timings));
-    setMakeDefault(false);
-  }, [timings]);
+    if (!hasTimingChanges) return;
+    setTimingConfirmAction("revert");
+    setTimingConfirmOpen(true);
+  }, [hasTimingChanges]);
 
   const handleResetTimings = useCallback(() => {
-    const defaults = normalizeMatchTimings(MATCH_TIMING_DEFAULTS);
-    setTimingDraft(cloneTimings(defaults));
-    setMakeDefault(false);
-    onTimingsReset();
-  }, [onTimingsReset]);
+    setTimingConfirmAction("restore");
+    setTimingConfirmOpen(true);
+  }, []);
+
+  const handleConfirmTimingAction = useCallback(() => {
+    if (!timingConfirmAction) return;
+    if (timingConfirmAction === "save") {
+      const sanitized = normalizeMatchTimings(timingDraft);
+      setTimingDraft(cloneTimings(sanitized));
+      onTimingsUpdate(sanitized, { persist: makeDefault });
+      setToastMessage(makeDefault ? "Timings updated and set as default." : "Timings updated.");
+    } else if (timingConfirmAction === "revert") {
+      setTimingDraft(cloneTimings(timings));
+      setMakeDefault(false);
+    } else if (timingConfirmAction === "restore") {
+      const defaults = normalizeMatchTimings(MATCH_TIMING_DEFAULTS);
+      setTimingDraft(cloneTimings(defaults));
+      setMakeDefault(false);
+      onTimingsReset();
+    }
+    setTimingConfirmAction(null);
+    setTimingConfirmOpen(false);
+  }, [timingConfirmAction, timingDraft, makeDefault, onTimingsUpdate, timings, onTimingsReset]);
+
+  const handleCancelTimingAction = useCallback(() => {
+    setTimingConfirmAction(null);
+    setTimingConfirmOpen(false);
+  }, []);
 
   if (!DEV_MODE_ENABLED || !open) return null;
 
@@ -836,27 +997,292 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
           gap: "16px",
         }}
       >
-        <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px" }}>
-          <div>
-            <h2 style={{ fontSize: "1.35rem", margin: 0 }}>Developer Control Room</h2>
-            <p style={{ margin: 0, fontSize: "0.85rem", opacity: 0.7 }}>
-              Secure access to player demographics, gameplay statistics, and audit trails.
-            </p>
+        <header
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: "16px",
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <div>
+              <h2 style={{ fontSize: "1.35rem", margin: 0 }}>Developer Control Room</h2>
+              <p style={{ margin: 0, fontSize: "0.85rem", opacity: 0.7 }}>
+                Secure access to player demographics, gameplay statistics, and audit trails.
+              </p>
+            </div>
+            {filters.profileId && (
+              <span
+                style={{
+                  alignSelf: "flex-start",
+                  padding: "4px 10px",
+                  borderRadius: "999px",
+                  background: "rgba(59,130,246,0.18)",
+                  color: "#93c5fd",
+                  fontSize: "0.75rem",
+                  fontWeight: 600,
+                  letterSpacing: "0.02em",
+                }}
+              >
+                Viewing in Dev Mode
+              </span>
+            )}
+            {overrideDisplay && (
+              <span style={{ fontSize: "0.8rem", opacity: 0.8 }}>Current override: {overrideDisplay}</span>
+            )}
           </div>
-          <button
-            onClick={onClose}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <button
+              onClick={handleOpenJumpDialog}
+              disabled={!ready || players.length === 0}
+              style={{
+                background: ready && players.length > 0 ? "#2563eb" : "rgba(37,99,235,0.35)",
+                border: "none",
+                color: "white",
+                borderRadius: "999px",
+                padding: "6px 18px",
+                cursor: ready && players.length > 0 ? "pointer" : "not-allowed",
+                boxShadow: "0 0 0 1px rgba(255,255,255,0.08)",
+                opacity: ready && players.length > 0 ? 1 : 0.6,
+              }}
+            >
+              Jump to Game
+            </button>
+            <button
+              onClick={handleReleaseOverride}
+              disabled={!hasOverride || !ready}
+              style={{
+                background:
+                  hasOverride && ready ? "rgba(255,255,255,0.12)" : "rgba(148,163,184,0.18)",
+                border: "1px solid rgba(255,255,255,0.2)",
+                color:
+                  hasOverride && ready ? "#f8fafc" : "rgba(226,232,240,0.5)",
+                borderRadius: "999px",
+                padding: "6px 18px",
+                cursor: hasOverride && ready ? "pointer" : "not-allowed",
+              }}
+            >
+              Release &amp; Revert
+            </button>
+            <button
+              onClick={onClose}
+              style={{
+                background: "transparent",
+                border: "1px solid rgba(255,255,255,0.2)",
+                color: "inherit",
+                borderRadius: "999px",
+                padding: "6px 18px",
+                cursor: "pointer",
+              }}
+            >
+              Close
+            </button>
+          </div>
+        </header>
+
+        {jumpDialogOpen && (
+          <div
+            role="dialog"
+            aria-modal="true"
             style={{
-              background: "transparent",
-              border: "1px solid rgba(255,255,255,0.2)",
-              color: "inherit",
-              borderRadius: "999px",
-              padding: "6px 18px",
-              cursor: "pointer",
+              position: "fixed",
+              inset: 0,
+              background: "rgba(8, 15, 30, 0.65)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 10001,
             }}
           >
-            Close
-          </button>
-        </header>
+            <div
+              style={{
+                background: "#0f172a",
+                borderRadius: "12px",
+                padding: "24px",
+                width: "min(92vw, 420px)",
+                display: "grid",
+                gap: "16px",
+                boxShadow: "0 20px 50px rgba(0,0,0,0.45)",
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: "1.1rem" }}>Set active player/profile for gameplay?</h3>
+              <p style={{ margin: 0, fontSize: "0.85rem", opacity: 0.75 }}>
+                Choose which player and stats profile to apply to the live experience. Dev Mode will close after
+                applying the override.
+              </p>
+              <label style={{ display: "grid", gap: "6px", fontSize: "0.85rem" }}>
+                <span>Player</span>
+                <select
+                  value={jumpSelection.playerId ?? ""}
+                  onChange={event => handleJumpPlayerChange(event.target.value)}
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: "8px",
+                    border: "1px solid rgba(255,255,255,0.2)",
+                    background: "rgba(15,23,42,0.85)",
+                    color: "#f8fafc",
+                  }}
+                >
+                  <option value="">Select a player</option>
+                  {players.map(player => (
+                    <option key={player.id} value={player.id}>
+                      {player.playerName}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: "grid", gap: "6px", fontSize: "0.85rem" }}>
+                <span>Profile</span>
+                <select
+                  value={jumpSelection.profileId ?? ""}
+                  onChange={event => handleJumpProfileChange(event.target.value)}
+                  disabled={!jumpSelection.playerId || jumpProfileOptions.length === 0}
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: "8px",
+                    border: "1px solid rgba(255,255,255,0.2)",
+                    background: "rgba(15,23,42,0.85)",
+                    color: jumpSelection.playerId ? "#f8fafc" : "rgba(226,232,240,0.6)",
+                  }}
+                >
+                  <option value="">Auto-select default profile</option>
+                  {jumpProfileOptions.map(profile => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {jumpSelectedPlayerName && (
+                <div style={{ fontSize: "0.8rem", opacity: 0.75 }}>
+                  Selected: {jumpSelectedPlayerName}
+                  {jumpSelectedProfileName ? ` • ${jumpSelectedProfileName}` : ""}
+                </div>
+              )}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+                <button
+                  type="button"
+                  onClick={handleCancelJump}
+                  style={{
+                    background: "transparent",
+                    border: "1px solid rgba(255,255,255,0.2)",
+                    color: "#e2e8f0",
+                    borderRadius: "8px",
+                    padding: "8px 16px",
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmJump}
+                  disabled={!jumpSelection.playerId}
+                  style={{
+                    background: jumpSelection.playerId ? "#2563eb" : "rgba(37,99,235,0.35)",
+                    border: "none",
+                    color: "white",
+                    borderRadius: "8px",
+                    padding: "8px 16px",
+                    cursor: jumpSelection.playerId ? "pointer" : "not-allowed",
+                    opacity: jumpSelection.playerId ? 1 : 0.6,
+                  }}
+                >
+                  Confirm &amp; Apply
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {timingConfirmOpen && timingConfirmAction && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(8, 15, 30, 0.65)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 10002,
+            }}
+          >
+            <div
+              style={{
+                background: "#0f172a",
+                borderRadius: "12px",
+                padding: "24px",
+                width: "min(92vw, 400px)",
+                display: "grid",
+                gap: "14px",
+                boxShadow: "0 20px 50px rgba(0,0,0,0.45)",
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: "1.05rem" }}>{timingConfirmTitle}</h3>
+              {timingConfirmBody && <p style={{ margin: 0, fontSize: "0.85rem", opacity: 0.75 }}>{timingConfirmBody}</p>}
+              {timingConfirmAction === "save" && (
+                <p style={{ margin: 0, fontSize: "0.85rem", fontWeight: 600 }}>{timingSummaryLine}</p>
+              )}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+                <button
+                  type="button"
+                  onClick={handleCancelTimingAction}
+                  style={{
+                    background: "transparent",
+                    border: "1px solid rgba(255,255,255,0.2)",
+                    color: "#e2e8f0",
+                    borderRadius: "8px",
+                    padding: "8px 16px",
+                    cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmTimingAction}
+                  disabled={timingConfirmDisabled}
+                  style={{
+                    background: !timingConfirmDisabled ? "#2563eb" : "rgba(37,99,235,0.35)",
+                    border: "none",
+                    color: "white",
+                    borderRadius: "8px",
+                    padding: "8px 16px",
+                    cursor: !timingConfirmDisabled ? "pointer" : "not-allowed",
+                    opacity: !timingConfirmDisabled ? 1 : 0.6,
+                  }}
+                >
+                  Confirm &amp; Apply
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {toastMessage && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              position: "fixed",
+              right: "24px",
+              bottom: "24px",
+              background: "rgba(15,23,42,0.95)",
+              color: "#f8fafc",
+              padding: "12px 18px",
+              borderRadius: "10px",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
+              fontSize: "0.9rem",
+              zIndex: 10003,
+            }}
+          >
+            {toastMessage}
+          </div>
+        )}
 
         {!ready ? (
           <form onSubmit={handleUnlock} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
@@ -1129,13 +1555,15 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
                       <button
                         type="submit"
+                        disabled={!hasTimingChanges}
                         style={{
-                          background: "#2563eb",
+                          background: hasTimingChanges ? "#2563eb" : "rgba(30,64,175,0.45)",
                           border: "none",
                           color: "white",
                           borderRadius: "8px",
                           padding: "8px 18px",
-                          cursor: "pointer",
+                          cursor: hasTimingChanges ? "pointer" : "not-allowed",
+                          opacity: hasTimingChanges ? 1 : 0.6,
                         }}
                       >
                         Save timings
@@ -1143,13 +1571,14 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
                       <button
                         type="button"
                         onClick={handleRevertDraft}
+                        disabled={!hasTimingChanges}
                         style={{
-                          background: "rgba(255,255,255,0.1)",
+                          background: hasTimingChanges ? "rgba(255,255,255,0.1)" : "rgba(148,163,184,0.12)",
                           border: "1px solid rgba(255,255,255,0.15)",
-                          color: "white",
+                          color: hasTimingChanges ? "white" : "rgba(226,232,240,0.6)",
                           borderRadius: "8px",
                           padding: "8px 14px",
-                          cursor: "pointer",
+                          cursor: hasTimingChanges ? "pointer" : "not-allowed",
                         }}
                       >
                         Revert to active
@@ -1169,6 +1598,9 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
                         Restore baseline defaults
                       </button>
                     </div>
+                    {!hasTimingChanges && (
+                      <p style={{ fontSize: "0.75rem", opacity: 0.65, margin: "0" }}>No changes to save.</p>
+                    )}
                   </div>
                 </form>
               )}

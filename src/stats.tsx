@@ -101,7 +101,7 @@ interface StatsContextValue {
   logRound: (round: Omit<RoundLog, "id" | "sessionId" | "playerId" | "profileId">) => RoundLog | null;
   logMatch: (match: Omit<MatchSummary, "id" | "sessionId" | "playerId" | "profileId">) => MatchSummary | null;
   selectProfile: (id: string) => void;
-  createProfile: () => StatsProfile | null;
+  createProfile: (playerIdOverride?: string) => StatsProfile | null;
   updateProfile: (id: string, patch: StatsProfileUpdate) => void;
   forkProfileVersion: (id: string) => StatsProfile | null;
   exportRoundsCsv: () => string;
@@ -396,35 +396,47 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     saveCurrentProfileId(id);
   }, [playerProfiles]);
 
-  const createProfile = useCallback(() => {
-    if (!currentPlayerId) return null;
-    const highestVersion = playerProfiles.reduce((max, profile) => Math.max(max, profile.version ?? 1), 1);
-    const existingBaseNames = new Set(playerProfiles.map(profile => profile.baseName));
-    let index = 1;
-    while (existingBaseNames.has(formatLineageBaseName(index))) {
-      index += 1;
-    }
-    const baseName = formatLineageBaseName(index);
-    const version = highestVersion > 1 ? highestVersion : 1;
-    const profile: StatsProfile = {
-      id: makeId("profile"),
-      playerId: currentPlayerId,
-      baseName,
-      version,
-      name: makeProfileDisplayName(baseName, version),
-      createdAt: new Date().toISOString(),
-      trainingCount: 0,
-      trained: false,
-      predictorDefault: true,
-      previousProfileId: null,
-      nextProfileId: null,
-    };
-    setProfiles(prev => prev.concat(profile));
-    setProfilesDirty(true);
-    setCurrentProfileId(profile.id);
-    saveCurrentProfileId(profile.id);
-    return profile;
-  }, [currentPlayerId, playerProfiles]);
+  const createProfile = useCallback(
+    (playerIdOverride?: string) => {
+      const targetPlayerId = playerIdOverride ?? currentPlayerId;
+      if (!targetPlayerId) return null;
+      const targetProfiles = profiles.filter(profile => profile.playerId === targetPlayerId);
+      const highestVersion = targetProfiles.reduce(
+        (max, profile) => Math.max(max, typeof profile.version === "number" ? profile.version : 1),
+        1
+      );
+      const existingBaseNames = new Set(
+        targetProfiles.map(profile => normalizeBaseName(profile.baseName ?? profile.name))
+      );
+      let index = 1;
+      while (existingBaseNames.has(formatLineageBaseName(index))) {
+        index += 1;
+      }
+      const baseName = formatLineageBaseName(index);
+      const version = highestVersion > 1 ? highestVersion : 1;
+      const profile: StatsProfile = {
+        id: makeId("profile"),
+        playerId: targetPlayerId,
+        baseName,
+        version,
+        name: makeProfileDisplayName(baseName, version),
+        createdAt: new Date().toISOString(),
+        trainingCount: 0,
+        trained: false,
+        predictorDefault: true,
+        previousProfileId: null,
+        nextProfileId: null,
+      };
+      setProfiles(prev => prev.concat(profile));
+      setProfilesDirty(true);
+      if (!playerIdOverride || playerIdOverride === currentPlayerId) {
+        setCurrentProfileId(profile.id);
+        saveCurrentProfileId(profile.id);
+      }
+      return profile;
+    },
+    [currentPlayerId, profiles]
+  );
 
   const updateProfile = useCallback((id: string, patch: StatsProfileUpdate) => {
     setProfiles(prev => prev.map(p => {
