@@ -4,6 +4,10 @@ export interface ModeTimingConfig {
   countdownTickMs: number;
   revealHoldMs: number;
   resultBannerMs: number;
+  robotRoundReactionMs: number;
+  robotRoundRestMs: number;
+  robotResultReactionMs: number;
+  robotResultRestMs: number;
 }
 
 export type MatchTimings = Record<Mode, ModeTimingConfig>;
@@ -13,11 +17,19 @@ export const MATCH_TIMING_DEFAULTS: MatchTimings = {
     countdownTickMs: 1100,
     revealHoldMs: 2200,
     resultBannerMs: 1200,
+    robotRoundReactionMs: 1800,
+    robotRoundRestMs: 4000,
+    robotResultReactionMs: 2000,
+    robotResultRestMs: 4000,
   },
   practice: {
     countdownTickMs: 1100,
     revealHoldMs: 2200,
     resultBannerMs: 1800,
+    robotRoundReactionMs: 2000,
+    robotRoundRestMs: 4000,
+    robotResultReactionMs: 2000,
+    robotResultRestMs: 4000,
   },
 };
 
@@ -37,11 +49,43 @@ export function normalizeMatchTimings(input: Partial<Record<Mode, Partial<ModeTi
       countdownTickMs: sanitizeNumber(input.challenge?.countdownTickMs, MATCH_TIMING_DEFAULTS.challenge.countdownTickMs),
       revealHoldMs: sanitizeNumber(input.challenge?.revealHoldMs, MATCH_TIMING_DEFAULTS.challenge.revealHoldMs),
       resultBannerMs: sanitizeNumber(input.challenge?.resultBannerMs, MATCH_TIMING_DEFAULTS.challenge.resultBannerMs),
+      robotRoundReactionMs: sanitizeNumber(
+        input.challenge?.robotRoundReactionMs,
+        MATCH_TIMING_DEFAULTS.challenge.robotRoundReactionMs,
+      ),
+      robotRoundRestMs: sanitizeNumber(
+        input.challenge?.robotRoundRestMs,
+        MATCH_TIMING_DEFAULTS.challenge.robotRoundRestMs,
+      ),
+      robotResultReactionMs: sanitizeNumber(
+        input.challenge?.robotResultReactionMs,
+        MATCH_TIMING_DEFAULTS.challenge.robotResultReactionMs,
+      ),
+      robotResultRestMs: sanitizeNumber(
+        input.challenge?.robotResultRestMs,
+        MATCH_TIMING_DEFAULTS.challenge.robotResultRestMs,
+      ),
     },
     practice: {
       countdownTickMs: sanitizeNumber(input.practice?.countdownTickMs, MATCH_TIMING_DEFAULTS.practice.countdownTickMs),
       revealHoldMs: sanitizeNumber(input.practice?.revealHoldMs, MATCH_TIMING_DEFAULTS.practice.revealHoldMs),
       resultBannerMs: sanitizeNumber(input.practice?.resultBannerMs, MATCH_TIMING_DEFAULTS.practice.resultBannerMs),
+      robotRoundReactionMs: sanitizeNumber(
+        input.practice?.robotRoundReactionMs,
+        MATCH_TIMING_DEFAULTS.practice.robotRoundReactionMs,
+      ),
+      robotRoundRestMs: sanitizeNumber(
+        input.practice?.robotRoundRestMs,
+        MATCH_TIMING_DEFAULTS.practice.robotRoundRestMs,
+      ),
+      robotResultReactionMs: sanitizeNumber(
+        input.practice?.robotResultReactionMs,
+        MATCH_TIMING_DEFAULTS.practice.robotResultReactionMs,
+      ),
+      robotResultRestMs: sanitizeNumber(
+        input.practice?.robotResultRestMs,
+        MATCH_TIMING_DEFAULTS.practice.robotResultRestMs,
+      ),
     },
   };
 }

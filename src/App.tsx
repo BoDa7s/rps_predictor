@@ -544,6 +544,7 @@ function RPSDoodleAppInner(){
   const [robotFocused, setRobotFocused] = useState(false);
   const [robotResultReaction, setRobotResultReaction] = useState<{ emoji: string; body?: string; label: string } | null>(null);
   const robotResultTimeoutRef = useRef<number | null>(null);
+  const robotRestTimeoutRef = useRef<number | null>(null);
   const [trainingCelebrationActive, setTrainingCelebrationActive] = useState(false);
   const robotButtonRef = useRef<HTMLButtonElement | null>(null);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
@@ -677,6 +678,7 @@ function RPSDoodleAppInner(){
   const isTrained = currentProfile?.trained ?? false;
   const previousTrainingCountRef = useRef(trainingCount);
   const [trainingActive, setTrainingActive] = useState<boolean>(false);
+  const [trainingCalloutQueue, setTrainingCalloutQueue] = useState<string[]>([]);
 
   const trainingComplete = trainingCount >= TRAIN_ROUNDS;
   const needsTraining = !isTrained && !trainingComplete;
@@ -723,6 +725,48 @@ function RPSDoodleAppInner(){
   const [live, setLive] = useState("");
   const countdownRef = useRef<number | null>(null);
   const trainingAnnouncementsRef = useRef<Set<number>>(new Set());
+  const clearRobotReactionTimers = useCallback(() => {
+    if (robotResultTimeoutRef.current) {
+      window.clearTimeout(robotResultTimeoutRef.current);
+      robotResultTimeoutRef.current = null;
+    }
+    if (robotRestTimeoutRef.current) {
+      window.clearTimeout(robotRestTimeoutRef.current);
+      robotRestTimeoutRef.current = null;
+    }
+  }, []);
+  const startRobotRest = useCallback(
+    (duration: number, context: "round" | "result") => {
+      if (duration <= 0) {
+        setRobotResultReaction(null);
+        robotRestTimeoutRef.current = null;
+        return;
+      }
+      const restReaction =
+        context === "round"
+          ? {
+              emoji: "😴",
+              body: "Taking a breather before the next round.",
+              label: "Robot resting after the round reaction.",
+            }
+          : {
+              emoji: "😴",
+              body: "Cooling down after that match.",
+              label: "Robot resting after the match reaction.",
+            };
+      setRobotResultReaction(restReaction);
+      if (robotRestTimeoutRef.current) {
+        window.clearTimeout(robotRestTimeoutRef.current);
+      }
+      const restTimeoutId = window.setTimeout(() => {
+        if (robotRestTimeoutRef.current !== restTimeoutId) return;
+        setRobotResultReaction(null);
+        robotRestTimeoutRef.current = null;
+      }, duration);
+      robotRestTimeoutRef.current = restTimeoutId;
+    },
+    [setRobotResultReaction],
+  );
   useEffect(() => {
     setTrainingActive(false);
     trainingAnnouncementsRef.current.clear();
@@ -1432,6 +1476,7 @@ function RPSDoodleAppInner(){
 
   function resetTraining(){
     trainingAnnouncementsRef.current.clear();
+    setTrainingCalloutQueue([]);
     let createdNewProfile = false;
     if (currentProfile) {
       const forked = forkProfileVersion(currentProfile.id);
@@ -1512,6 +1557,9 @@ function RPSDoodleAppInner(){
   useEffect(() => {
     if (!trainingActive) {
       if (!needsTraining) trainingAnnouncementsRef.current.clear();
+      if (trainingCalloutQueue.length) {
+        setTrainingCalloutQueue([]);
+      }
       return;
     }
     const progress = Math.min(trainingCount / TRAIN_ROUNDS, 1);
@@ -1519,10 +1567,12 @@ function RPSDoodleAppInner(){
     thresholds.forEach(threshold => {
       if (progress >= threshold && !trainingAnnouncementsRef.current.has(threshold)) {
         trainingAnnouncementsRef.current.add(threshold);
-        setLive(`AI training ${Math.round(threshold * 100)} percent complete.`);
+        const percentage = Math.round(threshold * 100);
+        const message = `AI training ${percentage}% complete.`;
+        setTrainingCalloutQueue(prev => [...prev, message]);
       }
     });
-  }, [trainingActive, trainingCount, needsTraining]);
+  }, [trainingActive, trainingCount, needsTraining, trainingCalloutQueue.length]);
 
   useEffect(() => {
     if (!trainingActive) return;
@@ -1533,6 +1583,17 @@ function RPSDoodleAppInner(){
     }
     trainingAnnouncementsRef.current.clear();
   }, [trainingActive, trainingCount, currentProfile, updateStatsProfile]);
+
+  useEffect(() => {
+    if (!trainingActive) return;
+    if (!trainingCalloutQueue.length) return;
+    if (robotResultReaction) return;
+    if (toastMessage) return;
+    const [next, ...rest] = trainingCalloutQueue;
+    setTrainingCalloutQueue(rest);
+    setToastMessage(next);
+    setLive(next);
+  }, [trainingActive, trainingCalloutQueue, robotResultReaction, toastMessage, setLive]);
 
   useEffect(() => {
     if (previousTrainingCountRef.current < TRAIN_ROUNDS && trainingCount >= TRAIN_ROUNDS) {
@@ -1627,13 +1688,13 @@ function RPSDoodleAppInner(){
     const modeForReaction: Mode = selectedMode ?? "practice";
     const reaction = modeForReaction === "challenge"
       ? outcome === "win"
-        ? 
+        ?
             {
               emoji: "😏",
               body: "Lucky hit! Don’t get cocky!",
               label: "Robot teases after you winning the round: Lucky hit. Don’t get cocky.",
             }
-        
+
         : outcome === "tie"
           ? {
               emoji: "🤨",
@@ -1663,15 +1724,14 @@ function RPSDoodleAppInner(){
               body: "I saw a pattern! Can you break it?",
               label: "Robot encourages you after a loss to break the pattern.",
             };
+    clearRobotReactionTimers();
     setRobotResultReaction(reaction);
-    if (robotResultTimeoutRef.current) {
-      window.clearTimeout(robotResultTimeoutRef.current);
-    }
-    const reactionDuration = modeForReaction === "challenge" ? 1800 : 2000;
+    const reactionDuration = matchTimings[modeForReaction].robotRoundReactionMs;
+    const restDuration = matchTimings[modeForReaction].robotRoundRestMs;
     const timeoutId = window.setTimeout(() => {
       if (robotResultTimeoutRef.current !== timeoutId) return;
-      setRobotResultReaction(null);
       robotResultTimeoutRef.current = null;
+      startRobotRest(restDuration, "round");
     }, reactionDuration);
     robotResultTimeoutRef.current = timeoutId;
     return () => {
@@ -1680,7 +1740,16 @@ function RPSDoodleAppInner(){
         robotResultTimeoutRef.current = null;
       }
     };
-  }, [scene, phase, outcome, selectedMode, trainingActive]);
+  }, [
+    scene,
+    phase,
+    outcome,
+    selectedMode,
+    trainingActive,
+    matchTimings,
+    clearRobotReactionTimers,
+    startRobotRest,
+  ]);
 
   useEffect(() => {
     if (scene !== "RESULTS" || !resultBanner) return;
@@ -1703,15 +1772,14 @@ function RPSDoodleAppInner(){
           ? { emoji: "😄", label: "Robot celebrates the win." }
           : { emoji: "🤔", label: "Robot is thinking about the tie." };
     })();
+    clearRobotReactionTimers();
     setRobotResultReaction(reaction);
-    if (robotResultTimeoutRef.current) {
-      window.clearTimeout(robotResultTimeoutRef.current);
-    }
-    const reactionDuration = 2000;
+    const reactionDuration = matchTimings[modeForReaction].robotResultReactionMs;
+    const restDuration = matchTimings[modeForReaction].robotResultRestMs;
     const timeoutId = window.setTimeout(() => {
       if (robotResultTimeoutRef.current !== timeoutId) return;
-      setRobotResultReaction(null);
       robotResultTimeoutRef.current = null;
+      startRobotRest(restDuration, "result");
     }, reactionDuration);
     robotResultTimeoutRef.current = timeoutId;
     return () => {
@@ -1720,16 +1788,13 @@ function RPSDoodleAppInner(){
         robotResultTimeoutRef.current = null;
       }
     };
-  }, [scene, resultBanner, selectedMode]);
+  }, [scene, resultBanner, selectedMode, matchTimings, clearRobotReactionTimers, startRobotRest]);
 
   useEffect(() => {
     if (scene === "RESULTS" || scene === "MATCH") return;
     setRobotResultReaction(null);
-    if (robotResultTimeoutRef.current) {
-      window.clearTimeout(robotResultTimeoutRef.current);
-      robotResultTimeoutRef.current = null;
-    }
-  }, [scene]);
+    clearRobotReactionTimers();
+  }, [scene, clearRobotReactionTimers]);
 
   // Helpers
   function tryVibrate(ms:number){ if ((navigator as any).vibrate) (navigator as any).vibrate(ms); }
@@ -3065,108 +3130,110 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
 
       {/* Footer robot idle (personality beat) */}
-      <div className="pointer-events-none fixed bottom-3 right-3 z-[90] flex flex-col items-end gap-3">
-        <AnimatePresence>
-          {robotBubbleContent && (
-            <motion.div
-              key="robot-bubble"
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 4 }}
-              transition={{ duration: 0.2 }}
-              className="pointer-events-auto relative max-w-xs rounded-2xl bg-white/95 px-4 py-2 text-sm text-slate-700 shadow-xl ring-1 ring-slate-200"
-              role="status"
-              aria-live="polite"
-              aria-label={
-                robotBubbleContent.ariaLabel ??
-                (typeof robotBubbleContent.message === "string" ? robotBubbleContent.message : undefined)
-              }
+      {!settingsOpen && (
+        <div className="pointer-events-none fixed bottom-3 right-3 z-[90] flex flex-col items-end gap-3">
+          <AnimatePresence>
+            {robotBubbleContent && (
+              <motion.div
+                key="robot-bubble"
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 4 }}
+                transition={{ duration: 0.2 }}
+                className="pointer-events-auto relative max-w-xs rounded-2xl bg-white/95 px-4 py-2 text-sm text-slate-700 shadow-xl ring-1 ring-slate-200"
+                role="status"
+                aria-live="polite"
+                aria-label={
+                  robotBubbleContent.ariaLabel ??
+                  (typeof robotBubbleContent.message === "string" ? robotBubbleContent.message : undefined)
+                }
+              >
+                <div className={robotBubbleContent.emphasise ? "text-slate-800" : "text-sm font-medium text-slate-800"}>
+                  {robotBubbleContent.message}
+                </div>
+                {robotBubbleContent.buttons && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {robotBubbleContent.buttons.map(button => (
+                      <button
+                        key={button.label}
+                        type="button"
+                        className="rounded-full bg-sky-600 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-sky-700"
+                        onClick={button.onClick}
+                      >
+                        {button.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <span className="pointer-events-none absolute bottom-[-6px] right-5 h-3 w-3 rotate-45 bg-white/95 ring-1 ring-slate-200/70" />
+              </motion.div>
+            )}
+          </AnimatePresence>
+          <motion.button
+            type="button"
+            ref={robotButtonRef}
+            className="pointer-events-auto relative flex h-14 w-14 items-center justify-center rounded-full bg-white/80 shadow-lg ring-1 ring-slate-200 backdrop-blur transition hover:bg-white"
+            onClick={() => {
+              setHelpGuideOpen(prev => {
+                const next = !prev;
+                setLive(next ? "Ready robot help guide opened." : "Ready robot help guide closed.");
+                return next;
+              });
+            }}
+            onMouseEnter={() => setRobotHovered(true)}
+            onMouseLeave={() => setRobotHovered(false)}
+            onFocus={() => setRobotFocused(true)}
+            onBlur={() => setRobotFocused(false)}
+            aria-label="Ready robot help"
+            aria-expanded={helpGuideOpen}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+          >
+            <motion.span
+              animate={{ y: [0, -4, 0], scaleY: [1, 0.88, 1], scaleX: [1, 1.04, 1] }}
+              transition={{ repeat: Infinity, duration: 3.2, ease: "easeInOut" }}
+              className="text-2xl"
             >
-              <div className={robotBubbleContent.emphasise ? "text-slate-800" : "text-sm font-medium text-slate-800"}>
-                {robotBubbleContent.message}
-              </div>
-              {robotBubbleContent.buttons && (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {robotBubbleContent.buttons.map(button => (
-                    <button
-                      key={button.label}
-                      type="button"
-                      className="rounded-full bg-sky-600 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-sky-700"
-                      onClick={button.onClick}
-                    >
-                      {button.label}
-                    </button>
+              🤖
+            </motion.span>
+          </motion.button>
+          <AnimatePresence>
+            {helpGuideOpen && (
+              <motion.div
+                key="robot-help"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 8 }}
+                transition={{ duration: 0.2 }}
+                className="pointer-events-auto w-[min(280px,80vw)] rounded-2xl bg-white/95 p-4 text-sm text-slate-700 shadow-2xl ring-1 ring-slate-200"
+              >
+                <div className="space-y-3">
+                  {helpGuideItems.map(item => (
+                    <div key={item.title} className="rounded-xl bg-slate-50/80 p-3 shadow-inner">
+                      <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                      <p className="mt-1 text-sm text-slate-600">{item.message}</p>
+                    </div>
                   ))}
                 </div>
-              )}
-              <span className="pointer-events-none absolute bottom-[-6px] right-5 h-3 w-3 rotate-45 bg-white/95 ring-1 ring-slate-200/70" />
-            </motion.div>
-          )}
-        </AnimatePresence>
-        <motion.button
-          type="button"
-          ref={robotButtonRef}
-          className="pointer-events-auto relative flex h-14 w-14 items-center justify-center rounded-full bg-white/80 shadow-lg ring-1 ring-slate-200 backdrop-blur transition hover:bg-white"
-          onClick={() => {
-            setHelpGuideOpen(prev => {
-              const next = !prev;
-              setLive(next ? "Ready robot help guide opened." : "Ready robot help guide closed.");
-              return next;
-            });
-          }}
-          onMouseEnter={() => setRobotHovered(true)}
-          onMouseLeave={() => setRobotHovered(false)}
-          onFocus={() => setRobotFocused(true)}
-          onBlur={() => setRobotFocused(false)}
-          aria-label="Ready robot help"
-          aria-expanded={helpGuideOpen}
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-        >
-          <motion.span
-            animate={{ y: [0, -4, 0], scaleY: [1, 0.88, 1], scaleX: [1, 1.04, 1] }}
-            transition={{ repeat: Infinity, duration: 3.2, ease: "easeInOut" }}
-            className="text-2xl"
-          >
-            🤖
-          </motion.span>
-        </motion.button>
-        <AnimatePresence>
-          {helpGuideOpen && (
-            <motion.div
-              key="robot-help"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 8 }}
-              transition={{ duration: 0.2 }}
-              className="pointer-events-auto w-[min(280px,80vw)] rounded-2xl bg-white/95 p-4 text-sm text-slate-700 shadow-2xl ring-1 ring-slate-200"
-            >
-              <div className="space-y-3">
-                {helpGuideItems.map(item => (
-                  <div key={item.title} className="rounded-xl bg-slate-50/80 p-3 shadow-inner">
-                    <p className="text-sm font-semibold text-slate-900">{item.title}</p>
-                    <p className="mt-1 text-sm text-slate-600">{item.message}</p>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3 flex justify-end">
-                <button
-                  type="button"
-                  className="rounded-lg bg-slate-900/90 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-slate-900"
-                  onClick={() => {
-                    setHelpGuideOpen(false);
-                    setLive("Ready robot help guide closed.");
-                    requestAnimationFrame(() => robotButtonRef.current?.focus());
-                  }}
-                >
-                  Dismiss
-                </button>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+                <div className="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    className="rounded-lg bg-slate-900/90 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-slate-900"
+                    onClick={() => {
+                      setHelpGuideOpen(false);
+                      setLive("Ready robot help guide closed.");
+                      requestAnimationFrame(() => robotButtonRef.current?.focus());
+                    }}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
       {DEV_MODE_ENABLED && (
         <>
           <div

@@ -61,6 +61,26 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
       { key: "countdownTickMs" as TimingField, label: "Countdown tick (ms)", helper: "Delay between countdown numbers." },
       { key: "revealHoldMs" as TimingField, label: "AI reveal hold (ms)", helper: "Pause between reveal and score resolution." },
       { key: "resultBannerMs" as TimingField, label: "Result banner (ms)", helper: "Hold duration before the next round begins." },
+      {
+        key: "robotRoundReactionMs" as TimingField,
+        label: "Robot round reaction (ms)",
+        helper: "How long the robot displays round reactions before resting.",
+      },
+      {
+        key: "robotRoundRestMs" as TimingField,
+        label: "Robot round rest (ms)",
+        helper: "Cooldown duration for the robot after a round reaction.",
+      },
+      {
+        key: "robotResultReactionMs" as TimingField,
+        label: "Robot result reaction (ms)",
+        helper: "Duration of robot reactions to match results.",
+      },
+      {
+        key: "robotResultRestMs" as TimingField,
+        label: "Robot result rest (ms)",
+        helper: "Rest period after match result reactions.",
+      },
     ],
     []
   );
