@@ -1799,7 +1799,16 @@ function RPSDoodleAppInner(){
   const timersRef = useRef<number[]>([]);
   const addT = (fn:()=>void, ms:number)=>{ const id = window.setTimeout(fn, ms); timersRef.current.push(id); return id; };
   const clearTimers = ()=>{ timersRef.current.forEach(id=> clearTimeout(id)); timersRef.current = []; };
-  function goToMode(){ clearCountdown(); clearTimers(); setWipeRun(false); setSelectedMode(null); setScene("MODE"); }
+  function goToMode(){
+    clearCountdown();
+    clearTimers();
+    clearRobotReactionTimers();
+    setRobotResultReaction(null);
+    resetMatch();
+    setWipeRun(false);
+    setSelectedMode(null);
+    setScene("MODE");
+  }
   function goToMatch(){ clearTimers(); startMatch(selectedMode ?? "practice"); }
 
   // ---- Mode selection flow ----
