@@ -1,11 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, DecisionPolicy } from "./stats";
-import { PlayersProvider, usePlayers, GradeBand, AgeBand, Gender, PlayerProfile, CONSENT_TEXT_VERSION } from "./players";
+import { PlayersProvider, usePlayers, Grade, Gender, PlayerProfile, CONSENT_TEXT_VERSION, GRADE_OPTIONS, GENDER_OPTIONS } from "./players";
 import { DEV_MODE_ENABLED } from "./devMode";
 import { DeveloperConsole } from "./DeveloperConsole";
 import { lockSecureStore } from "./secureStore";
+import {
+  MATCH_TIMING_DEFAULTS,
+  MatchTimings,
+  clearSavedMatchTimings,
+  loadMatchTimings,
+  normalizeMatchTimings,
+  saveMatchTimings,
+} from "./matchTimings";
 import LeaderboardModal from "./LeaderboardModal";
 import { computeMatchScore } from "./leaderboard";
 
@@ -36,6 +44,16 @@ const MODES: Mode[] = ["challenge","practice"];
 
 // Icons (emoji fallback)
 const moveEmoji: Record<Move, string> = { rock: "\u270A", paper: "\u270B", scissors: "\u270C\uFE0F" };
+
+const DIFFICULTY_INFO: Record<AIMode, { label: string; helper: string }> = {
+  fair: { label: "Fair", helper: "Gentle counterplay tuned for learning." },
+  normal: { label: "Normal", helper: "Balanced challenge that reacts to streaks." },
+  ruthless: { label: "Ruthless", helper: "Aggressive mix-ups that punish predictability." },
+};
+
+const DIFFICULTY_SEQUENCE: AIMode[] = ["fair", "normal", "ruthless"];
+const BEST_OF_OPTIONS: BestOf[] = [3, 5, 7];
+const WELCOME_SEEN_KEY = "rps_welcome_seen_v1";
 
 // ---- Core game logic (pure) ----
 export function resolveOutcome(player: Move, ai: Move): Outcome {
@@ -444,6 +462,32 @@ function ModeCard({ mode, onSelect, isDimmed, disabled = false }: { mode: Mode, 
   );
 }
 
+function OnOffToggle({ value, onChange, disabled = false }: { value: boolean; onChange: (next: boolean) => void; disabled?: boolean }) {
+  const baseButton = "px-3 py-1 text-xs font-semibold transition-colors";
+  return (
+    <div className="inline-flex items-center overflow-hidden rounded-full border border-slate-300 bg-white shadow-sm">
+      <button
+        type="button"
+        className={`${baseButton} ${value ? "bg-sky-600 text-white" : "text-slate-500 hover:bg-slate-100"}`}
+        aria-pressed={value}
+        onClick={() => !disabled && onChange(true)}
+        disabled={disabled}
+      >
+        On
+      </button>
+      <button
+        type="button"
+        className={`${baseButton} ${!value ? "bg-slate-200 text-slate-700" : "text-slate-500 hover:bg-slate-100"}`}
+        aria-pressed={!value}
+        onClick={() => !disabled && onChange(false)}
+        disabled={disabled}
+      >
+        Off
+      </button>
+    </div>
+  );
+}
+
 // Main component
 function RPSDoodleAppInner(){
   const {
@@ -451,19 +495,34 @@ function RPSDoodleAppInner(){
     matches: profileMatches,
     logRound,
     logMatch,
-    exportJson,
     exportRoundsCsv,
     profiles: statsProfiles,
     currentProfile,
     createProfile: createStatsProfile,
     selectProfile,
     updateProfile: updateStatsProfile,
+    forkProfileVersion,
   } = useStats();
-  const { currentPlayer, hasConsented, createPlayer, updatePlayer } = usePlayers();
+  const { players, currentPlayer, hasConsented, createPlayer, updatePlayer, setCurrentPlayer } = usePlayers();
+  const [welcomeSeen, setWelcomeSeen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(WELCOME_SEEN_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [welcomeActive, setWelcomeActive] = useState(false);
+  const [welcomeSlide, setWelcomeSlide] = useState(0);
   const [statsOpen, setStatsOpen] = useState(false);
   const [leaderboardOpen, setLeaderboardOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [statsTab, setStatsTab] = useState<"overview" | "matches" | "rounds" | "insights">("overview");
   const statsModalRef = useRef<HTMLDivElement | null>(null);
+  const settingsPanelRef = useRef<HTMLDivElement | null>(null);
+  const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const toastReaderCloseRef = useRef<HTMLButtonElement | null>(null);
+  const wasSettingsOpenRef = useRef(false);
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
   const [roundPage, setRoundPage] = useState(0);
   const [liveAiConfidence, setLiveAiConfidence] = useState<number | null>(null);
@@ -479,11 +538,98 @@ function RPSDoodleAppInner(){
   useEffect(() => { setRoundPage(0); }, [roundFilters, profileRounds]);
   const rounds = useMemo(() => profileRounds, [profileRounds]);
   const matches = useMemo(() => profileMatches, [profileMatches]);
-  const [showPlayerModal, setShowPlayerModal] = useState(false);
-  useEffect(() => { if (!hasConsented) setShowPlayerModal(true); }, [hasConsented]);
+  type PlayerModalMode = "hidden" | "create" | "edit";
+  const [playerModalMode, setPlayerModalMode] = useState<PlayerModalMode>("hidden");
+  const isPlayerModalOpen = playerModalMode !== "hidden";
+  const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
+  const [restoreSelectedPlayerId, setRestoreSelectedPlayerId] = useState<string | null>(null);
+  type Scene = "WELCOME"|"BOOT"|"MODE"|"MATCH"|"RESULTS";
+  const [scene, setScene] = useState<Scene>("BOOT");
+  const [bootNext, setBootNext] = useState<"WELCOME" | "AUTO">(() => (!welcomeSeen ? "WELCOME" : "AUTO"));
+  const [bootProgress, setBootProgress] = useState(0);
+  const [bootReady, setBootReady] = useState(false);
+  const bootStartRef = useRef<number | null>(null);
+  const bootAnimationRef = useRef<number | null>(null);
+  const bootAdvancingRef = useRef(false);
+  useEffect(() => {
+    if (welcomeActive || restoreDialogOpen) return;
+    if (scene === "BOOT") return;
+    if (!hasConsented) {
+      setPlayerModalMode(currentPlayer ? "edit" : "create");
+    }
+  }, [hasConsented, currentPlayer, welcomeActive, restoreDialogOpen, scene]);
   useEffect(() => { if (!hasConsented) setLeaderboardOpen(false); }, [hasConsented]);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastReaderOpen, setToastReaderOpen] = useState(false);
+  const [toastConfirm, setToastConfirm] = useState<
+    { confirmLabel: string; cancelLabel?: string; onConfirm: () => void } | null
+  >(null);
+  const [helpToast, setHelpToast] = useState<{ title: string; message: string } | null>(null);
+  const [helpGuideOpen, setHelpGuideOpen] = useState(false);
+  const [robotHovered, setRobotHovered] = useState(false);
+  const [robotFocused, setRobotFocused] = useState(false);
+  const [robotResultReaction, setRobotResultReaction] = useState<{ emoji: string; body?: string; label: string } | null>(null);
+  const robotResultTimeoutRef = useRef<number | null>(null);
+  const robotRestTimeoutRef = useRef<number | null>(null);
+  const [trainingCelebrationActive, setTrainingCelebrationActive] = useState(false);
+  const robotButtonRef = useRef<HTMLButtonElement | null>(null);
+  const welcomeToastShownRef = useRef(false);
+  const welcomeFinalToastShownRef = useRef(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportDialogAcknowledged, setExportDialogAcknowledged] = useState(false);
+  const [exportDialogSource, setExportDialogSource] = useState<"settings" | "stats" | null>(null);
+  const exportDialogRef = useRef<HTMLDivElement | null>(null);
+  const exportDialogCheckboxRef = useRef<HTMLInputElement | null>(null);
+  const exportDialogReturnFocusRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!toastMessage) return;
+    if (toastReaderOpen) return;
+    const id = window.setTimeout(() => setToastMessage(null), 4000);
+    return () => window.clearTimeout(id);
+  }, [toastMessage, toastReaderOpen]);
+  useEffect(() => {
+    if (!toastMessage && toastReaderOpen) {
+      setToastReaderOpen(false);
+    }
+  }, [toastMessage, toastReaderOpen]);
+  useEffect(() => {
+    if (toastMessage) return;
+    setToastConfirm(null);
+  }, [toastMessage]);
+  useEffect(() => {
+    if (!toastReaderOpen) return;
+    requestAnimationFrame(() => toastReaderCloseRef.current?.focus());
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setToastReaderOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [toastReaderOpen]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      if (welcomeSeen) {
+        window.localStorage.setItem(WELCOME_SEEN_KEY, "true");
+      } else {
+        window.localStorage.removeItem(WELCOME_SEEN_KEY);
+      }
+    } catch {
+      /* noop */
+    }
+  }, [welcomeSeen]);
+  useEffect(() => {
+    if (welcomeActive) {
+      setWelcomeSlide(0);
+    }
+  }, [welcomeActive]);
   const [developerOpen, setDeveloperOpen] = useState(false);
   const developerTriggerRef = useRef({ count: 0, lastClick: 0 });
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [resetDialogAcknowledged, setResetDialogAcknowledged] = useState(false);
+  const [createProfileDialogOpen, setCreateProfileDialogOpen] = useState(false);
+  const [createProfileDialogAcknowledged, setCreateProfileDialogAcknowledged] = useState(false);
   const handleDeveloperHotspotClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (!DEV_MODE_ENABLED) return;
@@ -504,6 +650,31 @@ function RPSDoodleAppInner(){
     },
     [setDeveloperOpen]
   );
+  const handleResetDialogClose = useCallback(() => {
+    setResetDialogOpen(false);
+    setResetDialogAcknowledged(false);
+  }, []);
+  const handleConfirmTrainingReset = useCallback(() => {
+    resetTraining();
+    handleResetDialogClose();
+  }, [resetTraining, handleResetDialogClose]);
+
+  useEffect(() => {
+    if (!restoreDialogOpen) return;
+    if (!players.length) {
+      if (restoreSelectedPlayerId !== null) setRestoreSelectedPlayerId(null);
+      return;
+    }
+    const preferredId =
+      (restoreSelectedPlayerId && players.some(p => p.id === restoreSelectedPlayerId))
+        ? restoreSelectedPlayerId
+        : currentPlayer?.id && players.some(p => p.id === currentPlayer.id)
+          ? currentPlayer.id
+          : players[0].id;
+    if (preferredId !== restoreSelectedPlayerId) {
+      setRestoreSelectedPlayerId(preferredId);
+    }
+  }, [restoreDialogOpen, players, currentPlayer?.id, restoreSelectedPlayerId]);
 
   useEffect(() => {
     if (!developerOpen) {
@@ -515,6 +686,13 @@ function RPSDoodleAppInner(){
     lockSecureStore();
     setDeveloperOpen(false);
   }, [lockSecureStore, setDeveloperOpen]);
+
+  const handlePredictorToggle = useCallback((checked: boolean) => {
+    setPredictorMode(checked);
+    if (currentProfile) {
+      updateStatsProfile(currentProfile.id, { predictorDefault: checked });
+    }
+  }, [currentProfile, updateStatsProfile]);
 
   const style = `
   :root{ --challenge:#FF77AA; --practice:#88AA66; }
@@ -530,23 +708,101 @@ function RPSDoodleAppInner(){
   @keyframes wipeIn{ 0%{ transform:translateX(110%) rotate(.5deg) } 100%{ transform:translateX(0) rotate(0) } }
   `;
 
-  type Scene = "BOOT"|"MODE"|"MATCH"|"RESULTS";
-  const [scene, setScene] = useState<Scene>("BOOT");
+  const gradeDisplay = currentPlayer ? (currentPlayer.grade === "Not applicable" ? "N/A" : currentPlayer.grade) : null;
+  const playerLabel = currentPlayer ? `Player: ${currentPlayer.playerName} (Grade ${gradeDisplay})` : "Player: Not set";
+  const demographicsNeedReview = Boolean(currentPlayer?.needsReview);
+  const resolvedModalMode: "create" | "edit" = playerModalMode === "edit" && currentPlayer ? "edit" : "create";
+  const modalPlayer = resolvedModalMode === "edit" ? currentPlayer : null;
+  const hasLocalProfiles = players.length > 0;
 
-  const prefersReduced = useReducedMotion();
-  const [reducedMotion, setReducedMotion] = useState<boolean>(prefersReduced ?? false);
-  useEffect(() => {
-    setReducedMotion(prefersReduced ?? false);
-  }, [prefersReduced]);
   const [audioOn, setAudioOn] = useState(true);
   const [textScale, setTextScale] = useState(1);
 
-  const [predictorMode, setPredictorMode] = useState(false);
+  const [matchTimings, setMatchTimings] = useState<MatchTimings>(() => normalizeMatchTimings(loadMatchTimings()));
+  const updateMatchTimings = useCallback((next: MatchTimings, options?: { persist?: boolean; clearSaved?: boolean }) => {
+    const normalized = normalizeMatchTimings(next);
+    setMatchTimings(normalized);
+    if (options?.persist) {
+      saveMatchTimings(normalized);
+    } else if (options?.clearSaved) {
+      clearSavedMatchTimings();
+    }
+  }, []);
+  const resetMatchTimings = useCallback(() => {
+    const defaults = normalizeMatchTimings(MATCH_TIMING_DEFAULTS);
+    setMatchTimings(defaults);
+    clearSavedMatchTimings();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (scene !== "BOOT") {
+      if (bootAnimationRef.current !== null) {
+        window.cancelAnimationFrame(bootAnimationRef.current);
+        bootAnimationRef.current = null;
+      }
+      bootStartRef.current = null;
+      setBootProgress(0);
+      setBootReady(false);
+      bootAdvancingRef.current = false;
+      return;
+    }
+    bootAdvancingRef.current = false;
+    setBootProgress(0);
+    setBootReady(false);
+    bootStartRef.current = null;
+    const minimumDuration = 5000;
+    const step = (timestamp: number) => {
+      if (bootStartRef.current === null) {
+        bootStartRef.current = timestamp;
+      }
+      const start = bootStartRef.current ?? timestamp;
+      const elapsed = timestamp - start;
+      const ratio = Math.min(elapsed / minimumDuration, 1);
+      const nextProgress = Math.min(100, ratio * 100);
+      setBootProgress(prev => (nextProgress > prev ? nextProgress : prev));
+      if (elapsed >= minimumDuration) {
+        setBootProgress(100);
+        setBootReady(true);
+        bootAnimationRef.current = null;
+        return;
+      }
+      bootAnimationRef.current = window.requestAnimationFrame(step);
+    };
+    bootAnimationRef.current = window.requestAnimationFrame(step);
+    return () => {
+      if (bootAnimationRef.current !== null) {
+        window.cancelAnimationFrame(bootAnimationRef.current);
+        bootAnimationRef.current = null;
+      }
+    };
+  }, [scene]);
+
+  const [predictorMode, setPredictorMode] = useState<boolean>(currentProfile?.predictorDefault ?? true);
   const [aiMode, setAiMode] = useState<AIMode>("normal");
+  const [difficultyHint, setDifficultyHint] = useState<string>(DIFFICULTY_INFO["normal"].helper);
   const TRAIN_ROUNDS = 10;
   const trainingCount = currentProfile?.trainingCount ?? 0;
   const isTrained = currentProfile?.trained ?? false;
+  const previousTrainingCountRef = useRef(trainingCount);
   const [trainingActive, setTrainingActive] = useState<boolean>(false);
+  const [trainingCalloutQueue, setTrainingCalloutQueue] = useState<string[]>([]);
+  const welcomeSlides = useMemo(
+    () => [
+      {
+        title: "Welcome to RPS AI Lab",
+        body: `You’ll train for ${TRAIN_ROUNDS} rounds, then choose a Mode: Challenge (Smarter AI prediction) or Practice (Experiment and learn).`,
+      },
+      {
+        title: "Your data",
+        body: "We collect gameplay for learning. Exports will include your data and demographics.",
+      },
+    ],
+    [TRAIN_ROUNDS],
+  );
+  const welcomeSlideCount = welcomeSlides.length;
+  const welcomeProgress = welcomeSlideCount ? ((welcomeSlide + 1) / welcomeSlideCount) * 100 : 100;
+  const isWelcomeLastSlide = welcomeSlide >= welcomeSlideCount - 1;
 
   const trainingComplete = trainingCount >= TRAIN_ROUNDS;
   const needsTraining = !isTrained && !trainingComplete;
@@ -555,6 +811,18 @@ function RPSDoodleAppInner(){
   const trainingDisplayCount = Math.min(trainingCount, TRAIN_ROUNDS);
   const trainingProgress = Math.min(trainingDisplayCount / TRAIN_ROUNDS, 1);
   const showTrainingCompleteBadge = !needsTraining && trainingCount >= TRAIN_ROUNDS;
+
+  const difficultyDisabled = !isTrained || !predictorMode;
+  const bootPercent = Math.round(bootProgress);
+  const bootBarWidth = Math.min(100, bootProgress > 0 ? bootProgress : 4);
+
+  useEffect(() => {
+    if (difficultyDisabled) {
+      setDifficultyHint("Enable the predictor to adjust difficulty.");
+      return;
+    }
+    setDifficultyHint(DIFFICULTY_INFO[aiMode].helper);
+  }, [aiMode, difficultyDisabled]);
 
   useEffect(() => {
     if (!needsTraining && trainingActive) {
@@ -581,29 +849,296 @@ function RPSDoodleAppInner(){
   const [outcome, setOutcome] = useState<Outcome|undefined>();
   const [resultBanner, setResultBanner] = useState<"Victory"|"Defeat"|"Tie"|null>(null);
   const [live, setLive] = useState("");
+  useEffect(() => {
+    if (welcomeActive) {
+      if (!welcomeToastShownRef.current) {
+        if (!toastMessage) {
+          setToastMessage("Use Next to review the intro, then choose how to continue.");
+        }
+        setLive(`Welcome intro opened. Slide 1 of ${welcomeSlideCount}.`);
+        welcomeToastShownRef.current = true;
+      }
+    } else {
+      welcomeToastShownRef.current = false;
+      welcomeFinalToastShownRef.current = false;
+    }
+  }, [welcomeActive, toastMessage, welcomeSlideCount, setLive, setToastMessage]);
+  useEffect(() => {
+    if (!welcomeActive) return;
+    if (welcomeSlide === welcomeSlideCount - 1 && !welcomeFinalToastShownRef.current) {
+      if (!toastMessage) {
+        setToastMessage("Choose Get started to set up or Load my data to continue where you left off.");
+      }
+      welcomeFinalToastShownRef.current = true;
+    }
+  }, [welcomeActive, welcomeSlide, welcomeSlideCount, toastMessage, setToastMessage]);
   const countdownRef = useRef<number | null>(null);
   const trainingAnnouncementsRef = useRef<Set<number>>(new Set());
+  const clearRobotReactionTimers = useCallback(() => {
+    if (robotResultTimeoutRef.current) {
+      window.clearTimeout(robotResultTimeoutRef.current);
+      robotResultTimeoutRef.current = null;
+    }
+    if (robotRestTimeoutRef.current) {
+      window.clearTimeout(robotRestTimeoutRef.current);
+      robotRestTimeoutRef.current = null;
+    }
+  }, []);
+  const startRobotRest = useCallback(
+    (duration: number, context: "round" | "result") => {
+      if (duration <= 0) {
+        setRobotResultReaction(null);
+        robotRestTimeoutRef.current = null;
+        return;
+      }
+      const restReaction =
+        context === "round"
+          ? {
+              emoji: "😴",
+              body: "Taking a breather before the next round.",
+              label: "Robot resting after the round reaction.",
+            }
+          : {
+              emoji: "😴",
+              body: "Cooling down after that match.",
+              label: "Robot resting after the match reaction.",
+            };
+      setRobotResultReaction(restReaction);
+      if (robotRestTimeoutRef.current) {
+        window.clearTimeout(robotRestTimeoutRef.current);
+      }
+      const restTimeoutId = window.setTimeout(() => {
+        if (robotRestTimeoutRef.current !== restTimeoutId) return;
+        setRobotResultReaction(null);
+        robotRestTimeoutRef.current = null;
+      }, duration);
+      robotRestTimeoutRef.current = restTimeoutId;
+    },
+    [setRobotResultReaction],
+  );
   useEffect(() => {
     setTrainingActive(false);
     trainingAnnouncementsRef.current.clear();
   }, [currentProfile?.id]);
   const clearCountdown = ()=>{ if (countdownRef.current!==null){ clearInterval(countdownRef.current); countdownRef.current=null; } };
-  const startCountdown = ()=>{ setPhase("countdown"); setCount(3); clearCountdown(); countdownRef.current = window.setInterval(()=>{
-    setCount(prev=>{
-      const next = prev - 1;
-      audio.tick();
-      if (!reducedMotion) tryVibrate(6);
-      if (next <= 0){
-        clearCountdown();
-        reveal();
-      }
-      return next;
-    });
-  }, 300); };
+  const startCountdown = ()=>{
+    const modeForTiming: Mode = selectedMode ?? "practice";
+    const interval = matchTimings[modeForTiming].countdownTickMs;
+    setPhase("countdown");
+    setCount(3);
+    clearCountdown();
+    countdownRef.current = window.setInterval(()=>{
+      setCount(prev=>{
+        const next = prev - 1;
+        audio.tick();
+        tryVibrate(6);
+        if (next <= 0){
+          clearCountdown();
+          reveal();
+        }
+        return next;
+      });
+    }, interval);
+  };
 
   const [selectedMode, setSelectedMode] = useState<Mode|null>(null);
   const [wipeRun, setWipeRun] = useState(false);
   const modeLabel = (m:Mode)=> m.charAt(0).toUpperCase()+m.slice(1);
+
+  const goToWelcomeSlide = useCallback(
+    (delta: number) => {
+      setWelcomeSlide(prev => {
+        const next = Math.min(Math.max(0, prev + delta), Math.max(0, welcomeSlideCount - 1));
+        if (next !== prev) {
+          setLive(`Intro slide ${next + 1} of ${welcomeSlideCount}.`);
+        }
+        return next;
+      });
+    },
+    [welcomeSlideCount, setLive],
+  );
+
+  const handleWelcomeNext = useCallback(() => {
+    goToWelcomeSlide(1);
+  }, [goToWelcomeSlide]);
+
+  const handleWelcomePrevious = useCallback(() => {
+    goToWelcomeSlide(-1);
+  }, [goToWelcomeSlide]);
+
+  const openWelcome = useCallback(
+    (options: { announce?: string; resetPlayer?: boolean; bootFirst?: boolean } = {}) => {
+      clearCountdown();
+      setPhase("idle");
+      setCount(3);
+      setPlayerPick(undefined);
+      setAiPick(undefined);
+      setOutcome(undefined);
+      setResultBanner(null);
+      setSelectedMode(null);
+      setWipeRun(false);
+      setPlayerScore(0);
+      setAiScore(0);
+      setRound(1);
+      setLastMoves([]);
+      setAiHistory([]);
+      setOutcomesHist([]);
+      currentMatchRoundsRef.current = [];
+      setTrainingActive(false);
+      setTrainingCalloutQueue([]);
+      trainingAnnouncementsRef.current.clear();
+      setTrainingCelebrationActive(false);
+      clearRobotReactionTimers();
+      setRobotResultReaction(null);
+      setRobotHovered(false);
+      setRobotFocused(false);
+      setStatsOpen(false);
+      setLeaderboardOpen(false);
+      setSettingsOpen(false);
+      setHelpGuideOpen(false);
+      setHelpToast(null);
+      setToastReaderOpen(false);
+      setToastMessage(null);
+      setResetDialogOpen(false);
+      setResetDialogAcknowledged(false);
+      setCreateProfileDialogOpen(false);
+      setCreateProfileDialogAcknowledged(false);
+      setExportDialogOpen(false);
+      setExportDialogAcknowledged(false);
+      setExportDialogSource(null);
+      setRestoreDialogOpen(false);
+      setRestoreSelectedPlayerId(null);
+      setDeveloperOpen(false);
+      setPlayerModalMode("hidden");
+      if (options.resetPlayer) {
+        setCurrentPlayer(null);
+      }
+      setWelcomeSeen(false);
+      setWelcomeSlide(0);
+      if (options.bootFirst) {
+        setWelcomeActive(false);
+        setBootNext("WELCOME");
+        setScene("BOOT");
+      } else {
+        setScene("WELCOME");
+        setBootNext("AUTO");
+        setWelcomeActive(true);
+      }
+      welcomeToastShownRef.current = false;
+      welcomeFinalToastShownRef.current = false;
+      if (options.announce) {
+        setLive(options.announce);
+      }
+    },
+    [
+      clearCountdown,
+      clearRobotReactionTimers,
+      setAiHistory,
+      setAiPick,
+      setAiScore,
+      setCount,
+      setCreateProfileDialogAcknowledged,
+      setCreateProfileDialogOpen,
+      setCurrentPlayer,
+      setDeveloperOpen,
+      setExportDialogAcknowledged,
+      setExportDialogOpen,
+      setExportDialogSource,
+      setHelpGuideOpen,
+      setHelpToast,
+      setLeaderboardOpen,
+      setLastMoves,
+      setOutcomesHist,
+      setPhase,
+      setPlayerModalMode,
+      setPlayerPick,
+      setPlayerScore,
+      setResetDialogAcknowledged,
+      setResetDialogOpen,
+      setResultBanner,
+      setRobotFocused,
+      setRobotHovered,
+      setRobotResultReaction,
+      setRound,
+      setScene,
+      setBootNext,
+      setSelectedMode,
+      setSettingsOpen,
+      setStatsOpen,
+      setToastMessage,
+      setToastReaderOpen,
+      setTrainingActive,
+      setTrainingCalloutQueue,
+      setTrainingCelebrationActive,
+      setWelcomeActive,
+      setWelcomeSeen,
+      setWelcomeSlide,
+      setWipeRun,
+      setLive,
+    ],
+  );
+
+  const completeWelcome = useCallback(
+    (mode: "setup" | "restore" | "dismiss") => {
+      setWelcomeActive(false);
+      setWelcomeSlide(0);
+      setBootNext("AUTO");
+      setScene("BOOT");
+      setWelcomeSeen(true);
+      welcomeToastShownRef.current = false;
+      welcomeFinalToastShownRef.current = false;
+      if (mode === "setup") {
+        setPlayerModalMode("create");
+        setToastMessage("Let’s set up your player profile.");
+        setLive("Opening player setup from welcome intro.");
+      } else if (mode === "restore") {
+        if (players.length > 0) {
+          setRestoreDialogOpen(true);
+          setToastMessage("Pick your saved player to continue.");
+          setLive("Opening saved player picker.");
+        } else {
+          setToastMessage("No saved data found on this device.");
+          setLive("No saved player profiles available.");
+        }
+      } else {
+        setToastMessage("Welcome dismissed. You can replay it from Settings → Help.");
+        setLive("Welcome intro dismissed.");
+      }
+    },
+    [
+      players.length,
+      setBootNext,
+      setLive,
+      setPlayerModalMode,
+      setRestoreDialogOpen,
+      setScene,
+      setToastMessage,
+      setWelcomeActive,
+      setWelcomeSeen,
+      setWelcomeSlide,
+    ],
+  );
+
+  const selectedRestorePlayer = useMemo(() => {
+    if (!restoreSelectedPlayerId) return null;
+    return players.find(player => player.id === restoreSelectedPlayerId) ?? null;
+  }, [players, restoreSelectedPlayerId]);
+
+  const handleRestoreCancel = useCallback(() => {
+    setRestoreDialogOpen(false);
+    setRestoreSelectedPlayerId(null);
+    setLive("Profile restore cancelled.");
+  }, [setRestoreDialogOpen, setRestoreSelectedPlayerId, setLive]);
+
+  const handleRestoreConfirm = useCallback(() => {
+    if (!restoreSelectedPlayerId) return;
+    const target = players.find(player => player.id === restoreSelectedPlayerId);
+    if (!target) return;
+    setRestoreDialogOpen(false);
+    setToastMessage(`Welcome back, ${target.playerName}! Choose a mode when you're ready.`);
+    setLive(`Loaded saved player ${target.playerName}.`);
+    setCurrentPlayer(target.id);
+  }, [players, restoreSelectedPlayerId, setCurrentPlayer, setLive, setRestoreDialogOpen, setToastMessage]);
 
   const recordRound = useCallback((playerMove: Move, aiMove: Move, outcomeForPlayer: Outcome) => {
     const trace = decisionTraceRef.current;
@@ -657,9 +1192,17 @@ function RPSDoodleAppInner(){
 
   useEffect(() => {
     if (!needsTraining && !trainingActive) return;
-    if (predictorMode) setPredictorMode(false);
     if (aiMode !== "fair") setAiMode("fair");
-  }, [needsTraining, trainingActive, predictorMode, aiMode]);
+  }, [needsTraining, trainingActive, aiMode]);
+
+  useEffect(() => {
+    if (needsTraining || trainingActive) {
+      if (predictorMode) setPredictorMode(false);
+      return;
+    }
+    const preferred = currentProfile?.predictorDefault ?? true;
+    setPredictorMode(preferred);
+  }, [currentProfile?.id, currentProfile?.predictorDefault, needsTraining, trainingActive, predictorMode]);
 
   useEffect(() => {
     if (scene !== "MATCH") return;
@@ -674,19 +1217,32 @@ function RPSDoodleAppInner(){
 
   useEffect(() => {
     if (scene !== "BOOT") return;
-    if (!currentProfile || !hasConsented) return;
-    const t = window.setTimeout(() => {
-      if (needsTraining) {
-        startMatch("practice", { silent: true });
-        if (!trainingActive) {
-          setTrainingActive(true);
-        }
-      } else {
-        setScene("MODE");
+    if (!bootReady) return;
+    if (bootAdvancingRef.current) return;
+    bootAdvancingRef.current = true;
+    if (bootNext === "WELCOME") {
+      setWelcomeActive(true);
+      setScene("WELCOME");
+      setBootNext("AUTO");
+      return;
+    }
+    if (needsTraining && currentProfile && hasConsented) {
+      startMatch("practice", { silent: true });
+      if (!trainingActive) {
+        setTrainingActive(true);
       }
-    }, 900);
-    return () => window.clearTimeout(t);
-  }, [scene, currentProfile, hasConsented, needsTraining, trainingActive]);
+      return;
+    }
+    setScene("MODE");
+  }, [
+    scene,
+    bootReady,
+    bootNext,
+    needsTraining,
+    currentProfile,
+    hasConsented,
+    trainingActive,
+  ]);
 
   const statsTabs = [
     { key: "overview", label: "Overview" },
@@ -694,6 +1250,21 @@ function RPSDoodleAppInner(){
     { key: "rounds", label: "Rounds" },
     { key: "insights", label: "Insights" },
   ] as const;
+
+  const helpGuideItems = useMemo(() => [
+    {
+      title: "How to start",
+      message: "Pick Challenge or Practice to launch a match against the AI.",
+    },
+    {
+      title: "What is Training",
+      message: `Training is a ${TRAIN_ROUNDS}-round warmup that lets the AI learn your style before tougher matches.`,
+    },
+    {
+      title: "What is statistics",
+      message: "Statistics saves your rounds and matches so you can review progress and trends anytime.",
+    },
+  ], [TRAIN_ROUNDS]);
 
   const matchesSorted = useMemo(() => {
     return [...matches].sort((a, b) => (b.endedAt || b.startedAt).localeCompare(a.endedAt || a.startedAt));
@@ -727,8 +1298,63 @@ function RPSDoodleAppInner(){
 
   const totalMatches = matches.length;
   const totalRounds = rounds.length;
+  const hasExportData = totalRounds > 0;
+  const canExportData = Boolean(currentPlayer && currentProfile && hasExportData);
+  const shouldShowNoExportMessage = !currentPlayer || !currentProfile || !hasExportData;
   const playerWins = matches.reduce((acc, m) => acc + (m.score.you > m.score.ai ? 1 : 0), 0);
   const overallWinRate = totalMatches ? playerWins / totalMatches : 0;
+  const trainingRoundDisplay = Math.min(trainingCount + 1, TRAIN_ROUNDS);
+  const shouldShowIdleBubble = !trainingActive && !trainingCelebrationActive && !robotResultReaction && (robotHovered || robotFocused || helpGuideOpen);
+  const robotBubbleContent: { message: React.ReactNode; buttons?: { label: string; onClick: () => void }[]; ariaLabel?: string; emphasise?: boolean } | null = trainingCelebrationActive
+    ? {
+        message: "Training complete! You can now play Modes (Challenge or Practice).",
+        buttons: [
+          {
+            label: "Play Challenge",
+            onClick: () => {
+              setTrainingCelebrationActive(false);
+              setHelpGuideOpen(false);
+              setLive("Opening Challenge mode from training completion.");
+              handleModeSelect("challenge");
+            },
+          },
+          {
+            label: "View My Stats",
+            onClick: () => {
+              setTrainingCelebrationActive(false);
+              setHelpGuideOpen(false);
+              setLive("Opening statistics after training completion.");
+              setStatsOpen(true);
+            },
+          },
+        ],
+      }
+    : robotResultReaction
+      ? {
+          message: (
+            <div className="flex flex-col items-center gap-1 text-center text-slate-800">
+              <span className="text-3xl leading-none" aria-hidden="true">
+                {robotResultReaction.emoji}
+              </span>
+              {robotResultReaction.body && (
+                <span className="text-sm font-medium text-slate-800">
+                  {robotResultReaction.body}
+                </span>
+              )}
+            </div>
+          ),
+          ariaLabel: robotResultReaction.label,
+          emphasise: true,
+        }
+      : trainingActive
+        ? {
+            message: `Training round ${Math.min(trainingRoundDisplay, TRAIN_ROUNDS)}/${TRAIN_ROUNDS}—keep going!`,
+          }
+        : shouldShowIdleBubble
+          ? {
+              message: "Ready! Choose a Mode to start.",
+            }
+          : null;
 
   const difficultySummary = useMemo(() => {
     const base = {
@@ -873,8 +1499,9 @@ function RPSDoodleAppInner(){
     return null;
   }, [rounds]);
 
-  const EXPORT_WARNING_TEXT = "Export may include personal/demographic info. You are responsible for how exported files are stored and shared. No liability is assumed.";
-  const PROFILE_WARNING_TEXT = "New statistics profile requires retraining (10 rounds) before normal play. Existing stats remain available but do not merge.";
+  const EXPORT_WARNING_TEXT = "Export may include personal/demographic information. You are responsible for how exported files are stored and shared. No liability is assumed.";
+  const RESET_TRAINING_TOAST =
+    "You’re starting a new training run. Your previous results are archived and linked as Profile History. You can review past vs new results in Statistics.";
   const sanitizeForFile = useCallback((value: string) => {
     return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   }, []);
@@ -884,48 +1511,214 @@ function RPSDoodleAppInner(){
     selectProfile(id);
   }, [selectProfile]);
 
+  const handleWelcomeReplayToggle = useCallback(
+    (value: boolean) => {
+      const shouldShowIntro = value;
+      setWelcomeSeen(!shouldShowIntro);
+      if (shouldShowIntro) {
+        setToastMessage("The welcome intro will show next time you open RPS AI Lab.");
+        setLive("Welcome intro scheduled to replay on the next launch.");
+      } else {
+        setToastMessage("The welcome intro will stay hidden on launch.");
+        setLive("Welcome intro replay disabled.");
+      }
+    },
+    [setLive, setToastMessage, setWelcomeSeen],
+  );
+
+  const handleOpenSettings = useCallback(() => {
+    setSettingsOpen(true);
+    setLive("Settings opened. Press Escape to close.");
+  }, [setLive]);
+
+  const handleCloseSettings = useCallback(
+    (announce: boolean = true) => {
+      setSettingsOpen(false);
+      if (announce) {
+        setLive("Settings closed.");
+      }
+    },
+    [setLive]
+  );
+
+  const handleReboot = useCallback(() => {
+    setToastMessage("Confirm reboot? This will replay the welcome intro after the boot sequence.");
+    setToastConfirm({
+      confirmLabel: "Reboot now",
+      cancelLabel: "Cancel",
+      onConfirm: () => {
+        setToastConfirm(null);
+        setToastMessage(null);
+        handleCloseSettings(false);
+        openWelcome({
+          announce: "Rebooting. Boot sequence starting for the welcome intro.",
+          resetPlayer: true,
+          bootFirst: true,
+        });
+      },
+    });
+    setLive("Reboot requested. Confirm via toast to restart.");
+  }, [handleCloseSettings, openWelcome, setLive, setToastConfirm, setToastMessage]);
+
   const handleCreateProfile = useCallback(() => {
+    if (settingsOpen) {
+      handleCloseSettings();
+    }
     if (!currentPlayer) {
-      setShowPlayerModal(true);
+      setPlayerModalMode("create");
       return;
     }
-    if (!window.confirm(PROFILE_WARNING_TEXT)) return;
-    const defaultName = `Profile ${statsProfiles.length + 1}`;
-    const name = window.prompt("Name for new statistics profile?", defaultName)?.trim();
-    if (!name) return;
-    const created = createStatsProfile(name);
-    if (created) {
-      setLive("New statistics profile created. Complete training to enable challenge mode.");
-    }
-  }, [currentPlayer, statsProfiles.length, createStatsProfile, setLive, setShowPlayerModal]);
+    setCreateProfileDialogAcknowledged(false);
+    setCreateProfileDialogOpen(true);
+  }, [currentPlayer, handleCloseSettings, setPlayerModalMode, settingsOpen]);
 
-  const handleExportJson = useCallback(() => {
-    if (!currentPlayer || !currentProfile) return;
-    if (!window.confirm(EXPORT_WARNING_TEXT)) return;
-    const data = exportJson();
-    const blob = new Blob([data], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const profileSegment = sanitizeForFile(currentProfile.name || 'profile') || 'profile';
-    a.download = `rps-${profileSegment}-stats.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [currentPlayer, currentProfile, exportJson, sanitizeForFile]);
+  const handleCloseCreateProfileDialog = useCallback(() => {
+    setCreateProfileDialogOpen(false);
+    setCreateProfileDialogAcknowledged(false);
+  }, []);
 
-  const handleExportCsv = useCallback(() => {
-    if (!currentPlayer || !currentProfile) return;
-    if (!window.confirm(EXPORT_WARNING_TEXT)) return;
+  const handleConfirmCreateProfile = useCallback(() => {
+    const created = createStatsProfile();
+    if (!created) return;
+    setCreateProfileDialogOpen(false);
+    setCreateProfileDialogAcknowledged(false);
+    const message = `New profile created: ${created.name}. Training starts now (${TRAIN_ROUNDS} rounds). Your previous results remain available in Statistics.`;
+    setToastMessage(message);
+    setLive(`New statistics profile created: ${created.name}. Training starts now (${TRAIN_ROUNDS} rounds). Previous results remain available in Statistics.`);
+  }, [createStatsProfile, setToastMessage, setLive, TRAIN_ROUNDS]);
+
+  const performCsvExport = useCallback(() => {
+    if (!currentPlayer || !currentProfile || !hasExportData) return;
     const data = exportRoundsCsv();
-    const blob = new Blob([data], { type: 'text/csv' });
+    const blob = new Blob([data], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+    const a = document.createElement("a");
     a.href = url;
-    const profileSegment = sanitizeForFile(currentProfile.name || 'profile') || 'profile';
+    const profileSegment = sanitizeForFile(currentProfile.name || "profile") || "profile";
     a.download = `rps-${profileSegment}-rounds.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [currentPlayer, currentProfile, exportRoundsCsv, sanitizeForFile]);
+    const label = currentProfile.name ? ` for ${currentProfile.name}` : "";
+    setToastMessage(`CSV export ready${label}. Check your downloads.`);
+    setLive(`Rounds exported as CSV${label}. Download starting.`);
+  }, [currentPlayer, currentProfile, exportRoundsCsv, hasExportData, sanitizeForFile, setLive, setToastMessage]);
+
+  const closeExportDialog = useCallback(
+    (announce?: string) => {
+      setExportDialogOpen(false);
+      setExportDialogAcknowledged(false);
+      setExportDialogSource(null);
+      if (announce) {
+        setLive(announce);
+      }
+    },
+    [setLive]
+  );
+
+  const handleOpenExportDialog = useCallback(
+    (source: "settings" | "stats", trigger?: HTMLButtonElement | null) => {
+      if (!canExportData) return;
+      exportDialogReturnFocusRef.current = trigger ?? null;
+      setExportDialogSource(source);
+      setExportDialogAcknowledged(false);
+      setExportDialogOpen(true);
+      setLive("Export confirmation open. Check the agreement box to continue.");
+    },
+    [canExportData, setLive]
+  );
+
+  const handleConfirmExport = useCallback(() => {
+    if (!exportDialogAcknowledged || !canExportData) return;
+    const source = exportDialogSource;
+    performCsvExport();
+    closeExportDialog();
+    if (source === "settings") {
+      handleCloseSettings(false);
+    }
+  }, [
+    canExportData,
+    closeExportDialog,
+    exportDialogAcknowledged,
+    exportDialogSource,
+    handleCloseSettings,
+    performCsvExport,
+  ]);
+
+  const handleCancelExport = useCallback(() => {
+    closeExportDialog("Export cancelled.");
+  }, [closeExportDialog]);
+
+  useEffect(() => {
+    if (!exportDialogOpen) {
+      const trigger = exportDialogReturnFocusRef.current;
+      if (trigger) {
+        requestAnimationFrame(() => trigger.focus());
+        exportDialogReturnFocusRef.current = null;
+      }
+      return;
+    }
+    const node = exportDialogRef.current;
+    if (!node) return;
+    const focusableSelector = "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
+    const getFocusable = () =>
+      Array.from(node.querySelectorAll<HTMLElement>(focusableSelector)).filter(el => !el.hasAttribute("disabled"));
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        handleCancelExport();
+        return;
+      }
+      if (event.key === "Tab") {
+        const focusable = getFocusable();
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey) {
+          if (document.activeElement === first || document.activeElement === node) {
+            event.preventDefault();
+            last.focus();
+          }
+        } else if (document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    requestAnimationFrame(() => {
+      const checkbox = exportDialogCheckboxRef.current;
+      const focusTarget = checkbox ?? getFocusable()[0];
+      focusTarget?.focus();
+    });
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [exportDialogOpen, handleCancelExport]);
+
+  useEffect(() => {
+    if (!settingsOpen) {
+      if (wasSettingsOpenRef.current) {
+        wasSettingsOpenRef.current = false;
+        settingsButtonRef.current?.focus();
+      }
+      return;
+    }
+    wasSettingsOpenRef.current = true;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") handleCloseSettings();
+    };
+    window.addEventListener("keydown", onKey);
+    const node = settingsPanelRef.current;
+    if (node) {
+      requestAnimationFrame(() => {
+        const first =
+          node.querySelector<HTMLElement>("[data-focus-first]") ??
+          node.querySelector<HTMLElement>("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])");
+        (first ?? node).focus();
+      });
+    }
+    return () => window.removeEventListener("keydown", onKey);
+  }, [settingsOpen, handleCloseSettings]);
 
   useEffect(() => {
     if (!statsOpen) return;
@@ -1061,6 +1854,8 @@ function RPSDoodleAppInner(){
       armAudio();
       audio.whoosh();
     }
+    clearRobotReactionTimers();
+    setRobotResultReaction(null);
     resetMatch();
     aiStreakRef.current = 0;
     youStreakRef.current = 0;
@@ -1074,13 +1869,24 @@ function RPSDoodleAppInner(){
 
   function resetTraining(){
     trainingAnnouncementsRef.current.clear();
+    setTrainingCalloutQueue([]);
+    let createdNewProfile = false;
     if (currentProfile) {
-      updateStatsProfile(currentProfile.id, { trainingCount: 0, trained: false });
+      const forked = forkProfileVersion(currentProfile.id);
+      if (forked) {
+        createdNewProfile = true;
+      } else {
+        updateStatsProfile(currentProfile.id, { trainingCount: 0, trained: false });
+      }
     }
     setPredictorMode(false);
     setAiMode("fair");
     setTrainingActive(false);
     startMatch("practice", { silent: true });
+    setToastMessage(RESET_TRAINING_TOAST);
+    if (createdNewProfile) {
+      setLive("New statistics profile created for training reset.");
+    }
   }
 
   function beginTrainingSession(){
@@ -1107,6 +1913,8 @@ function RPSDoodleAppInner(){
   function reveal(){
     const player = playerPick; if (!player) return;
     const ai = aiChoose(); setAiPick(ai); setAiHistory(h=>[...h, ai]); setPhase("reveal");
+    const modeForTiming: Mode = selectedMode ?? "practice";
+    const holdMs = matchTimings[modeForTiming].revealHoldMs;
     setTimeout(()=>{
       const res = resolveOutcome(player, ai); setOutcome(res); setPhase("resolve");
       // Online update mixer with context prior to adding current move
@@ -1127,7 +1935,7 @@ function RPSDoodleAppInner(){
         setPhase("feedback");
         setLastMoves(prev=>[...prev, player]);
       }, 150);
-    }, 240);
+    }, holdMs);
   }
 
   // Commit score once when outcome resolved
@@ -1142,6 +1950,9 @@ function RPSDoodleAppInner(){
   useEffect(() => {
     if (!trainingActive) {
       if (!needsTraining) trainingAnnouncementsRef.current.clear();
+      if (trainingCalloutQueue.length) {
+        setTrainingCalloutQueue([]);
+      }
       return;
     }
     const progress = Math.min(trainingCount / TRAIN_ROUNDS, 1);
@@ -1149,10 +1960,12 @@ function RPSDoodleAppInner(){
     thresholds.forEach(threshold => {
       if (progress >= threshold && !trainingAnnouncementsRef.current.has(threshold)) {
         trainingAnnouncementsRef.current.add(threshold);
-        setLive(`AI training ${Math.round(threshold * 100)} percent complete.`);
+        const percentage = Math.round(threshold * 100);
+        const message = `AI training ${percentage}% complete.`;
+        setTrainingCalloutQueue(prev => [...prev, message]);
       }
     });
-  }, [trainingActive, trainingCount, needsTraining]);
+  }, [trainingActive, trainingCount, needsTraining, trainingCalloutQueue.length]);
 
   useEffect(() => {
     if (!trainingActive) return;
@@ -1164,15 +1977,49 @@ function RPSDoodleAppInner(){
     trainingAnnouncementsRef.current.clear();
   }, [trainingActive, trainingCount, currentProfile, updateStatsProfile]);
 
+  useEffect(() => {
+    if (!trainingActive) return;
+    if (!trainingCalloutQueue.length) return;
+    if (robotResultReaction) return;
+    if (toastMessage) return;
+    const [next, ...rest] = trainingCalloutQueue;
+    setTrainingCalloutQueue(rest);
+    setToastMessage(next);
+    setLive(next);
+  }, [trainingActive, trainingCalloutQueue, robotResultReaction, toastMessage, setLive]);
+
+  useEffect(() => {
+    if (previousTrainingCountRef.current < TRAIN_ROUNDS && trainingCount >= TRAIN_ROUNDS) {
+      setTrainingCelebrationActive(true);
+      setHelpGuideOpen(false);
+      setLive("Training complete. You can now play Challenge or Practice modes.");
+    }
+    if (trainingCount < TRAIN_ROUNDS) {
+      setTrainingCelebrationActive(false);
+    }
+    previousTrainingCountRef.current = trainingCount;
+  }, [trainingCount]);
+
   // Failsafes: if something stalls, advance automatically
   useEffect(()=>{ if (phase === "selected"){ const t = setTimeout(()=>{ if (phase === "selected") startCountdown(); }, 500); return ()=> clearTimeout(t); } }, [phase]);
-  useEffect(()=>{ if (phase === "countdown"){ const t = setTimeout(()=>{ if (phase === "countdown"){ clearCountdown(); reveal(); } }, 2200); return ()=> clearTimeout(t); } }, [phase]);
+  useEffect(()=>{
+    if (phase !== "countdown") return;
+    const modeForTiming: Mode = selectedMode ?? "practice";
+    const interval = matchTimings[modeForTiming].countdownTickMs;
+    const failSafeMs = Math.max(interval * 4, interval * 3 + 600);
+    const t = setTimeout(()=>{ if (phase === "countdown"){ clearCountdown(); reveal(); } }, failSafeMs);
+    return ()=> clearTimeout(t);
+  }, [phase, selectedMode, matchTimings]);
   useEffect(()=>{ return ()=> clearCountdown(); },[]);
 
   // Next round or end match
   useEffect(() => {
     if (phase !== "feedback") return;
-    const delay = trainingActive ? 260 : (reducedMotion ? 300 : 520);
+    const modeForTiming: Mode = selectedMode ?? "practice";
+    const delayBase = matchTimings[modeForTiming].resultBannerMs;
+    const delay = trainingActive
+      ? Math.min(delayBase, 600)
+      : delayBase;
     const t = setTimeout(() => {
       if (trainingActive) {
         setRound(r => r + 1);
@@ -1226,7 +2073,117 @@ function RPSDoodleAppInner(){
       setPhase("idle");
     }, delay);
     return () => clearTimeout(t);
-  }, [phase, trainingActive, playerScore, aiScore, bestOf, reducedMotion]);
+  }, [phase, trainingActive, playerScore, aiScore, bestOf, matchTimings, selectedMode]);
+
+  useEffect(() => {
+    if (scene !== "MATCH") return;
+    if (phase !== "feedback") return;
+    if (!outcome) return;
+    if (trainingActive) return;
+    const modeForReaction: Mode = selectedMode ?? "practice";
+    const reaction = modeForReaction === "challenge"
+      ? outcome === "win"
+        ?
+            {
+              emoji: "😏",
+              body: "Lucky hit! Don’t get cocky!",
+              label: "Robot teases after you winning the round: Lucky hit. Don’t get cocky.",
+            }
+
+        : outcome === "tie"
+          ? {
+              emoji: "🤨",
+              body: "Not bad! But I’m still catching up!",
+              label: "Robot comments on a tied round: Not bad, but still catching up.",
+            }
+
+          : {
+            emoji: "😎",
+            body: "Too easy! Try to keep up!",
+            label: "Robot boasts after you losing the round: Too easy. Try to keep up.",
+          }
+      : outcome === "win"
+        ? {
+            emoji: "😊",
+            body: "Nice counter!",
+            label: "Robot congratulates your win: Nice counter.",
+          }
+        : outcome === "tie"
+          ? {
+              emoji: "🤝",
+              body: "Even match! Try mixing it up!",
+              label: "Robot suggests mixing it up after a tie.",
+            }
+          : {
+              emoji: "🤍",
+              body: "I saw a pattern! Can you break it?",
+              label: "Robot encourages you after a loss to break the pattern.",
+            };
+    clearRobotReactionTimers();
+    setRobotResultReaction(reaction);
+    const reactionDuration = matchTimings[modeForReaction].robotRoundReactionMs;
+    const restDuration = matchTimings[modeForReaction].robotRoundRestMs;
+    const timeoutId = window.setTimeout(() => {
+      if (robotResultTimeoutRef.current !== timeoutId) return;
+      robotResultTimeoutRef.current = null;
+      startRobotRest(restDuration, "round");
+    }, reactionDuration);
+    robotResultTimeoutRef.current = timeoutId;
+  }, [
+    scene,
+    phase,
+    outcome,
+    selectedMode,
+    trainingActive,
+    matchTimings,
+    clearRobotReactionTimers,
+    startRobotRest,
+  ]);
+
+  useEffect(() => {
+    if (scene !== "RESULTS" || !resultBanner) return;
+    const modeForReaction: Mode = selectedMode ?? "practice";
+    const reaction = (() => {
+      if (modeForReaction === "practice") {
+        return resultBanner === "Victory"
+          ? { emoji: "😊", body: "Nice counter!", label: "Robot encourages you: Nice counter." }
+          : resultBanner === "Defeat"
+            ? {
+                emoji: "🤍",
+                body: "I saw a pattern—can you break it?",
+                label: "Robot reflects on the loss and encourages you to break the pattern.",
+              }
+            : { emoji: "🤝", body: "Even match—try mixing it up.", label: "Robot suggests mixing it up after an even match." };
+      }
+      return resultBanner === "Victory"
+        ? { emoji: "😮", label: "Robot is surprised by the loss." }
+        : resultBanner === "Defeat"
+          ? { emoji: "😄", label: "Robot celebrates the win." }
+          : { emoji: "🤔", label: "Robot is thinking about the tie." };
+    })();
+    clearRobotReactionTimers();
+    setRobotResultReaction(reaction);
+    const reactionDuration = matchTimings[modeForReaction].robotResultReactionMs;
+    const restDuration = matchTimings[modeForReaction].robotResultRestMs;
+    const timeoutId = window.setTimeout(() => {
+      if (robotResultTimeoutRef.current !== timeoutId) return;
+      robotResultTimeoutRef.current = null;
+      startRobotRest(restDuration, "result");
+    }, reactionDuration);
+    robotResultTimeoutRef.current = timeoutId;
+  }, [scene, resultBanner, selectedMode, matchTimings, clearRobotReactionTimers, startRobotRest]);
+
+  useEffect(() => {
+    if (scene === "RESULTS" || scene === "MATCH" || scene === "MODE") return;
+    setRobotResultReaction(null);
+    clearRobotReactionTimers();
+  }, [scene, clearRobotReactionTimers]);
+
+  useEffect(() => {
+    return () => {
+      clearRobotReactionTimers();
+    };
+  }, [clearRobotReactionTimers]);
 
   // Helpers
   function tryVibrate(ms:number){ if ((navigator as any).vibrate) (navigator as any).vibrate(ms); }
@@ -1235,14 +2192,20 @@ function RPSDoodleAppInner(){
   const timersRef = useRef<number[]>([]);
   const addT = (fn:()=>void, ms:number)=>{ const id = window.setTimeout(fn, ms); timersRef.current.push(id); return id; };
   const clearTimers = ()=>{ timersRef.current.forEach(id=> clearTimeout(id)); timersRef.current = []; };
-  function goToMode(){ clearCountdown(); clearTimers(); setWipeRun(false); setSelectedMode(null); setScene("MODE"); }
+  function goToMode(){
+    clearCountdown();
+    clearTimers();
+    resetMatch();
+    setWipeRun(false);
+    setSelectedMode(null);
+    setScene("MODE");
+  }
   function goToMatch(){ clearTimers(); startMatch(selectedMode ?? "practice"); }
 
   // ---- Mode selection flow ----
   function handleModeSelect(mode: Mode){
     if (needsTraining && mode !== "practice") return;
     armAudio(); audio.cardSelect(); setSelectedMode(mode); setLive(`${modeLabel(mode)} mode selected. Loading match.`);
-    if (reducedMotion){ setTimeout(()=>{ startMatch(mode); }, 200); return; }
     addT(()=>{ audio.whooshShort(); }, 140); // morph start cue
     const graphicBudget = 1400; addT(()=>{ startSceneWipe(mode); }, graphicBudget);
   }
@@ -1283,6 +2246,465 @@ function RPSDoodleAppInner(){
 
       <LiveRegion message={live} />
 
+      <AnimatePresence>
+        {trainingCelebrationActive && (
+          <motion.div
+            key="training-complete-toast"
+            className="fixed top-4 left-1/2 z-[95] w-[min(90vw,480px)] -translate-x-1/2"
+            initial={{ y: -16, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -16, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <div className="rounded-2xl bg-white/95 px-4 py-4 text-sm text-slate-700 shadow-2xl ring-1 ring-slate-200">
+              <div className="text-sm font-semibold text-slate-900">Training complete!</div>
+              <p className="mt-1 text-sm text-slate-600">
+                You can now play Modes (Challenge or Practice).
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="rounded-full bg-sky-600 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-sky-700"
+                  onClick={() => {
+                    setTrainingCelebrationActive(false);
+                    setHelpGuideOpen(false);
+                    setLive("Opening Challenge mode from training completion.");
+                    handleModeSelect("challenge");
+                  }}
+                >
+                  Play Challenge
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full bg-slate-900/90 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-slate-900"
+                  onClick={() => {
+                    setTrainingCelebrationActive(false);
+                    setHelpGuideOpen(false);
+                    setLive("Opening statistics after training completion.");
+                    setStatsOpen(true);
+                  }}
+                >
+                  View My Stats
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                  onClick={() => setTrainingCelebrationActive(false)}
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {toastMessage && (
+        <div className="fixed top-20 right-4 z-[95] flex flex-col items-end gap-2">
+          <div
+            role="status"
+            aria-live="polite"
+            className="rounded-lg bg-slate-900/90 px-4 py-3 text-sm text-white shadow-lg"
+          >
+            <div className="space-y-3">
+              <div>{toastMessage}</div>
+              {toastConfirm && (
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    className="rounded-full border border-white/30 px-3 py-1 text-xs font-semibold text-white/90 transition hover:bg-white/10"
+                    onClick={() => {
+                      setToastConfirm(null);
+                      setToastMessage(null);
+                    }}
+                  >
+                    {toastConfirm.cancelLabel ?? "Cancel"}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-900 transition hover:bg-slate-100"
+                    onClick={() => {
+                      toastConfirm.onConfirm();
+                    }}
+                  >
+                    {toastConfirm.confirmLabel}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            className="rounded-lg bg-white/80 px-3 py-1 text-xs font-semibold text-slate-800 shadow hover:bg-white"
+            onClick={() => setToastReaderOpen(true)}
+            aria-haspopup="dialog"
+            aria-expanded={toastReaderOpen}
+          >
+            Open toast reader
+          </button>
+        </div>
+      )}
+
+      {helpToast && (
+        <div className="fixed bottom-6 right-4 z-[94]">
+          <div
+            role="status"
+            aria-live="polite"
+            className="w-72 rounded-xl bg-white/95 px-4 py-3 text-sm text-slate-700 shadow-xl ring-1 ring-slate-200"
+          >
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-slate-900">{helpToast.title}</p>
+              <p className="text-sm leading-relaxed text-slate-600">{helpToast.message}</p>
+            </div>
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                className="inline-flex items-center rounded-lg bg-slate-900/90 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-slate-900"
+                onClick={() => setHelpToast(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <AnimatePresence>
+        {toastReaderOpen && toastMessage && (
+          <motion.div
+            className="fixed inset-0 z-[96] grid place-items-center bg-slate-900/40 px-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setToastReaderOpen(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="w-[min(480px,100%)] space-y-4 rounded-2xl bg-white p-5 text-slate-700 shadow-2xl"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="toast-reader-title"
+              onClick={e => e.stopPropagation()}
+            >
+              <h3 id="toast-reader-title" className="text-base font-semibold text-slate-900">
+                Latest message
+              </h3>
+              <p className="text-sm leading-relaxed text-slate-600">{toastMessage}</p>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded-lg border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                  onClick={() => {
+                    setToastMessage(null);
+                    setToastReaderOpen(false);
+                  }}
+                >
+                  Dismiss message
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg bg-sky-600 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-sky-700"
+                  onClick={() => setToastReaderOpen(false)}
+                  data-focus-first
+                  ref={toastReaderCloseRef}
+                >
+                  Close reader
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {exportDialogOpen && (
+          <motion.div
+            className="fixed inset-0 z-[97] flex items-end justify-center bg-slate-900/50 px-4 pb-10 sm:items-center sm:pb-0"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={handleCancelExport}
+          >
+            <motion.div
+              initial={{ y: 40, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 40, opacity: 0 }}
+              transition={{ duration: 0.22 }}
+              className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-2xl ring-1 ring-slate-200 sm:rounded-2xl"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="export-confirm-title"
+              aria-describedby="export-confirm-body"
+              onClick={event => event.stopPropagation()}
+              ref={exportDialogRef}
+            >
+              <form
+                className="space-y-4"
+                onSubmit={event => {
+                  event.preventDefault();
+                  handleConfirmExport();
+                }}
+                onKeyDown={event => {
+                  if (event.key === "Enter" && !exportDialogAcknowledged) {
+                    event.preventDefault();
+                  }
+                }}
+              >
+                <div className="space-y-2">
+                  <h2 id="export-confirm-title" className="text-base font-semibold text-slate-900">
+                    Export data (CSV)
+                  </h2>
+                  <p id="export-confirm-body" className="text-sm leading-relaxed text-slate-600">
+                    {EXPORT_WARNING_TEXT}
+                  </p>
+                </div>
+                <label className="flex items-start gap-3 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={exportDialogAcknowledged}
+                    onChange={event => setExportDialogAcknowledged(event.target.checked)}
+                    className="mt-1"
+                    ref={exportDialogCheckboxRef}
+                  />
+                  <span>“I understand and agree.”</span>
+                </label>
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={handleCancelExport}
+                    className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!exportDialogAcknowledged}
+                    className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  >
+                    Confirm &amp; Download
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {resetDialogOpen && (
+          <motion.div
+            className="fixed inset-0 z-[90] grid place-items-center bg-slate-900/50 px-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={handleResetDialogClose}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="w-[min(520px,100%)] rounded-2xl bg-white p-6 shadow-2xl"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="reset-training-title"
+              aria-describedby="reset-training-body"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <h2 id="reset-training-title" className="text-lg font-semibold text-slate-900">
+                    Reset AI Training (Visible Only)
+                  </h2>
+                  <p id="reset-training-body" className="text-sm text-slate-600">
+                    This will restart training for your current statistics profile view. Historical round/match data is not deleted and stays available to developers for later analysis. A new linked profile snapshot will track your fresh training.
+                  </p>
+                </div>
+                <label className="flex items-start gap-3 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={resetDialogAcknowledged}
+                    onChange={e => setResetDialogAcknowledged(e.target.checked)}
+                    className="mt-1"
+                  />
+                  <span>I understand my past results remain archived and visible to developers.</span>
+                </label>
+                <div className="flex flex-wrap justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleResetDialogClose}
+                    className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmTrainingReset}
+                    disabled={!resetDialogAcknowledged}
+                    className={`rounded-lg px-4 py-2 text-sm font-medium text-white shadow ${resetDialogAcknowledged ? "bg-sky-600 hover:bg-sky-700" : "bg-slate-400 cursor-not-allowed"}`}
+                  >
+                    Reset training
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {createProfileDialogOpen && (
+          <motion.div
+            className="fixed inset-0 z-[90] grid place-items-center bg-slate-900/50 px-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={handleCloseCreateProfileDialog}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="w-[min(520px,100%)] rounded-2xl bg-white p-6 shadow-2xl"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="create-profile-title"
+              aria-describedby="create-profile-body"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <h2 id="create-profile-title" className="text-lg font-semibold text-slate-900">
+                    Create New Statistics Profile
+                  </h2>
+                  <p id="create-profile-body" className="text-sm text-slate-600">
+                    New statistics profile requires retraining ({TRAIN_ROUNDS} rounds) before normal play. Existing stats remain
+                    available in Statistics but do not merge.
+                  </p>
+                </div>
+                <label className="flex items-start gap-3 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={createProfileDialogAcknowledged}
+                    onChange={e => setCreateProfileDialogAcknowledged(e.target.checked)}
+                    className="mt-1"
+                  />
+                  <span>I understand retraining is required and past results won't merge.</span>
+                </label>
+                <div className="flex flex-wrap justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleCloseCreateProfileDialog}
+                    className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmCreateProfile}
+                    disabled={!createProfileDialogAcknowledged}
+                    className={`rounded-lg px-4 py-2 text-sm font-medium text-white shadow ${createProfileDialogAcknowledged ? "bg-sky-600 hover:bg-sky-700" : "bg-slate-400 cursor-not-allowed"}`}
+                  >
+                    Create Profile
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {restoreDialogOpen && (
+          <motion.div
+            className="fixed inset-0 z-[91] grid place-items-center bg-slate-900/45 px-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={handleRestoreCancel}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="w-[min(520px,100%)] rounded-2xl bg-white p-6 shadow-2xl"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="restore-profile-title"
+              aria-describedby="restore-profile-body"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <h2 id="restore-profile-title" className="text-lg font-semibold text-slate-900">
+                    Load saved player
+                  </h2>
+                  <p id="restore-profile-body" className="text-sm text-slate-600">
+                    Choose an existing player profile stored on this device.
+                  </p>
+                </div>
+                <label className="text-sm font-medium text-slate-700">
+                  Player
+                  <select
+                    value={restoreSelectedPlayerId ?? ""}
+                    onChange={e => setRestoreSelectedPlayerId(e.target.value || null)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-inner"
+                  >
+                    {players.length === 0 ? (
+                      <option value="">No saved players</option>
+                    ) : (
+                      players.map(player => (
+                        <option key={player.id} value={player.id}>
+                          {player.playerName}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </label>
+                {selectedRestorePlayer ? (
+                  <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
+                    <p>
+                      <span className="font-semibold text-slate-800">{selectedRestorePlayer.playerName}</span>
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Grade {selectedRestorePlayer.grade}
+                      {selectedRestorePlayer.age ? ` • Age ${selectedRestorePlayer.age}` : ""}
+                      {selectedRestorePlayer.needsReview ? " • Needs review" : ""}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-dashed border-slate-200 p-3 text-xs text-slate-500">
+                    No saved players yet.
+                  </div>
+                )}
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={handleRestoreCancel}
+                    className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRestoreConfirm}
+                    disabled={!restoreSelectedPlayerId}
+                    className={`rounded-lg px-4 py-2 text-sm font-medium text-white shadow ${restoreSelectedPlayerId ? "bg-sky-600 hover:bg-sky-700" : "bg-slate-400 cursor-not-allowed"}`}
+                  >
+                    Load profile
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header / Settings */}
       <div className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between">
         <motion.h1 layout className="text-2xl font-extrabold tracking-tight text-sky-700 drop-shadow-sm">RPS Lab</motion.h1>
@@ -1301,64 +2723,544 @@ function RPSDoodleAppInner(){
             >
               Leaderboard
             </button>
-            <button onClick={() => setShowPlayerModal(true)} className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900">
-              {currentPlayer ? `${currentPlayer.displayName} (${currentPlayer.gradeBand})` : 'Set up profile'}
-            </button>
-            <button onClick={() => { if (!hasConsented) { setShowPlayerModal(true); return; } goToMode(); }} title={!hasConsented ? "Check consent to continue." : undefined} disabled={modesDisabled || !hasConsented} className={"px-3 py-1.5 rounded-xl shadow text-sm " + ((modesDisabled || !hasConsented) ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900")}>Modes</button>
-          <details className="bg-white/70 rounded-xl shadow group">
-            <summary className="list-none px-3 py-1.5 cursor-pointer text-sm text-slate-900">Settings ⚙️</summary>
-            <div className="p-3 pt-0 space-y-2 text-sm">
-              <label className="flex items-center justify-between gap-4"><span>Audio</span><input type="checkbox" checked={audioOn} onChange={e=> setAudioOn(e.target.checked)} /></label>
-              <label className="flex items-center justify-between gap-4"><span>Reduced motion</span><input type="checkbox" checked={reducedMotion} onChange={e=> setReducedMotion(e.target.checked)} /></label>
-              <label className="flex items-center justify-between gap-4"><span>Text size</span><input type="range" min={0.9} max={1.4} step={0.05} value={textScale} onChange={e=> setTextScale(parseFloat(e.target.value))} /></label>
-              <hr className="my-2" />
-              <label className="flex items-center justify-between gap-4"><span>AI Predictor</span><input type="checkbox" checked={predictorMode} onChange={e=> setPredictorMode(e.target.checked)} disabled={!isTrained} /></label>
-              <label className="flex items-center justify-between gap-4"><span>AI Difficulty</span>
-                <select value={aiMode} onChange={e=> setAiMode(e.target.value as AIMode)} disabled={!isTrained || !predictorMode} className="px-2 py-1 rounded bg-white shadow-inner">
-                  <option value="fair">Fair</option>
-                  <option value="normal">Normal</option>
-                  <option value="ruthless">Ruthless</option>
-                </select>
-              </label>
-              <hr className="my-2" />
-              <div className="space-y-2">
-                <div className="text-xs text-slate-500">Profile &amp; data</div>
-                <button className="px-2 py-1 rounded bg-sky-100 text-sky-700" onClick={()=> setShowPlayerModal(true)}>Edit demographics</button>
-                <p className="text-xs text-slate-500 max-w-xs">Use the Statistics panel to export your data. Exports always include your demographics alongside the selected statistics profile.</p>
-              </div>
-              <label className="flex items-center justify-between gap-4"><span>Best of</span>
-                <select value={bestOf} onChange={e=> setBestOf(Number(e.target.value) as BestOf)} className="px-2 py-1 rounded bg-white shadow-inner">
-                  <option value={3}>3</option><option value={5}>5</option><option value={7}>7</option>
-                </select>
-              </label>
-              <button
-                className="px-2 py-1 rounded bg-white shadow"
-                onClick={() => {
-                  const confirmed = window.confirm("Reset AI training? This clears the AI's memory of your moves and restarts the 10-round training session.");
-                  if (confirmed) {
-                    resetTraining();
-                  }
-                }}
-              >
-                Reset AI training
-              </button>
+            <div
+              className={"px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 text-slate-700 flex items-center gap-2 " + (demographicsNeedReview ? "ring-2 ring-amber-400" : "")}
+              aria-live="polite"
+            >
+              <span>{playerLabel}</span>
+              {demographicsNeedReview && (
+                <span className="text-xs font-semibold text-amber-600">Needs review</span>
+              )}
             </div>
-          </details>
+            <button
+              onClick={() => {
+                if (!hasConsented) {
+                  setPlayerModalMode(currentPlayer ? "edit" : "create");
+                  return;
+                }
+                goToMode();
+              }}
+              title={!hasConsented ? "Check consent to continue." : undefined}
+              disabled={modesDisabled || !hasConsented}
+              className={"px-3 py-1.5 rounded-xl shadow text-sm " + ((modesDisabled || !hasConsented) ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900")}
+            >
+              Modes
+            </button>
+            <button
+              ref={settingsButtonRef}
+              type="button"
+              onClick={handleOpenSettings}
+              className={`px-3 py-1.5 rounded-xl shadow text-sm transition ${settingsOpen ? "bg-sky-600 text-white" : "bg-white/70 hover:bg-white text-sky-900"}`}
+              aria-haspopup="dialog"
+              aria-expanded={settingsOpen}
+            >
+              Settings ⚙️
+            </button>
         </div>
       </div>
 
-      {/* BOOT */}
+      <AnimatePresence>
+        {settingsOpen && (
+          <motion.div
+            className="fixed inset-0 z-[85] bg-slate-900/40 backdrop-blur-sm"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => handleCloseSettings()}
+          >
+            <motion.aside
+              ref={settingsPanelRef}
+              initial={{ x: 32, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: 32, opacity: 0 }}
+              transition={{ duration: 0.2, ease: [0.22, 0.61, 0.36, 1] }}
+              className="relative ml-auto flex h-full w-full max-w-[460px] flex-col gap-5 overflow-y-auto rounded-l-3xl bg-white/95 p-6 shadow-2xl"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="settings-drawer-title"
+              onClick={e => e.stopPropagation()}
+              tabIndex={-1}
+            >
+              <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                <h2 id="settings-drawer-title" className="text-lg font-semibold text-slate-900">
+                  Settings
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => handleCloseSettings()}
+                  className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                  data-focus-first
+                >
+                  Close ✕
+                </button>
+              </div>
+              <div className="space-y-6 text-sm text-slate-700">
+                <section className="space-y-3">
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Profile &amp; Data</h2>
+                  <div className="space-y-4 rounded-lg border border-slate-200/80 bg-white/80 p-3">
+                    <div className="space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="font-semibold text-slate-900">{playerLabel}</span>
+                        {demographicsNeedReview && (
+                          <span className="text-xs font-semibold text-amber-600">Needs review</span>
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <button
+                          className="rounded-lg bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
+                          onClick={() => {
+                            if (!currentPlayer) return;
+                            handleCloseSettings();
+                            setPlayerModalMode("edit");
+                          }}
+                          disabled={!currentPlayer}
+                        >
+                          Edit demographics
+                        </button>
+                        <button
+                          className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+                          onClick={() => {
+                            handleCloseSettings();
+                            setPlayerModalMode("create");
+                          }}
+                        >
+                          Create new player
+                        </button>
+                      </div>
+                      {demographicsNeedReview && (
+                        <p className="text-xs text-amber-600">Update grade and age from Edit demographics.</p>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-slate-800">Statistics profile</span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <label htmlFor="settings-profile-select" className="sr-only">
+                          Select statistics profile
+                        </label>
+                        <select
+                          id="settings-profile-select"
+                          value={currentProfile?.id ?? ""}
+                          onChange={e => handleSelectProfile(e.target.value)}
+                          className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-inner"
+                          disabled={!statsProfiles.length}
+                        >
+                          {statsProfiles.length === 0 ? (
+                            <option value="">No profiles yet</option>
+                          ) : (
+                            <>
+                              {!currentProfile && <option value="">Select a profile…</option>}
+                              {statsProfiles.map(profile => (
+                                <option key={profile.id} value={profile.id}>
+                                  {profile.name}
+                                  {!profile.trained && (profile.trainingCount ?? 0) < TRAIN_ROUNDS ? " • Training required" : ""}
+                                </option>
+                              ))}
+                            </>
+                          )}
+                        </select>
+                        <button
+                          type="button"
+                          className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-sky-700"
+                          onClick={handleCreateProfile}
+                        >
+                          Create new
+                        </button>
+                      </div>
+                      <p className="text-xs text-slate-500">Profiles don’t merge; new ones require {TRAIN_ROUNDS}-round training.</p>
+                    </div>
+                    <div className="space-y-2 border-t border-slate-200 pt-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-slate-800">Export data</span>
+                      </div>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <button
+                          type="button"
+                          onClick={event => handleOpenExportDialog("settings", event.currentTarget)}
+                          disabled={!canExportData}
+                          className="inline-flex items-center gap-1 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                        >
+                          Export (CSV)
+                        </button>
+                        <p className={`text-xs ${shouldShowNoExportMessage ? "text-amber-600" : "text-slate-500"}`}>
+                          {shouldShowNoExportMessage
+                            ? "No data available to export."
+                            : "Includes demographics for the selected profile."}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+                <section className="space-y-3">
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Training</h2>
+                  <div className="space-y-3 rounded-lg border border-slate-200/80 bg-white/80 p-3">
+                    <div className="space-y-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleCloseSettings();
+                          setResetDialogAcknowledged(false);
+                          setResetDialogOpen(true);
+                        }}
+                        className="inline-flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 shadow-sm hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        title="Training history is preserved."
+                        disabled={!currentProfile}
+                      >
+                        Reset AI training
+                      </button>
+                    </div>
+                  </div>
+                </section>
+                <section className="space-y-3">
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Gameplay</h2>
+                  <div className="space-y-4 rounded-lg border border-slate-200/80 bg-white/80 p-3">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-slate-800">AI Predictor</span>
+                          <span className="text-xs text-slate-400" title="AI predicts your next move from recent patterns.">ⓘ</span>
+                        </div>
+                        <OnOffToggle
+                          value={predictorMode}
+                          onChange={handlePredictorToggle}
+                          disabled={!isTrained}
+                        />
+                      </div>
+                      {!isTrained && (
+                        <p className="text-xs text-amber-600">Complete {TRAIN_ROUNDS} training rounds to unlock predictions.</p>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-slate-800">AI Difficulty</span>
+                        <span className="text-xs text-slate-400" title="Fine-tune how boldly the AI counters your moves.">ⓘ</span>
+                      </div>
+                      <div
+                        className="flex flex-wrap gap-2"
+                        role="radiogroup"
+                        aria-label="AI difficulty"
+                        onMouseLeave={() => {
+                          if (!difficultyDisabled) setDifficultyHint(DIFFICULTY_INFO[aiMode].helper);
+                        }}
+                      >
+                        {DIFFICULTY_SEQUENCE.map(level => {
+                          const info = DIFFICULTY_INFO[level];
+                          const isActive = aiMode === level;
+                          return (
+                            <button
+                              key={level}
+                              type="button"
+                              role="radio"
+                              aria-checked={isActive}
+                              onFocus={() => setDifficultyHint(info.helper)}
+                              onMouseEnter={() => setDifficultyHint(info.helper)}
+                              onBlur={() => setDifficultyHint(difficultyDisabled ? "Enable the predictor to adjust difficulty." : DIFFICULTY_INFO[aiMode].helper)}
+                              onClick={() => {
+                                if (difficultyDisabled) return;
+                                setAiMode(level);
+                              }}
+                              disabled={difficultyDisabled}
+                              className={`rounded-full border px-3 py-1 text-xs font-semibold shadow-sm transition-colors ${
+                                isActive
+                                  ? "border-sky-500 bg-sky-600 text-white"
+                                  : "border-slate-200 bg-white text-slate-600 hover:border-sky-300 hover:text-sky-700"
+                              } ${difficultyDisabled ? "cursor-not-allowed opacity-60" : ""}`}
+                            >
+                              {info.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p className={`text-xs ${difficultyDisabled ? "text-slate-400" : "text-slate-500"}`}>{difficultyHint}</p>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-slate-800">Best of</span>
+                        <span className="text-xs text-slate-400" title="Rounds needed to win a match.">ⓘ</span>
+                      </div>
+                      <div className="inline-flex rounded-full border border-slate-300 bg-white shadow-sm" role="radiogroup" aria-label="Best of series length">
+                        {BEST_OF_OPTIONS.map(option => {
+                          const isActive = bestOf === option;
+                          return (
+                            <button
+                              key={option}
+                              type="button"
+                              role="radio"
+                              aria-checked={isActive}
+                              onClick={() => setBestOf(option)}
+                              className={`px-3 py-1 text-xs font-semibold transition-colors ${
+                                isActive ? "bg-sky-600 text-white" : "text-slate-600 hover:bg-slate-100"
+                              }`}
+                            >
+                              {option}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+                <section className="space-y-3">
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Accessibility &amp; Display</h2>
+                  <div className="space-y-4 rounded-lg border border-slate-200/80 bg-white/80 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <span className="font-medium text-slate-800">Audio</span>
+                      </div>
+                      <OnOffToggle value={audioOn} onChange={next => setAudioOn(next)} />
+                    </div>
+                    <div className="space-y-2">
+                      <span className="font-medium text-slate-800">Text size</span>
+                      <input
+                        type="range"
+                        min={0.9}
+                        max={1.4}
+                        step={0.05}
+                        value={textScale}
+                        onChange={e => setTextScale(parseFloat(e.target.value))}
+                        className="w-full accent-sky-600"
+                      />
+                      <div className="flex justify-between text-[10px] uppercase tracking-wide text-slate-400">
+                        <span>Smaller</span>
+                        <span>Default</span>
+                        <span>Larger</span>
+                      </div>
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-800">Show welcome again</div>
+                        <p className="text-xs text-slate-500">Replay the intro on the next launch.</p>
+                      </div>
+                      <OnOffToggle value={!welcomeSeen} onChange={value => handleWelcomeReplayToggle(value)} />
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-800">Reboot</div>
+                        <p className="text-xs text-slate-500">Restart with the boot animation and welcome intro.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleReboot}
+                        className="rounded-full bg-slate-900/90 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-slate-900"
+                      >
+                        Reboot
+                      </button>
+                    </div>
+                  </div>
+                </section>
+                <section className="space-y-3">
+                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Help &amp; About</h2>
+                  <div className="rounded-lg border border-slate-200/80 bg-white/80 p-3">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sky-700">
+                      <button
+                        type="button"
+                        className="text-xs font-semibold hover:underline"
+                        onClick={() => {
+                          goToMode();
+                          setHelpToast({
+                            title: "What are Modes?",
+                            message: "Modes show different ways to play and practice.",
+                          });
+                          setLive("Opening modes overview and showing help toast.");
+                        }}
+                      >
+                        What are Modes?
+                      </button>
+                      <span aria-hidden className="text-slate-300">•</span>
+                      <button
+                        type="button"
+                        className="text-xs font-semibold hover:underline"
+                        onClick={() => {
+                          setHelpToast({
+                            title: "How training works",
+                            message: `Training runs ${TRAIN_ROUNDS} rounds so the AI can learn your habits.`,
+                          });
+                          setLive("Training overview shared in help toast.");
+                        }}
+                      >
+                        How training works
+                      </button>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </motion.aside>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence mode="wait">
-        {scene === "BOOT" && (
-          <motion.div key="boot" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }} className="grid place-items-center min-h-screen">
-            <div className="flex flex-col items-center gap-4">
-              <motion.div initial={{ scale: .95 }} animate={{ scale: 1.05 }} transition={{ repeat: Infinity, repeatType: "reverse", duration: .9 }} className="text-4xl">
-                <span>🤖</span>
-              </motion.div>
-              <div className="w-48 h-1 bg-slate-200 rounded overflow-hidden"><motion.div initial={{ width: "10%" }} animate={{ width: "100%" }} transition={{ duration: .9, ease: "easeInOut" }} className="h-full bg-sky-500"/></div>
-              <div className="text-slate-500 text-sm">Booting...</div>
+        {scene === "WELCOME" && (
+          <motion.main
+            key="welcome"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3, ease: [0.22, 0.61, 0.36, 1] }}
+            className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-sky-100 px-6 py-12 text-slate-800"
+          >
+            <div className="mx-auto flex w-[min(560px,100%)] max-w-full flex-col gap-8 rounded-3xl bg-white/90 p-8 shadow-2xl ring-1 ring-slate-200">
+              <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-400">
+                <span>Intro</span>
+                <span>
+                  {welcomeSlide + 1} / {welcomeSlideCount}
+                </span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200" role="progressbar" aria-valuemin={1} aria-valuemax={welcomeSlideCount} aria-valuenow={welcomeSlide + 1}>
+                <motion.div
+                  className="h-full rounded-full bg-sky-500"
+                  initial={false}
+                  animate={{ width: `${welcomeProgress}%` }}
+                  transition={{ duration: 0.25 }}
+                />
+              </div>
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={welcomeSlide}
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -12 }}
+                  transition={{ duration: 0.25, ease: [0.22, 0.61, 0.36, 1] }}
+                  className="space-y-4"
+                >
+                  <h2 className="text-3xl font-bold text-slate-900">{welcomeSlides[welcomeSlide]?.title}</h2>
+                  <p className="text-base leading-relaxed text-slate-700">{welcomeSlides[welcomeSlide]?.body}</p>
+                </motion.div>
+              </AnimatePresence>
+              {isWelcomeLastSlide ? (
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <button
+                      type="button"
+                      onClick={handleWelcomePrevious}
+                      className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100"
+                    >
+                      Back
+                    </button>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <button
+                        type="button"
+                        className="rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-700"
+                        onClick={() => completeWelcome("setup")}
+                      >
+                        Get started
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        onClick={() => completeWelcome("restore")}
+                        disabled={!hasLocalProfiles}
+                      >
+                        Already played? Load my data
+                      </button>
+                    </div>
+                  </div>
+                  {!hasLocalProfiles && (
+                    <p className="text-xs text-slate-500">No saved profiles detected on this device.</p>
+                  )}
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => completeWelcome("dismiss")}
+                      className="text-sm font-semibold text-slate-500 transition hover:text-slate-700"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={handleWelcomePrevious}
+                    disabled={welcomeSlide === 0}
+                    className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleWelcomeNext}
+                    className="rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-700"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
             </div>
-            </motion.div>
+          </motion.main>
+        )}
+        {scene === "BOOT" && (
+          <motion.div
+            key="boot"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.4 }}
+            className="relative min-h-screen overflow-hidden"
+          >
+            <motion.div
+              className="absolute inset-0"
+              style={{
+                background:
+                  "radial-gradient(circle at 20% 20%, rgba(125, 211, 252, 0.4), transparent 55%)," +
+                  "radial-gradient(circle at 80% 30%, rgba(14, 165, 233, 0.35), transparent 60%)," +
+                  "linear-gradient(135deg, #0f172a, #1e293b)",
+                backgroundSize: "160% 160%, 140% 140%, 100% 100%",
+              }}
+              animate={{
+                backgroundPosition: [
+                  "0% 50%, 50% 50%, 0% 0%",
+                  "100% 50%, 50% 50%, 100% 100%",
+                  "0% 50%, 50% 50%, 0% 0%",
+                ],
+              }}
+              transition={{ duration: 12, ease: "easeInOut", repeat: Infinity }}
+            />
+            <motion.div
+              className="absolute inset-0"
+              style={{ background: "radial-gradient(ellipse at bottom, rgba(56, 189, 248, 0.18), transparent 65%)" }}
+              animate={{ opacity: [0.25, 0.55, 0.25] }}
+              transition={{ duration: 6, ease: "easeInOut", repeat: Infinity }}
+            />
+            <div className="relative z-10 flex min-h-screen flex-col items-center justify-center gap-8 px-6 text-center text-white">
+              <motion.div
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.6, ease: [0.22, 0.61, 0.36, 1] }}
+                className="text-4xl font-black tracking-wide md:text-5xl"
+              >
+                RPS AI Lab
+              </motion.div>
+              <motion.div
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2, duration: 0.6, ease: [0.22, 0.61, 0.36, 1] }}
+                className="w-full max-w-xs space-y-3"
+              >
+                <div className="h-2 w-full overflow-hidden rounded-full bg-white/30 backdrop-blur">
+                  <motion.div
+                    className="h-full rounded-full bg-white"
+                    initial={false}
+                    animate={{ width: `${bootBarWidth}%` }}
+                    transition={{ duration: 0.4, ease: [0.22, 0.61, 0.36, 1] }}
+                  />
+                </div>
+                <div className="text-sm font-medium uppercase tracking-[0.35em] text-white/80">
+                  Booting… {bootPercent}%
+                </div>
+              </motion.div>
+              <motion.div
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4, duration: 0.6, ease: [0.22, 0.61, 0.36, 1] }}
+                className="text-xs uppercase tracking-[0.45em] text-white/60"
+              >
+                Initializing predictive engines
+              </motion.div>
+            </div>
+          </motion.div>
         )}
         {/* MODE SELECT */}
         {scene === "MODE" && (
@@ -1481,7 +3383,7 @@ function RPSDoodleAppInner(){
             {/* Outcome feedback */}
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .15 }} className="h-8 mt-2 text-lg font-semibold">
               <AnimatePresence mode="wait">
-                {phase === "resolve" && outcome && (
+                {(phase === "resolve" || phase === "feedback") && outcome && (
                   <motion.div key={outcome} initial={{ y: 8, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -8, opacity: 0 }} transition={{ duration: .22 }} className={ outcome === "win" ? "text-green-700" : outcome === "lose" ? "text-rose-700" : "text-amber-700" }>
                     {outcome === "win" ? "You win!" : outcome === "lose" ? "You lose." : "Tie."}
                   </motion.div>
@@ -1509,20 +3411,73 @@ function RPSDoodleAppInner(){
 
         {/* RESULTS */}
         {scene === "RESULTS" && (
-          <motion.section key="results" initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -20, opacity: 0 }} transition={{ duration: .32 }} className="min-h-screen pt-28 flex flex-col items-center">
-            <div className={`px-4 py-2 rounded-2xl text-white font-black text-2xl ${bannerColor()}`}>{resultBanner}</div>
-            <div className="mt-4 bg-white/80 rounded-2xl shadow p-4 w-[min(92vw,520px)]">
-              <div className="flex items-center justify-around text-xl">
-                <div className="flex flex-col items-center"><div className="text-slate-500 text-sm">You</div><div className="font-bold">{playerScore}</div></div>
-                <div className="flex flex-col items-center"><div className="text-slate-500 text-sm">AI</div><div className="font-bold">{aiScore}</div></div>
+          <motion.div
+            key="results"
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/40 px-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ duration: 0.22 }}
+              className="relative w-[min(520px,95vw)] rounded-3xl bg-white/95 p-6 text-slate-800 shadow-2xl ring-1 ring-slate-200"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="match-results-title"
+            >
+              <div id="match-results-title" className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold text-white ${bannerColor()}`}>
+                {resultBanner}
               </div>
-              <div className="mt-4 flex items-center justify-center gap-3">
-                <button onClick={()=>{ resetMatch(); setScene("MATCH"); }} className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white shadow">Rematch</button>
-                <button onClick={()=> goToMode()} className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 shadow">Modes</button>
+              <div className="mt-4 rounded-2xl bg-slate-50/80 p-4">
+                <div className="flex items-center justify-around text-xl">
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="text-slate-500 text-sm">You</div>
+                    <div className="text-3xl font-semibold text-slate-900">{playerScore}</div>
+                  </div>
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="text-slate-500 text-sm">AI</div>
+                    <div className="text-3xl font-semibold text-slate-900">{aiScore}</div>
+                  </div>
+                </div>
               </div>
-            </div>
-            {!reducedMotion && <Confetti />}
-          </motion.section>
+              <div className="mt-5 flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  className="rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-700"
+                  onClick={() => {
+                    clearRobotReactionTimers();
+                    setRobotResultReaction(null);
+                    resetMatch();
+                    setScene("MATCH");
+                  }}
+                >
+                  Play Again
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow hover:bg-slate-50"
+                  onClick={() => goToMode()}
+                >
+                  Change Mode
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full bg-slate-900/90 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-900"
+                  onClick={() => {
+                    setLeaderboardOpen(true);
+                  }}
+                >
+                  View Leaderboard
+                </button>
+              </div>
+              <div className="pointer-events-none absolute -top-10 right-6">
+                <Confetti />
+              </div>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
 
@@ -1813,11 +3768,18 @@ function RPSDoodleAppInner(){
                 )}
               </div>
               <div className="px-4 py-3 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-sm">
-                <div className="flex gap-2">
-                  <button onClick={handleExportJson} disabled={!currentPlayer || !currentProfile} className="px-3 py-1.5 rounded bg-sky-100 text-sky-700 disabled:opacity-50 disabled:cursor-not-allowed">Export JSON</button>
-                  <button onClick={handleExportCsv} disabled={!currentPlayer || !currentProfile} className="px-3 py-1.5 rounded bg-sky-100 text-sky-700 disabled:opacity-50 disabled:cursor-not-allowed">Export CSV</button>
-                </div>
-                <p className="text-xs text-slate-500">Exports bundle your demographics with this statistics profile.</p>
+                <button
+                  onClick={event => handleOpenExportDialog("stats", event.currentTarget)}
+                  disabled={!canExportData}
+                  className="px-3 py-1.5 rounded bg-sky-100 text-sky-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Export (CSV)
+                </button>
+                <p className={`text-xs ${shouldShowNoExportMessage ? "text-amber-600" : "text-slate-500"}`}>
+                  {shouldShowNoExportMessage
+                    ? "No data available to export."
+                    : "Exports bundle your demographics with this statistics profile."}
+                </p>
               </div>
             </motion.div>
           </motion.div>
@@ -1825,13 +3787,29 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
       {/* Player Setup Modal */}
       <AnimatePresence>
-        {showPlayerModal && (
-          <motion.div key="pmask" className="fixed inset-0 z-[70] bg-black/30 grid place-items-center" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onKeyDown={(e:any)=>{ if (e.key==='Escape' && hasConsented) setShowPlayerModal(false); }}>
+        {isPlayerModalOpen && (
+          <motion.div
+            key="pmask"
+            className="fixed inset-0 z-[70] bg-black/30 grid place-items-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onKeyDown={(e:any)=>{ if (e.key==='Escape' && hasConsented) setPlayerModalMode("hidden"); }}
+          >
             <motion.div role="dialog" aria-modal="true" aria-label="Player Setup" className="bg-white rounded-2xl shadow-xl w-[min(94vw,520px)]" initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 6, opacity: 0 }}>
               <PlayerSetupForm
-                currentPlayer={currentPlayer ?? null}
-                onClose={()=> { if (hasConsented) setShowPlayerModal(false); }}
-                onSaved={()=> { setShowPlayerModal(false); }}
+                mode={resolvedModalMode}
+                player={modalPlayer}
+                onClose={()=> { if (hasConsented) setPlayerModalMode("hidden"); }}
+                onSaved={(result) => {
+                  setPlayerModalMode("hidden");
+                  if (result.action === "create") {
+                    setToastMessage("New player starts a fresh training session (10 rounds).");
+                    setLive("New player created. Training required before challenge modes unlock.");
+                  } else {
+                    setLive("Player demographics updated.");
+                  }
+                }}
                 createPlayer={createPlayer}
                 updatePlayer={updatePlayer}
               />
@@ -1841,12 +3819,110 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
 
       {/* Footer robot idle (personality beat) */}
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: .4 }} className="fixed bottom-3 right-3 bg-white/70 rounded-2xl shadow px-3 py-2 flex items-center gap-2">
-        <motion.span animate={{ y: [0,-1,0] }} transition={{ repeat: Infinity, duration: 2.6, ease: "easeInOut" }}>
-          <span>🤖</span>
-        </motion.span>
-        <span className="text-sm text-slate-700">Ready!</span>
-      </motion.div>
+      {!settingsOpen && (
+        <div className="pointer-events-none fixed bottom-3 right-3 z-[90] flex flex-col items-end gap-3">
+          <AnimatePresence>
+            {robotBubbleContent && (
+              <motion.div
+                key="robot-bubble"
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 4 }}
+                transition={{ duration: 0.2 }}
+                className="pointer-events-auto relative max-w-xs rounded-2xl bg-white/95 px-4 py-2 text-sm text-slate-700 shadow-xl ring-1 ring-slate-200"
+                role="status"
+                aria-live="polite"
+                aria-label={
+                  robotBubbleContent.ariaLabel ??
+                  (typeof robotBubbleContent.message === "string" ? robotBubbleContent.message : undefined)
+                }
+              >
+                <div className={robotBubbleContent.emphasise ? "text-slate-800" : "text-sm font-medium text-slate-800"}>
+                  {robotBubbleContent.message}
+                </div>
+                {robotBubbleContent.buttons && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {robotBubbleContent.buttons.map(button => (
+                      <button
+                        key={button.label}
+                        type="button"
+                        className="rounded-full bg-sky-600 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-sky-700"
+                        onClick={button.onClick}
+                      >
+                        {button.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <span className="pointer-events-none absolute bottom-[-6px] right-5 h-3 w-3 rotate-45 bg-white/95 ring-1 ring-slate-200/70" />
+              </motion.div>
+            )}
+          </AnimatePresence>
+          <motion.button
+            type="button"
+            ref={robotButtonRef}
+            className="pointer-events-auto relative flex h-14 w-14 items-center justify-center rounded-full bg-white/80 shadow-lg ring-1 ring-slate-200 backdrop-blur transition hover:bg-white"
+            onClick={() => {
+              setHelpGuideOpen(prev => {
+                const next = !prev;
+                setLive(next ? "Ready robot help guide opened." : "Ready robot help guide closed.");
+                return next;
+              });
+            }}
+            onMouseEnter={() => setRobotHovered(true)}
+            onMouseLeave={() => setRobotHovered(false)}
+            onFocus={() => setRobotFocused(true)}
+            onBlur={() => setRobotFocused(false)}
+            aria-label="Ready robot help"
+            aria-expanded={helpGuideOpen}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+          >
+            <motion.span
+              animate={{ y: [0, -4, 0], scaleY: [1, 0.88, 1], scaleX: [1, 1.04, 1] }}
+              transition={{ repeat: Infinity, duration: 3.2, ease: "easeInOut" }}
+              className="text-2xl"
+            >
+              🤖
+            </motion.span>
+          </motion.button>
+          <AnimatePresence>
+            {helpGuideOpen && (
+              <motion.div
+                key="robot-help"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 8 }}
+                transition={{ duration: 0.2 }}
+                className="pointer-events-auto w-[min(280px,80vw)] rounded-2xl bg-white/95 p-4 text-sm text-slate-700 shadow-2xl ring-1 ring-slate-200"
+              >
+                <div className="space-y-3">
+                  {helpGuideItems.map(item => (
+                    <div key={item.title} className="rounded-xl bg-slate-50/80 p-3 shadow-inner">
+                      <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                      <p className="mt-1 text-sm text-slate-600">{item.message}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    className="rounded-lg bg-slate-900/90 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-slate-900"
+                    onClick={() => {
+                      setHelpGuideOpen(false);
+                      setLive("Ready robot help guide closed.");
+                      requestAnimationFrame(() => robotButtonRef.current?.focus());
+                    }}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
       {DEV_MODE_ENABLED && (
         <>
           <div
@@ -1855,7 +3931,13 @@ function RPSDoodleAppInner(){
             className="fixed bottom-0 left-0 z-[60] h-8 w-8"
             onClick={handleDeveloperHotspotClick}
           />
-          <DeveloperConsole open={developerOpen} onClose={handleDeveloperClose} />
+          <DeveloperConsole
+            open={developerOpen}
+            onClose={handleDeveloperClose}
+            timings={matchTimings}
+            onTimingsUpdate={updateMatchTimings}
+            onTimingsReset={resetMatchTimings}
+          />
         </>
       )}
     </div>
@@ -1863,53 +3945,71 @@ function RPSDoodleAppInner(){
 }
 
 interface PlayerSetupFormProps {
-  currentPlayer: PlayerProfile | null;
+  mode: "create" | "edit";
+  player: PlayerProfile | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (result: { action: "create" | "update"; player: PlayerProfile }) => void;
   createPlayer: (input: Omit<PlayerProfile, "id">) => PlayerProfile;
   updatePlayer: (id: string, patch: Partial<Omit<PlayerProfile, "id">>) => void;
 }
 
-function PlayerSetupForm({ currentPlayer, onClose, onSaved, createPlayer, updatePlayer }: PlayerSetupFormProps){
-  const [displayName, setDisplayName] = useState(currentPlayer?.displayName ?? "");
-  const [gradeBand, setGradeBand] = useState<GradeBand>(currentPlayer?.gradeBand ?? "K-2");
-  const [ageBand, setAgeBand] = useState<AgeBand>(currentPlayer?.ageBand ?? "Prefer not to say");
-  const [gender, setGender] = useState<Gender>(currentPlayer?.gender ?? "Prefer not to say");
-  const [priorExperience, setPriorExperience] = useState(currentPlayer?.priorExperience ?? "");
-  const [consentChecked, setConsentChecked] = useState<boolean>(currentPlayer?.consent?.agreed ?? false);
+const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => 5 + index);
+
+function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updatePlayer }: PlayerSetupFormProps){
+  const [playerName, setPlayerName] = useState(player?.playerName ?? "");
+  const [grade, setGrade] = useState<Grade | "">(player?.grade ?? "");
+  const [age, setAge] = useState<string>(player?.age != null ? String(player.age) : "");
+  const [school, setSchool] = useState(player?.school ?? "");
+  const [gender, setGender] = useState<Gender>(player?.gender ?? "Prefer not to say");
+  const [priorExperience, setPriorExperience] = useState(player?.priorExperience ?? "");
+  const [consentChecked, setConsentChecked] = useState<boolean>(player?.consent?.agreed ?? false);
 
   useEffect(() => {
-    setDisplayName(currentPlayer?.displayName ?? "");
-    setGradeBand(currentPlayer?.gradeBand ?? "K-2");
-    setAgeBand(currentPlayer?.ageBand ?? "Prefer not to say");
-    setGender(currentPlayer?.gender ?? "Prefer not to say");
-    setPriorExperience(currentPlayer?.priorExperience ?? "");
-    setConsentChecked(currentPlayer?.consent?.agreed ?? false);
-  }, [currentPlayer]);
+    setPlayerName(player?.playerName ?? "");
+    setGrade(player?.grade ?? "");
+    setAge(player?.age != null ? String(player.age) : "");
+    setSchool(player?.school ?? "");
+    setGender(player?.gender ?? "Prefer not to say");
+    setPriorExperience(player?.priorExperience ?? "");
+    setConsentChecked(player?.consent?.agreed ?? false);
+  }, [player, mode]);
 
-  const saveDisabled = !displayName.trim() || !consentChecked;
-  const title = currentPlayer ? "Edit your profile" : "Create your profile";
+  const saveDisabled = !playerName.trim() || !grade || !age || !consentChecked;
+  const title = mode === "edit" ? "Edit player demographics" : "Create new player";
+  const showReviewNotice = mode === "edit" && player?.needsReview;
+  const genderOptions = GENDER_OPTIONS;
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-    const trimmed = displayName.trim();
-    if (!trimmed || !consentChecked) return;
+    const trimmedName = playerName.trim();
+    if (!trimmedName || !grade || !age || !consentChecked) return;
+    const parsedAge = Number.parseInt(age, 10);
+    if (!Number.isFinite(parsedAge)) return;
+    const schoolValue = school.trim();
+    const priorValue = priorExperience.trim();
     const consent = {
       agreed: consentChecked,
       timestamp: new Date().toISOString(),
       consentTextVersion: CONSENT_TEXT_VERSION,
     };
-    if (currentPlayer) {
-      updatePlayer(currentPlayer.id, { displayName: trimmed, gradeBand, ageBand, gender, priorExperience, consent });
+    const payload = {
+      playerName: trimmedName,
+      grade: grade as Grade,
+      age: parsedAge,
+      school: schoolValue ? schoolValue : undefined,
+      gender,
+      priorExperience: priorValue ? priorValue : undefined,
+      consent,
+      needsReview: false,
+    } satisfies Omit<PlayerProfile, "id">;
+    if (mode === "edit" && player) {
+      updatePlayer(player.id, payload);
+      onSaved({ action: "update", player: { ...player, ...payload } });
     } else {
-      const created = createPlayer({ displayName: trimmed, gradeBand, ageBand, gender, priorExperience, consent });
+      const created = createPlayer(payload);
+      onSaved({ action: "create", player: created });
     }
-    onSaved();
   };
-
-  const gradeOptions: GradeBand[] = ["K-2", "3-5", "6-8", "9-12"];
-  const ageOptions: AgeBand[] = ["<8", "8-10", "11-13", "14-18", "Prefer not to say"];
-  const genderOptions: Gender[] = ["Male", "Female", "Non-binary", "Prefer not to say"];
 
   return (
     <form onSubmit={handleSubmit} className="p-5 space-y-4" aria-label="Player setup form">
@@ -1918,32 +4018,72 @@ function PlayerSetupForm({ currentPlayer, onClose, onSaved, createPlayer, update
         <button type="button" onClick={onClose} className="text-sm text-slate-500 hover:text-slate-700">Close</button>
       </div>
       <div className="grid gap-3">
+        {showReviewNotice && (
+          <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+            Please confirm the player name, grade, and age to continue.
+          </div>
+        )}
+        {mode === "create" && (
+          <div className="rounded border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-700">
+            A new player will begin a fresh training session after saving.
+          </div>
+        )}
         <label className="text-sm font-medium text-slate-700">
-          Display name
+          Player name
           <input
             type="text"
-            value={displayName}
-            onChange={e => setDisplayName(e.target.value)}
+            value={playerName}
+            onChange={e => setPlayerName(e.target.value)}
             className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
             placeholder="e.g. Alex"
             required
           />
         </label>
         <label className="text-sm font-medium text-slate-700">
-          Grade band
-          <select value={gradeBand} onChange={e => setGradeBand(e.target.value as GradeBand)} className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner">
-            {gradeOptions.map(option => (
-              <option key={option} value={option}>{option}</option>
+          Grade
+          <select
+            value={grade}
+            onChange={e => setGrade(e.target.value as Grade | "")}
+            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+            required
+          >
+            <option value="" disabled>
+              Select grade
+            </option>
+            {GRADE_OPTIONS.map(option => (
+              <option key={option} value={option}>
+                {option}
+              </option>
             ))}
           </select>
         </label>
         <label className="text-sm font-medium text-slate-700">
-          Age range
-          <select value={ageBand} onChange={e => setAgeBand(e.target.value as AgeBand)} className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner">
-            {ageOptions.map(option => (
-              <option key={option} value={option}>{option}</option>
+          Age
+          <select
+            value={age}
+            onChange={e => setAge(e.target.value)}
+            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+            required
+          >
+            <option value="" disabled>
+              Select age
+            </option>
+            {AGE_OPTIONS.map(option => (
+              <option key={option} value={option}>
+                {option}
+              </option>
             ))}
           </select>
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          School (optional)
+          <input
+            type="text"
+            value={school}
+            onChange={e => setSchool(e.target.value)}
+            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+            placeholder="e.g. Roosevelt Elementary"
+          />
         </label>
         <label className="text-sm font-medium text-slate-700">
           Gender
@@ -1955,7 +4095,13 @@ function PlayerSetupForm({ currentPlayer, onClose, onSaved, createPlayer, update
         </label>
         <label className="text-sm font-medium text-slate-700">
           Prior experience (optional)
-          <textarea value={priorExperience} onChange={e => setPriorExperience(e.target.value)} rows={3} className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner" placeholder="Tell us about previous AI or RPS experience" />
+          <textarea
+            value={priorExperience}
+            onChange={e => setPriorExperience(e.target.value)}
+            rows={3}
+            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+            placeholder="Tell us about previous AI or RPS experience"
+          />
         </label>
       </div>
       <label className="flex items-start gap-3 text-sm text-slate-700">

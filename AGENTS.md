@@ -54,7 +54,7 @@ npm run lint:fix
 ```
 
 ## 8. Build (Production)
-Clean & build optimized assets:
+Run the production build only after implementing new code changes. Clean & build optimized assets: 
 ```bash
 npm run build
 ```
