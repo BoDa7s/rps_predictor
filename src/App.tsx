@@ -1624,7 +1624,12 @@ function RPSDoodleAppInner(){
     if (phase !== "feedback") return;
     const modeForTiming: Mode = selectedMode ?? "practice";
     const delayBase = matchTimings[modeForTiming].resultBannerMs;
-    const delay = trainingActive ? Math.min(delayBase, 600) : delayBase;
+    const robotReactionDuration = matchTimings[modeForTiming].robotRoundReactionMs;
+    const robotRestDuration = matchTimings[modeForTiming].robotRoundRestMs;
+    const robotTimeline = robotReactionDuration + robotRestDuration;
+    const delay = trainingActive
+      ? Math.min(delayBase, 600)
+      : Math.max(delayBase, robotTimeline);
     const t = setTimeout(() => {
       if (trainingActive) {
         setRound(r => r + 1);
