@@ -512,8 +512,7 @@ function RPSDoodleAppInner(){
       return false;
     }
   });
-  const initialWelcomeActive = !welcomeSeen;
-  const [welcomeActive, setWelcomeActive] = useState(initialWelcomeActive);
+  const [welcomeActive, setWelcomeActive] = useState(false);
   const [welcomeSlide, setWelcomeSlide] = useState(0);
   const [statsOpen, setStatsOpen] = useState(false);
   const [leaderboardOpen, setLeaderboardOpen] = useState(false);
@@ -544,15 +543,27 @@ function RPSDoodleAppInner(){
   const isPlayerModalOpen = playerModalMode !== "hidden";
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [restoreSelectedPlayerId, setRestoreSelectedPlayerId] = useState<string | null>(null);
+  type Scene = "WELCOME"|"BOOT"|"MODE"|"MATCH"|"RESULTS";
+  const [scene, setScene] = useState<Scene>("BOOT");
+  const [bootNext, setBootNext] = useState<"WELCOME" | "AUTO">(() => (!welcomeSeen ? "WELCOME" : "AUTO"));
+  const [bootProgress, setBootProgress] = useState(0);
+  const [bootReady, setBootReady] = useState(false);
+  const bootStartRef = useRef<number | null>(null);
+  const bootAnimationRef = useRef<number | null>(null);
+  const bootAdvancingRef = useRef(false);
   useEffect(() => {
     if (welcomeActive || restoreDialogOpen) return;
+    if (scene === "BOOT") return;
     if (!hasConsented) {
       setPlayerModalMode(currentPlayer ? "edit" : "create");
     }
-  }, [hasConsented, currentPlayer, welcomeActive, restoreDialogOpen]);
+  }, [hasConsented, currentPlayer, welcomeActive, restoreDialogOpen, scene]);
   useEffect(() => { if (!hasConsented) setLeaderboardOpen(false); }, [hasConsented]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastReaderOpen, setToastReaderOpen] = useState(false);
+  const [toastConfirm, setToastConfirm] = useState<
+    { confirmLabel: string; cancelLabel?: string; onConfirm: () => void } | null
+  >(null);
   const [helpToast, setHelpToast] = useState<{ title: string; message: string } | null>(null);
   const [helpGuideOpen, setHelpGuideOpen] = useState(false);
   const [robotHovered, setRobotHovered] = useState(false);
@@ -581,6 +592,10 @@ function RPSDoodleAppInner(){
       setToastReaderOpen(false);
     }
   }, [toastMessage, toastReaderOpen]);
+  useEffect(() => {
+    if (toastMessage) return;
+    setToastConfirm(null);
+  }, [toastMessage]);
   useEffect(() => {
     if (!toastReaderOpen) return;
     requestAnimationFrame(() => toastReaderCloseRef.current?.focus());
@@ -700,9 +715,6 @@ function RPSDoodleAppInner(){
   const modalPlayer = resolvedModalMode === "edit" ? currentPlayer : null;
   const hasLocalProfiles = players.length > 0;
 
-  type Scene = "WELCOME"|"BOOT"|"MODE"|"MATCH"|"RESULTS";
-  const [scene, setScene] = useState<Scene>(initialWelcomeActive ? "WELCOME" : "BOOT");
-
   const [audioOn, setAudioOn] = useState(true);
   const [textScale, setTextScale] = useState(1);
 
@@ -721,6 +733,50 @@ function RPSDoodleAppInner(){
     setMatchTimings(defaults);
     clearSavedMatchTimings();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (scene !== "BOOT") {
+      if (bootAnimationRef.current !== null) {
+        window.cancelAnimationFrame(bootAnimationRef.current);
+        bootAnimationRef.current = null;
+      }
+      bootStartRef.current = null;
+      setBootProgress(0);
+      setBootReady(false);
+      bootAdvancingRef.current = false;
+      return;
+    }
+    bootAdvancingRef.current = false;
+    setBootProgress(0);
+    setBootReady(false);
+    bootStartRef.current = null;
+    const minimumDuration = 5000;
+    const step = (timestamp: number) => {
+      if (bootStartRef.current === null) {
+        bootStartRef.current = timestamp;
+      }
+      const start = bootStartRef.current ?? timestamp;
+      const elapsed = timestamp - start;
+      const ratio = Math.min(elapsed / minimumDuration, 1);
+      const nextProgress = Math.min(100, ratio * 100);
+      setBootProgress(prev => (nextProgress > prev ? nextProgress : prev));
+      if (elapsed >= minimumDuration) {
+        setBootProgress(100);
+        setBootReady(true);
+        bootAnimationRef.current = null;
+        return;
+      }
+      bootAnimationRef.current = window.requestAnimationFrame(step);
+    };
+    bootAnimationRef.current = window.requestAnimationFrame(step);
+    return () => {
+      if (bootAnimationRef.current !== null) {
+        window.cancelAnimationFrame(bootAnimationRef.current);
+        bootAnimationRef.current = null;
+      }
+    };
+  }, [scene]);
 
   const [predictorMode, setPredictorMode] = useState<boolean>(currentProfile?.predictorDefault ?? true);
   const [aiMode, setAiMode] = useState<AIMode>("normal");
@@ -757,6 +813,8 @@ function RPSDoodleAppInner(){
   const showTrainingCompleteBadge = !needsTraining && trainingCount >= TRAIN_ROUNDS;
 
   const difficultyDisabled = !isTrained || !predictorMode;
+  const bootPercent = Math.round(bootProgress);
+  const bootBarWidth = Math.min(100, bootProgress > 0 ? bootProgress : 4);
 
   useEffect(() => {
     if (difficultyDisabled) {
@@ -909,7 +967,7 @@ function RPSDoodleAppInner(){
   }, [goToWelcomeSlide]);
 
   const openWelcome = useCallback(
-    (options: { announce?: string; resetPlayer?: boolean } = {}) => {
+    (options: { announce?: string; resetPlayer?: boolean; bootFirst?: boolean } = {}) => {
       clearCountdown();
       setPhase("idle");
       setCount(3);
@@ -957,8 +1015,15 @@ function RPSDoodleAppInner(){
       }
       setWelcomeSeen(false);
       setWelcomeSlide(0);
-      setScene("WELCOME");
-      setWelcomeActive(true);
+      if (options.bootFirst) {
+        setWelcomeActive(false);
+        setBootNext("WELCOME");
+        setScene("BOOT");
+      } else {
+        setScene("WELCOME");
+        setBootNext("AUTO");
+        setWelcomeActive(true);
+      }
       welcomeToastShownRef.current = false;
       welcomeFinalToastShownRef.current = false;
       if (options.announce) {
@@ -996,6 +1061,7 @@ function RPSDoodleAppInner(){
       setRobotResultReaction,
       setRound,
       setScene,
+      setBootNext,
       setSelectedMode,
       setSettingsOpen,
       setStatsOpen,
@@ -1016,6 +1082,7 @@ function RPSDoodleAppInner(){
     (mode: "setup" | "restore" | "dismiss") => {
       setWelcomeActive(false);
       setWelcomeSlide(0);
+      setBootNext("AUTO");
       setScene("BOOT");
       setWelcomeSeen(true);
       welcomeToastShownRef.current = false;
@@ -1038,7 +1105,18 @@ function RPSDoodleAppInner(){
         setLive("Welcome intro dismissed.");
       }
     },
-    [players.length, setLive, setPlayerModalMode, setRestoreDialogOpen, setScene, setToastMessage, setWelcomeActive, setWelcomeSeen, setWelcomeSlide],
+    [
+      players.length,
+      setBootNext,
+      setLive,
+      setPlayerModalMode,
+      setRestoreDialogOpen,
+      setScene,
+      setToastMessage,
+      setWelcomeActive,
+      setWelcomeSeen,
+      setWelcomeSlide,
+    ],
   );
 
   const selectedRestorePlayer = useMemo(() => {
@@ -1139,19 +1217,32 @@ function RPSDoodleAppInner(){
 
   useEffect(() => {
     if (scene !== "BOOT") return;
-    if (!currentProfile || !hasConsented) return;
-    const t = window.setTimeout(() => {
-      if (needsTraining) {
-        startMatch("practice", { silent: true });
-        if (!trainingActive) {
-          setTrainingActive(true);
-        }
-      } else {
-        setScene("MODE");
+    if (!bootReady) return;
+    if (bootAdvancingRef.current) return;
+    bootAdvancingRef.current = true;
+    if (bootNext === "WELCOME") {
+      setWelcomeActive(true);
+      setScene("WELCOME");
+      setBootNext("AUTO");
+      return;
+    }
+    if (needsTraining && currentProfile && hasConsented) {
+      startMatch("practice", { silent: true });
+      if (!trainingActive) {
+        setTrainingActive(true);
       }
-    }, 900);
-    return () => window.clearTimeout(t);
-  }, [scene, currentProfile, hasConsented, needsTraining, trainingActive]);
+      return;
+    }
+    setScene("MODE");
+  }, [
+    scene,
+    bootReady,
+    bootNext,
+    needsTraining,
+    currentProfile,
+    hasConsented,
+    trainingActive,
+  ]);
 
   const statsTabs = [
     { key: "overview", label: "Overview" },
@@ -1451,10 +1542,23 @@ function RPSDoodleAppInner(){
   );
 
   const handleReboot = useCallback(() => {
-    handleCloseSettings(false);
-    openWelcome({ announce: "Welcome intro reopened from settings.", resetPlayer: true });
-    setToastMessage("Rebooted. The welcome intro is ready again.");
-  }, [handleCloseSettings, openWelcome, setToastMessage]);
+    setToastMessage("Confirm reboot? This will replay the welcome intro after the boot sequence.");
+    setToastConfirm({
+      confirmLabel: "Reboot now",
+      cancelLabel: "Cancel",
+      onConfirm: () => {
+        setToastConfirm(null);
+        setToastMessage(null);
+        handleCloseSettings(false);
+        openWelcome({
+          announce: "Rebooting. Boot sequence starting for the welcome intro.",
+          resetPlayer: true,
+          bootFirst: true,
+        });
+      },
+    });
+    setLive("Reboot requested. Confirm via toast to restart.");
+  }, [handleCloseSettings, openWelcome, setLive, setToastConfirm, setToastMessage]);
 
   const handleCreateProfile = useCallback(() => {
     if (settingsOpen) {
@@ -2200,9 +2304,34 @@ function RPSDoodleAppInner(){
           <div
             role="status"
             aria-live="polite"
-            className="rounded-lg bg-slate-900/90 px-4 py-2 text-sm text-white shadow-lg"
+            className="rounded-lg bg-slate-900/90 px-4 py-3 text-sm text-white shadow-lg"
           >
-            {toastMessage}
+            <div className="space-y-3">
+              <div>{toastMessage}</div>
+              {toastConfirm && (
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    className="rounded-full border border-white/30 px-3 py-1 text-xs font-semibold text-white/90 transition hover:bg-white/10"
+                    onClick={() => {
+                      setToastConfirm(null);
+                      setToastMessage(null);
+                    }}
+                  >
+                    {toastConfirm.cancelLabel ?? "Cancel"}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-900 transition hover:bg-slate-100"
+                    onClick={() => {
+                      toastConfirm.onConfirm();
+                    }}
+                  >
+                    {toastConfirm.confirmLabel}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
           <button
             type="button"
@@ -2898,6 +3027,26 @@ function RPSDoodleAppInner(){
                         <span>Larger</span>
                       </div>
                     </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-800">Show welcome again</div>
+                        <p className="text-xs text-slate-500">Replay the intro on the next launch.</p>
+                      </div>
+                      <OnOffToggle value={!welcomeSeen} onChange={value => handleWelcomeReplayToggle(value)} />
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-800">Reboot</div>
+                        <p className="text-xs text-slate-500">Restart with the boot animation and welcome intro.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleReboot}
+                        className="rounded-full bg-slate-900/90 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-slate-900"
+                      >
+                        Reboot
+                      </button>
+                    </div>
                   </div>
                 </section>
                 <section className="space-y-3">
@@ -2932,28 +3081,6 @@ function RPSDoodleAppInner(){
                       >
                         How training works
                       </button>
-                    </div>
-                    <div className="mt-4 space-y-4 border-t border-slate-200 pt-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-semibold text-slate-800">Show welcome again</div>
-                          <p className="text-xs text-slate-500">Replay the intro on the next launch.</p>
-                        </div>
-                        <OnOffToggle value={!welcomeSeen} onChange={value => handleWelcomeReplayToggle(value)} />
-                      </div>
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-semibold text-slate-800">Reboot</div>
-                          <p className="text-xs text-slate-500">Return to the welcome intro now.</p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={handleReboot}
-                          className="rounded-full bg-slate-900/90 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-slate-900"
-                        >
-                          Reboot
-                        </button>
-                      </div>
                     </div>
                   </div>
                 </section>
@@ -3065,15 +3192,75 @@ function RPSDoodleAppInner(){
           </motion.main>
         )}
         {scene === "BOOT" && (
-          <motion.div key="boot" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.4 }} className="grid place-items-center min-h-screen">
-            <div className="flex flex-col items-center gap-4">
-              <motion.div initial={{ scale: .95 }} animate={{ scale: 1.05 }} transition={{ repeat: Infinity, repeatType: "reverse", duration: .9 }} className="text-4xl">
-                <span>🤖</span>
+          <motion.div
+            key="boot"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.4 }}
+            className="relative min-h-screen overflow-hidden"
+          >
+            <motion.div
+              className="absolute inset-0"
+              style={{
+                background:
+                  "radial-gradient(circle at 20% 20%, rgba(125, 211, 252, 0.4), transparent 55%)," +
+                  "radial-gradient(circle at 80% 30%, rgba(14, 165, 233, 0.35), transparent 60%)," +
+                  "linear-gradient(135deg, #0f172a, #1e293b)",
+                backgroundSize: "160% 160%, 140% 140%, 100% 100%",
+              }}
+              animate={{
+                backgroundPosition: [
+                  "0% 50%, 50% 50%, 0% 0%",
+                  "100% 50%, 50% 50%, 100% 100%",
+                  "0% 50%, 50% 50%, 0% 0%",
+                ],
+              }}
+              transition={{ duration: 12, ease: "easeInOut", repeat: Infinity }}
+            />
+            <motion.div
+              className="absolute inset-0"
+              style={{ background: "radial-gradient(ellipse at bottom, rgba(56, 189, 248, 0.18), transparent 65%)" }}
+              animate={{ opacity: [0.25, 0.55, 0.25] }}
+              transition={{ duration: 6, ease: "easeInOut", repeat: Infinity }}
+            />
+            <div className="relative z-10 flex min-h-screen flex-col items-center justify-center gap-8 px-6 text-center text-white">
+              <motion.div
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.6, ease: [0.22, 0.61, 0.36, 1] }}
+                className="text-4xl font-black tracking-wide md:text-5xl"
+              >
+                RPS AI Lab
               </motion.div>
-              <div className="w-48 h-1 bg-slate-200 rounded overflow-hidden"><motion.div initial={{ width: "10%" }} animate={{ width: "100%" }} transition={{ duration: .9, ease: "easeInOut" }} className="h-full bg-sky-500"/></div>
-              <div className="text-slate-500 text-sm">Booting...</div>
+              <motion.div
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2, duration: 0.6, ease: [0.22, 0.61, 0.36, 1] }}
+                className="w-full max-w-xs space-y-3"
+              >
+                <div className="h-2 w-full overflow-hidden rounded-full bg-white/30 backdrop-blur">
+                  <motion.div
+                    className="h-full rounded-full bg-white"
+                    initial={false}
+                    animate={{ width: `${bootBarWidth}%` }}
+                    transition={{ duration: 0.4, ease: [0.22, 0.61, 0.36, 1] }}
+                  />
+                </div>
+                <div className="text-sm font-medium uppercase tracking-[0.35em] text-white/80">
+                  Booting… {bootPercent}%
+                </div>
+              </motion.div>
+              <motion.div
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.4, duration: 0.6, ease: [0.22, 0.61, 0.36, 1] }}
+                className="text-xs uppercase tracking-[0.45em] text-white/60"
+              >
+                Initializing predictive engines
+              </motion.div>
             </div>
-            </motion.div>
+          </motion.div>
         )}
         {/* MODE SELECT */}
         {scene === "MODE" && (
