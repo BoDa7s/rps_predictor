@@ -989,7 +989,7 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
           </label>
           <div style={dateRangeStyle}>
             <span>Date range 📅</span>
-            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+            <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
               <input
                 type="date"
                 value={dateRange.start ?? ""}
@@ -1008,22 +1008,40 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
             </div>
           </div>
         </div>
-        <div style={sourceSwitchStyle}>
-          <span style={{ fontSize: "0.75rem", opacity: 0.75 }}>Observe:</span>
-          <button
-            type="button"
-            onClick={() => handleSourceToggle("selected")}
-            style={sourceButtonStyle(source === "selected")}
-          >
-            Selected scope
-          </button>
-          <button
-            type="button"
-            onClick={() => handleSourceToggle("active")}
-            style={sourceButtonStyle(source === "active")}
-          >
-            Active game
-          </button>
+        <div style={scopeActionsStyle}>
+          <div style={sourceSwitchStyle}>
+            <span style={{ fontSize: "0.75rem", opacity: 0.75 }}>Observe:</span>
+            <button
+              type="button"
+              onClick={() => handleSourceToggle("selected")}
+              style={sourceButtonStyle(source === "selected")}
+            >
+              Selected scope
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSourceToggle("active")}
+              style={sourceButtonStyle(source === "active")}
+            >
+              Active game
+            </button>
+          </div>
+          <div style={tabSwitchStyle}>
+            <button
+              type="button"
+              onClick={() => onViewChange("live")}
+              style={tabButtonStyle(activeView === "live")}
+            >
+              Live
+            </button>
+            <button
+              type="button"
+              onClick={() => onViewChange("history")}
+              style={tabButtonStyle(activeView === "history")}
+            >
+              History
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1032,23 +1050,6 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
           {statusMessage}
         </div>
       )}
-
-      <div style={tabSwitchStyle}>
-        <button
-          type="button"
-          onClick={() => onViewChange("live")}
-          style={tabButtonStyle(activeView === "live")}
-        >
-          Live
-        </button>
-        <button
-          type="button"
-          onClick={() => onViewChange("history")}
-          style={tabButtonStyle(activeView === "history")}
-        >
-          History
-        </button>
-      </div>
 
       {activeView === "live" ? (
         <div style={panelStyle}>
@@ -1309,15 +1310,15 @@ const scopeBarStyle: React.CSSProperties = {
   backdropFilter: "blur(10px)",
   borderRadius: "12px",
   padding: "16px",
-  display: "flex",
-  flexDirection: "column",
+  display: "grid",
   gap: "16px",
 };
 
 const scopeControlsStyle: React.CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
+  display: "grid",
   gap: "12px",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  alignItems: "start",
 };
 
 const scopeLabelStyle: React.CSSProperties = {
@@ -1325,6 +1326,7 @@ const scopeLabelStyle: React.CSSProperties = {
   flexDirection: "column",
   gap: "4px",
   fontSize: "0.75rem",
+  width: "100%",
 };
 
 const scopeSelectStyle: React.CSSProperties = {
@@ -1333,7 +1335,8 @@ const scopeSelectStyle: React.CSSProperties = {
   border: "1px solid rgba(148,163,184,0.3)",
   background: "rgba(9,14,26,0.85)",
   color: "inherit",
-  minWidth: "140px",
+  width: "100%",
+  minWidth: 0,
 };
 
 const dateRangeStyle: React.CSSProperties = {
@@ -1341,6 +1344,16 @@ const dateRangeStyle: React.CSSProperties = {
   flexDirection: "column",
   gap: "6px",
   fontSize: "0.75rem",
+  gridColumn: "1 / -1",
+  width: "100%",
+};
+
+const scopeActionsStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: "12px",
+  alignItems: "center",
+  flexWrap: "wrap",
 };
 
 const clearButtonStyle: React.CSSProperties = {
@@ -1385,6 +1398,7 @@ const toastStyle: React.CSSProperties = {
 const tabSwitchStyle: React.CSSProperties = {
   display: "flex",
   gap: "12px",
+  flexWrap: "wrap",
 };
 
 function tabButtonStyle(active: boolean): React.CSSProperties {
