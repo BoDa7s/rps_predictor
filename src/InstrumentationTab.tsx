@@ -12,6 +12,58 @@ import {
 } from "./instrumentationSnapshots";
 
 const PAGE_SIZE = 8;
+const CORE_ONLY_STORAGE_KEY = "rps_dev_instrumentation_core_only";
+const CORE_ELEMENT_ALLOWLIST = new Set([
+  "hdr.stats",
+  "hdr.leaderboard",
+  "hdr.player",
+  "hdr.modes",
+  "hdr.settings",
+  "hdr.trainingBadge",
+  "hdr.aiConfBadge",
+  "mode.challenge.card",
+  "mode.practice.card",
+  "hand.rock",
+  "hand.paper",
+  "hand.scissors",
+  "robot.icon.click",
+  "robot.bubble.link",
+  "set.editDemographics",
+  "set.createPlayer",
+  "set.profile.select",
+  "set.profile.createNew",
+  "set.exportCSV",
+  "set.resetTraining",
+  "set.aiPredictor.on",
+  "set.aiPredictor.off",
+  "set.difficulty.fair",
+  "set.difficulty.normal",
+  "set.difficulty.ruthless",
+  "set.bestOf.3",
+  "set.bestOf.5",
+  "set.bestOf.7",
+  "set.audio.on",
+  "set.audio.off",
+  "set.textSize.slider",
+  "set.welcomeAgain.on",
+  "set.welcomeAgain.off",
+  "set.reboot",
+  "stats.tab.overview",
+  "stats.tab.matches",
+  "stats.tab.rounds",
+  "stats.tab.insights",
+  "stats.profile.select",
+  "stats.profile.new",
+  "stats.exportCSV",
+  "stats.close",
+  "lb.close",
+  "dev.inst.captureSnapshot",
+  "dev.inst.exportLatest.json",
+  "dev.inst.exportLatest.csv",
+  "dev.inst.heatmap.toggle",
+  "dev.inst.liveTab",
+  "dev.inst.historyTab",
+]);
 
 interface InstrumentationTabProps {
   snapshot: DevInstrumentationSnapshot | null;
@@ -184,6 +236,7 @@ function filterClicks(
   modeFilter: Mode | "",
   difficultyFilter: AIMode | "",
   dateRange: { start: string | null; end: string | null },
+  options: { coreOnly: boolean } = { coreOnly: false },
 ): ClickEntry[] {
   const startMs = dateRange.start ? Date.parse(dateRange.start) : null;
   const endMs = dateRange.end ? Date.parse(dateRange.end) : null;
@@ -196,6 +249,10 @@ function filterClicks(
       const epoch = snapshot.timeOrigin + entry.timestamp;
       if (startMs != null && epoch < startMs) return false;
       if (endMs != null && epoch > endMs) return false;
+    }
+    if (options.coreOnly) {
+      if (!entry.elementId) return false;
+      if (!CORE_ELEMENT_ALLOWLIST.has(entry.elementId)) return false;
     }
     return true;
   });
@@ -279,6 +336,7 @@ function deriveMetrics(
   modeFilter: Mode | "",
   difficultyFilter: AIMode | "",
   dateRange: { start: string | null; end: string | null },
+  coreOnly: boolean,
 ): DerivedMetrics {
   if (!snapshot || !scope) {
     return {
@@ -349,7 +407,7 @@ function deriveMetrics(
     };
   }
 
-  const filteredClicks = filterClicks(snapshot, scope, modeFilter, difficultyFilter, dateRange);
+  const filteredClicks = filterClicks(snapshot, scope, modeFilter, difficultyFilter, dateRange, { coreOnly });
   const topViews = buildTopList(filteredClicks, entry => entry.view || "unknown");
   const topElements = buildTopList(filteredClicks, entry => (entry.elementId ? `${entry.target}#${entry.elementId}` : entry.target));
   const clickSpeed = computeClickSpeed(filteredClicks);
@@ -695,8 +753,29 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
   const [compareSelection, setCompareSelection] = useState<string[]>([]);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
+  const [coreOnly, setCoreOnly] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(CORE_ONLY_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
 
   const records = useInstrumentationSnapshots(scope);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      if (coreOnly) {
+        window.localStorage.setItem(CORE_ONLY_STORAGE_KEY, "1");
+      } else {
+        window.localStorage.removeItem(CORE_ONLY_STORAGE_KEY);
+      }
+    } catch {
+      /* noop */
+    }
+  }, [coreOnly]);
 
   useEffect(() => {
     setPage(0);
@@ -748,10 +827,10 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
       const targetScope = scope ?? record.scope ?? null;
       return {
         record,
-        metrics: deriveMetrics(record.data, targetScope, modeFilter, difficultyFilter, dateRange),
+        metrics: deriveMetrics(record.data, targetScope, modeFilter, difficultyFilter, dateRange, coreOnly),
       };
     });
-  }, [selectedRecords, scope, modeFilter, difficultyFilter, dateRange]);
+  }, [selectedRecords, scope, modeFilter, difficultyFilter, dateRange, coreOnly]);
 
   const activeDetailRecord = useMemo(() => {
     if (!records.length) return null;
@@ -765,8 +844,8 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
   const detailMetrics = useMemo(() => {
     if (!activeDetailRecord) return null;
     const targetScope = scope ?? activeDetailRecord.scope ?? null;
-    return deriveMetrics(activeDetailRecord.data, targetScope, modeFilter, difficultyFilter, dateRange);
-  }, [activeDetailRecord, scope, modeFilter, difficultyFilter, dateRange]);
+    return deriveMetrics(activeDetailRecord.data, targetScope, modeFilter, difficultyFilter, dateRange, coreOnly);
+  }, [activeDetailRecord, scope, modeFilter, difficultyFilter, dateRange, coreOnly]);
 
   const liveSnapshot = useMemo(() => {
     if (!snapshot) return null;
@@ -785,20 +864,22 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
   }, [scope, snapshot, source]);
 
   const liveMetrics = useMemo(
-    () => deriveMetrics(liveSnapshot, liveScope, modeFilter, difficultyFilter, dateRange),
-    [liveSnapshot, liveScope, modeFilter, difficultyFilter, dateRange],
+    () => deriveMetrics(liveSnapshot, liveScope, modeFilter, difficultyFilter, dateRange, coreOnly),
+    [liveSnapshot, liveScope, modeFilter, difficultyFilter, dateRange, coreOnly],
   );
 
   const lastEventEpoch = useMemo(() => {
     if (!liveSnapshot) return null;
     const timestamps: number[] = [];
-    const latestRound = liveMetrics.tableRounds[0];
-    if (latestRound) {
-      const roundEpoch = toEpoch(
-        liveSnapshot,
-        latestRound.completedAt ?? latestRound.moveSelectedAt ?? latestRound.readyAt ?? null,
-      );
-      if (roundEpoch != null) timestamps.push(roundEpoch);
+    if (!coreOnly) {
+      const latestRound = liveMetrics.tableRounds[0];
+      if (latestRound) {
+        const roundEpoch = toEpoch(
+          liveSnapshot,
+          latestRound.completedAt ?? latestRound.moveSelectedAt ?? latestRound.readyAt ?? null,
+        );
+        if (roundEpoch != null) timestamps.push(roundEpoch);
+      }
     }
     if (liveMetrics.click.filteredClicks.length) {
       const latestClick = liveMetrics.click.filteredClicks.reduce((max, entry) => {
@@ -814,7 +895,7 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
     }
     if (!timestamps.length) return null;
     return Math.max(...timestamps);
-  }, [liveSnapshot, liveMetrics]);
+  }, [liveSnapshot, liveMetrics, coreOnly]);
 
   const liveLabels = resolveScopeLabels(
     liveScope,
@@ -824,7 +905,10 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
 
   const liveStatus = useMemo(() => {
     const hasData = Boolean(
-      liveSnapshot && (liveMetrics.filteredRounds.length || liveMetrics.click.filteredClicks.length || liveMetrics.hasSnapshot),
+      liveSnapshot &&
+        (coreOnly
+          ? liveMetrics.click.filteredClicks.length
+          : liveMetrics.filteredRounds.length || liveMetrics.click.filteredClicks.length || liveMetrics.hasSnapshot),
     );
     if (!hasData) {
       return { state: "empty" as const, label: `${liveLabels.player} • ${liveLabels.profile}`, lastEventMs: null };
@@ -834,7 +918,7 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
       return { state: "receiving" as const, label: `${liveLabels.player} • ${liveLabels.profile}`, lastEventMs: age };
     }
     return { state: "paused" as const, label: `${liveLabels.player} • ${liveLabels.profile}`, lastEventMs: age };
-  }, [liveSnapshot, liveMetrics, liveLabels, lastEventEpoch]);
+  }, [liveSnapshot, liveMetrics, liveLabels, lastEventEpoch, coreOnly]);
 
   useEffect(() => {
     if (!onLiveStatusChange) return;
@@ -902,12 +986,19 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
   const autoCaptureDisabled = !scope?.playerId;
   const historyEmpty = !records.length;
   const liveEmpty = liveStatus.state === "empty";
+  const liveCoreEmpty = coreOnly && liveMetrics.click.filteredClicks.length === 0;
   const scopePlayerLabel = playerName ?? "All players";
   const scopeProfileLabel = profileName ?? "All profiles";
   const scopeModeLabel = modeFilter ? titleCase(modeFilter) : "Any mode";
   const scopeDifficultyLabel = difficultyFilter ? titleCase(difficultyFilter) : "All difficulties";
   const scopeDateLabel =
     dateRange.start || dateRange.end ? `${dateRange.start ?? "…"} → ${dateRange.end ?? "…"}` : "Full history";
+
+  const handleCoreOnlyToggle = useCallback(() => {
+    setCoreOnly(prev => !prev);
+  }, []);
+
+  const detailCoreEmpty = coreOnly && detailMetrics?.click.filteredClicks.length === 0;
 
   return (
     <div style={{ display: "grid", gap: "16px" }}>
@@ -943,21 +1034,33 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
               Active game
             </button>
           </div>
-          <div style={tabSwitchStyle}>
+          <div style={coreToggleGroupStyle}>
             <button
               type="button"
-              onClick={() => onViewChange("live")}
-              style={tabButtonStyle(activeView === "live")}
+              onClick={handleCoreOnlyToggle}
+              aria-pressed={coreOnly}
+              style={coreToggleButtonStyle(coreOnly)}
             >
-              Live
+              <span>Core controls only</span>
+              <span style={coreToggleStateStyle(coreOnly)}>{coreOnly ? "On" : "Off"}</span>
             </button>
-            <button
-              type="button"
-              onClick={() => onViewChange("history")}
-              style={tabButtonStyle(activeView === "history")}
-            >
-              History
-            </button>
+            {coreOnly && <span style={coreToggleHintStyle}>Showing only allowlisted control interactions.</span>}
+            <div style={tabSwitchStyle}>
+              <button
+                type="button"
+                onClick={() => onViewChange("live")}
+                style={tabButtonStyle(activeView === "live")}
+              >
+                Live
+              </button>
+              <button
+                type="button"
+                onClick={() => onViewChange("history")}
+                style={tabButtonStyle(activeView === "history")}
+              >
+                History
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1007,7 +1110,11 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
             </div>
           </div>
 
-          {liveEmpty ? (
+          {liveCoreEmpty ? (
+            <div style={emptyStateStyle}>
+              <p style={{ margin: 0, fontSize: "0.9rem" }}>No core-control interactions for this scope.</p>
+            </div>
+          ) : liveEmpty ? (
             <div style={emptyStateStyle}>
               <p style={{ margin: 0, fontSize: "0.9rem" }}>
                 No events for this scope. Choose Active game as source or play a few rounds. Auto-capture is available once data appears.
@@ -1207,7 +1314,13 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
                         </p>
                       </div>
                     </div>
-                    <MetricCards metrics={detailMetrics} />
+                    {detailCoreEmpty ? (
+                      <div style={emptyStateStyle}>
+                        <p style={{ margin: 0, fontSize: "0.9rem" }}>No core-control interactions for this scope.</p>
+                      </div>
+                    ) : (
+                      <MetricCards metrics={detailMetrics} />
+                    )}
                   </div>
                 )}
               </>
@@ -1260,6 +1373,48 @@ const scopeActionsStyle: React.CSSProperties = {
   gap: "12px",
   alignItems: "center",
   flexWrap: "wrap",
+};
+
+
+const coreToggleGroupStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-end",
+  gap: "8px",
+  marginLeft: "auto",
+};
+
+function coreToggleButtonStyle(active: boolean): React.CSSProperties {
+  return {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    background: active ? "rgba(34,197,94,0.25)" : "rgba(148,163,184,0.18)",
+    border: active ? "1px solid rgba(34,197,94,0.55)" : "1px solid rgba(148,163,184,0.35)",
+    color: "#e2e8f0",
+    borderRadius: "999px",
+    padding: "6px 14px",
+    cursor: "pointer",
+    fontSize: "0.75rem",
+    fontWeight: 600,
+  };
+}
+
+function coreToggleStateStyle(active: boolean): React.CSSProperties {
+  return {
+    background: active ? "#22c55e" : "rgba(148,163,184,0.35)",
+    color: active ? "#0f172a" : "#e2e8f0",
+    borderRadius: "999px",
+    padding: "2px 8px",
+    fontSize: "0.7rem",
+    fontWeight: 700,
+  };
+}
+
+const coreToggleHintStyle: React.CSSProperties = {
+  fontSize: "0.7rem",
+  opacity: 0.75,
+  textAlign: "right",
 };
 
 
