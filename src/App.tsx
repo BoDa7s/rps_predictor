@@ -53,7 +53,26 @@ const DIFFICULTY_INFO: Record<AIMode, { label: string; helper: string }> = {
 
 const DIFFICULTY_SEQUENCE: AIMode[] = ["fair", "normal", "ruthless"];
 const BEST_OF_OPTIONS: BestOf[] = [3, 5, 7];
-const WELCOME_SEEN_KEY = "rps_welcome_seen_v1";
+const LEGACY_WELCOME_SEEN_KEY = "rps_welcome_seen_v1";
+const WELCOME_PREF_KEY = "rps_welcome_pref_v1";
+type WelcomePreference = "show" | "skip";
+
+function getInitialWelcomePreference(): WelcomePreference {
+  if (typeof window === "undefined") return "show";
+  try {
+    const stored = window.localStorage.getItem(WELCOME_PREF_KEY);
+    if (stored === "show" || stored === "skip") {
+      return stored;
+    }
+    const legacy = window.localStorage.getItem(LEGACY_WELCOME_SEEN_KEY);
+    if (legacy === "true") {
+      return "skip";
+    }
+  } catch {
+    /* noop */
+  }
+  return "show";
+}
 
 // ---- Core game logic (pure) ----
 export function resolveOutcome(player: Move, ai: Move): Outcome {
@@ -504,15 +523,16 @@ function RPSDoodleAppInner(){
     forkProfileVersion,
   } = useStats();
   const { players, currentPlayer, hasConsented, createPlayer, updatePlayer, setCurrentPlayer } = usePlayers();
-  const [welcomeSeen, setWelcomeSeen] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return window.localStorage.getItem(WELCOME_SEEN_KEY) === "true";
-    } catch {
-      return false;
-    }
-  });
+  const initialWelcomePreferenceRef = useRef<WelcomePreference | null>(null);
+  if (initialWelcomePreferenceRef.current === null) {
+    initialWelcomePreferenceRef.current = getInitialWelcomePreference();
+  }
+  const initialWelcomePreference = initialWelcomePreferenceRef.current;
+  const [welcomePreference, setWelcomePreference] = useState<WelcomePreference>(initialWelcomePreference);
+  const [welcomeSeen, setWelcomeSeen] = useState<boolean>(initialWelcomePreference === "skip");
   const [welcomeActive, setWelcomeActive] = useState(false);
+  const [welcomeStage, setWelcomeStage] = useState<"intro" | "create" | "restore">("intro");
+  const [welcomeOrigin, setWelcomeOrigin] = useState<"launch" | "settings" | null>(null);
   const [welcomeSlide, setWelcomeSlide] = useState(0);
   const [statsOpen, setStatsOpen] = useState(false);
   const [leaderboardOpen, setLeaderboardOpen] = useState(false);
@@ -540,24 +560,39 @@ function RPSDoodleAppInner(){
   const matches = useMemo(() => profileMatches, [profileMatches]);
   type PlayerModalMode = "hidden" | "create" | "edit";
   const [playerModalMode, setPlayerModalMode] = useState<PlayerModalMode>("hidden");
+  const [playerModalOrigin, setPlayerModalOrigin] = useState<"welcome" | "settings" | null>(null);
   const isPlayerModalOpen = playerModalMode !== "hidden";
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [restoreSelectedPlayerId, setRestoreSelectedPlayerId] = useState<string | null>(null);
   type Scene = "WELCOME"|"BOOT"|"MODE"|"MATCH"|"RESULTS";
   const [scene, setScene] = useState<Scene>("BOOT");
-  const [bootNext, setBootNext] = useState<"WELCOME" | "AUTO">(() => (!welcomeSeen ? "WELCOME" : "AUTO"));
+  const [bootNext, setBootNext] = useState<"WELCOME" | "AUTO">(
+    initialWelcomePreference === "show" ? "WELCOME" : "AUTO"
+  );
   const [bootProgress, setBootProgress] = useState(0);
   const [bootReady, setBootReady] = useState(false);
   const bootStartRef = useRef<number | null>(null);
   const bootAnimationRef = useRef<number | null>(null);
   const bootAdvancingRef = useRef(false);
+  const [pendingWelcomeExit, setPendingWelcomeExit] = useState<
+    null | { reason: "setup" | "restore" | "dismiss" }
+  >(null);
   useEffect(() => {
     if (welcomeActive || restoreDialogOpen) return;
     if (scene === "BOOT") return;
     if (!hasConsented) {
+      setPlayerModalOrigin("welcome");
       setPlayerModalMode(currentPlayer ? "edit" : "create");
     }
-  }, [hasConsented, currentPlayer, welcomeActive, restoreDialogOpen, scene]);
+  }, [
+    hasConsented,
+    currentPlayer,
+    welcomeActive,
+    restoreDialogOpen,
+    scene,
+    setPlayerModalMode,
+    setPlayerModalOrigin,
+  ]);
   useEffect(() => { if (!hasConsented) setLeaderboardOpen(false); }, [hasConsented]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastReaderOpen, setToastReaderOpen] = useState(false);
@@ -610,15 +645,16 @@ function RPSDoodleAppInner(){
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
-      if (welcomeSeen) {
-        window.localStorage.setItem(WELCOME_SEEN_KEY, "true");
+      window.localStorage.setItem(WELCOME_PREF_KEY, welcomePreference);
+      if (welcomePreference === "skip") {
+        window.localStorage.setItem(LEGACY_WELCOME_SEEN_KEY, "true");
       } else {
-        window.localStorage.removeItem(WELCOME_SEEN_KEY);
+        window.localStorage.removeItem(LEGACY_WELCOME_SEEN_KEY);
       }
     } catch {
       /* noop */
     }
-  }, [welcomeSeen]);
+  }, [welcomePreference]);
   useEffect(() => {
     if (welcomeActive) {
       setWelcomeSlide(0);
@@ -803,6 +839,7 @@ function RPSDoodleAppInner(){
   const welcomeSlideCount = welcomeSlides.length;
   const welcomeProgress = welcomeSlideCount ? ((welcomeSlide + 1) / welcomeSlideCount) * 100 : 100;
   const isWelcomeLastSlide = welcomeSlide >= welcomeSlideCount - 1;
+  const showMainUi = !welcomeActive && scene !== "WELCOME" && scene !== "BOOT";
 
   const trainingComplete = trainingCount >= TRAIN_ROUNDS;
   const needsTraining = !isTrained && !trainingComplete;
@@ -967,7 +1004,7 @@ function RPSDoodleAppInner(){
   }, [goToWelcomeSlide]);
 
   const openWelcome = useCallback(
-    (options: { announce?: string; resetPlayer?: boolean; bootFirst?: boolean } = {}) => {
+    (options: { announce?: string; resetPlayer?: boolean; bootFirst?: boolean; origin?: "launch" | "settings" } = {}) => {
       clearCountdown();
       setPhase("idle");
       setCount(3);
@@ -1010,11 +1047,15 @@ function RPSDoodleAppInner(){
       setRestoreSelectedPlayerId(null);
       setDeveloperOpen(false);
       setPlayerModalMode("hidden");
+      setPlayerModalOrigin(null);
       if (options.resetPlayer) {
         setCurrentPlayer(null);
       }
       setWelcomeSeen(false);
       setWelcomeSlide(0);
+      setWelcomeStage("intro");
+      setPendingWelcomeExit(null);
+      setWelcomeOrigin(options.origin ?? (options.bootFirst ? "launch" : "settings"));
       if (options.bootFirst) {
         setWelcomeActive(false);
         setBootNext("WELCOME");
@@ -1051,6 +1092,7 @@ function RPSDoodleAppInner(){
       setOutcomesHist,
       setPhase,
       setPlayerModalMode,
+      setPlayerModalOrigin,
       setPlayerPick,
       setPlayerScore,
       setResetDialogAcknowledged,
@@ -1073,49 +1115,77 @@ function RPSDoodleAppInner(){
       setWelcomeActive,
       setWelcomeSeen,
       setWelcomeSlide,
+      setWelcomeStage,
+      setWelcomeOrigin,
+      setPendingWelcomeExit,
       setWipeRun,
       setLive,
     ],
   );
 
-  const completeWelcome = useCallback(
-    (mode: "setup" | "restore" | "dismiss") => {
+  const finishWelcomeFlow = useCallback(
+    (reason: "setup" | "restore" | "dismiss") => {
       setWelcomeActive(false);
       setWelcomeSlide(0);
+      setWelcomeStage("intro");
       setBootNext("AUTO");
-      setScene("BOOT");
       setWelcomeSeen(true);
+      setWelcomeOrigin(null);
       welcomeToastShownRef.current = false;
       welcomeFinalToastShownRef.current = false;
+      setPendingWelcomeExit({ reason });
+    },
+    [
+      setBootNext,
+      setPendingWelcomeExit,
+      setWelcomeActive,
+      setWelcomeOrigin,
+      setWelcomeSeen,
+      setWelcomeSlide,
+      setWelcomeStage,
+    ],
+  );
+
+  const handleWelcomeAction = useCallback(
+    (mode: "setup" | "restore" | "dismiss") => {
       if (mode === "setup") {
+        setWelcomeStage("create");
+        setPlayerModalOrigin("welcome");
         setPlayerModalMode("create");
         setToastMessage("Let’s set up your player profile.");
         setLive("Opening player setup from welcome intro.");
-      } else if (mode === "restore") {
+        return;
+      }
+      if (mode === "restore") {
         if (players.length > 0) {
+          setWelcomeStage("restore");
           setRestoreDialogOpen(true);
           setToastMessage("Pick your saved player to continue.");
           setLive("Opening saved player picker.");
         } else {
+          setWelcomeStage("intro");
           setToastMessage("No saved data found on this device.");
           setLive("No saved player profiles available.");
         }
-      } else {
-        setToastMessage("Welcome dismissed. You can replay it from Settings → Help.");
-        setLive("Welcome intro dismissed.");
+        return;
       }
+      if (welcomeOrigin === "launch") {
+        return;
+      }
+      finishWelcomeFlow("dismiss");
+      setToastMessage("Welcome dismissed. You can replay it from Settings → Help.");
+      setLive("Welcome intro dismissed.");
     },
     [
+      finishWelcomeFlow,
       players.length,
-      setBootNext,
       setLive,
       setPlayerModalMode,
+      setPlayerModalOrigin,
       setRestoreDialogOpen,
-      setScene,
       setToastMessage,
-      setWelcomeActive,
-      setWelcomeSeen,
-      setWelcomeSlide,
+      setWelcomeStage,
+      welcomeOrigin,
     ],
   );
 
@@ -1124,21 +1194,49 @@ function RPSDoodleAppInner(){
     return players.find(player => player.id === restoreSelectedPlayerId) ?? null;
   }, [players, restoreSelectedPlayerId]);
 
-  const handleRestoreCancel = useCallback(() => {
+  const handleRestoreBack = useCallback(() => {
     setRestoreDialogOpen(false);
     setRestoreSelectedPlayerId(null);
-    setLive("Profile restore cancelled.");
-  }, [setRestoreDialogOpen, setRestoreSelectedPlayerId, setLive]);
+    setWelcomeStage("intro");
+    setLive("Returning to the welcome intro.");
+  }, [setLive, setRestoreDialogOpen, setRestoreSelectedPlayerId, setWelcomeStage]);
 
   const handleRestoreConfirm = useCallback(() => {
     if (!restoreSelectedPlayerId) return;
     const target = players.find(player => player.id === restoreSelectedPlayerId);
     if (!target) return;
     setRestoreDialogOpen(false);
+    setRestoreSelectedPlayerId(null);
+    setWelcomeStage("intro");
     setToastMessage(`Welcome back, ${target.playerName}! Choose a mode when you're ready.`);
     setLive(`Loaded saved player ${target.playerName}.`);
     setCurrentPlayer(target.id);
-  }, [players, restoreSelectedPlayerId, setCurrentPlayer, setLive, setRestoreDialogOpen, setToastMessage]);
+    finishWelcomeFlow("restore");
+  }, [
+    finishWelcomeFlow,
+    players,
+    restoreSelectedPlayerId,
+    setCurrentPlayer,
+    setLive,
+    setRestoreDialogOpen,
+    setRestoreSelectedPlayerId,
+    setToastMessage,
+    setWelcomeStage,
+  ]);
+
+  const handlePlayerModalClose = useCallback(() => {
+    if (playerModalOrigin === "welcome") {
+      setPlayerModalMode("hidden");
+      setPlayerModalOrigin(null);
+      setWelcomeStage("intro");
+      setLive("Returning to the welcome intro.");
+      return;
+    }
+    if (hasConsented) {
+      setPlayerModalMode("hidden");
+      setPlayerModalOrigin(null);
+    }
+  }, [hasConsented, playerModalOrigin, setLive, setPlayerModalMode, setPlayerModalOrigin, setWelcomeStage]);
 
   const recordRound = useCallback((playerMove: Move, aiMove: Move, outcomeForPlayer: Outcome) => {
     const trace = decisionTraceRef.current;
@@ -1221,6 +1319,9 @@ function RPSDoodleAppInner(){
     if (bootAdvancingRef.current) return;
     bootAdvancingRef.current = true;
     if (bootNext === "WELCOME") {
+      setWelcomeOrigin("launch");
+      setWelcomeStage("intro");
+      setWelcomeSeen(false);
       setWelcomeActive(true);
       setScene("WELCOME");
       setBootNext("AUTO");
@@ -1242,6 +1343,33 @@ function RPSDoodleAppInner(){
     currentProfile,
     hasConsented,
     trainingActive,
+    setWelcomeOrigin,
+    setWelcomeSeen,
+    setWelcomeStage,
+  ]);
+
+  useEffect(() => {
+    if (!pendingWelcomeExit) return;
+    const { reason } = pendingWelcomeExit;
+    if (reason !== "dismiss" && needsTraining && currentProfile && hasConsented) {
+      if (!trainingActive) {
+        setTrainingActive(true);
+      }
+      startMatch("practice", { silent: true });
+    } else {
+      setScene("MODE");
+    }
+    setPendingWelcomeExit(null);
+  }, [
+    pendingWelcomeExit,
+    needsTraining,
+    currentProfile,
+    hasConsented,
+    trainingActive,
+    setPendingWelcomeExit,
+    setScene,
+    setTrainingActive,
+    startMatch,
   ]);
 
   const statsTabs = [
@@ -1513,9 +1641,9 @@ function RPSDoodleAppInner(){
 
   const handleWelcomeReplayToggle = useCallback(
     (value: boolean) => {
-      const shouldShowIntro = value;
-      setWelcomeSeen(!shouldShowIntro);
-      if (shouldShowIntro) {
+      const nextPreference: WelcomePreference = value ? "show" : "skip";
+      setWelcomePreference(nextPreference);
+      if (nextPreference === "show") {
         setToastMessage("The welcome intro will show next time you open RPS AI Lab.");
         setLive("Welcome intro scheduled to replay on the next launch.");
       } else {
@@ -1523,7 +1651,7 @@ function RPSDoodleAppInner(){
         setLive("Welcome intro replay disabled.");
       }
     },
-    [setLive, setToastMessage, setWelcomeSeen],
+    [setLive, setToastMessage, setWelcomePreference],
   );
 
   const handleOpenSettings = useCallback(() => {
@@ -1554,6 +1682,7 @@ function RPSDoodleAppInner(){
           announce: "Rebooting. Boot sequence starting for the welcome intro.",
           resetPlayer: true,
           bootFirst: true,
+          origin: "launch",
         });
       },
     });
@@ -1565,9 +1694,11 @@ function RPSDoodleAppInner(){
       handleCloseSettings();
     }
     if (!currentPlayer) {
+      setPlayerModalOrigin("settings");
       setPlayerModalMode("create");
       return;
     }
+    setPlayerModalOrigin("settings");
     setCreateProfileDialogAcknowledged(false);
     setCreateProfileDialogOpen(true);
   }, [currentPlayer, handleCloseSettings, setPlayerModalMode, settingsOpen]);
@@ -2299,50 +2430,61 @@ function RPSDoodleAppInner(){
         )}
       </AnimatePresence>
 
-      {toastMessage && (
-        <div className="fixed top-20 right-4 z-[95] flex flex-col items-end gap-2">
+      {toastMessage && toastConfirm ? (
+        <div className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/50 px-4">
           <div
-            role="status"
-            aria-live="polite"
-            className="rounded-lg bg-slate-900/90 px-4 py-3 text-sm text-white shadow-lg"
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-sm rounded-2xl bg-white p-6 text-slate-800 shadow-2xl"
           >
-            <div className="space-y-3">
-              <div>{toastMessage}</div>
-              {toastConfirm && (
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    className="rounded-full border border-white/30 px-3 py-1 text-xs font-semibold text-white/90 transition hover:bg-white/10"
-                    onClick={() => {
-                      setToastConfirm(null);
-                      setToastMessage(null);
-                    }}
-                  >
-                    {toastConfirm.cancelLabel ?? "Cancel"}
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-900 transition hover:bg-slate-100"
-                    onClick={() => {
-                      toastConfirm.onConfirm();
-                    }}
-                  >
-                    {toastConfirm.confirmLabel}
-                  </button>
-                </div>
-              )}
+            <div className="space-y-4">
+              <div className="text-base font-semibold text-slate-900">Confirm action</div>
+              <p className="text-sm text-slate-600">{toastMessage}</p>
+              <div className="flex justify-end gap-3">
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-200 px-4 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-100"
+                  onClick={() => {
+                    setToastConfirm(null);
+                    setToastMessage(null);
+                  }}
+                >
+                  {toastConfirm.cancelLabel ?? "Cancel"}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full bg-sky-600 px-4 py-1.5 text-sm font-semibold text-white shadow hover:bg-sky-700"
+                  onClick={() => {
+                    toastConfirm.onConfirm();
+                  }}
+                >
+                  {toastConfirm.confirmLabel}
+                </button>
+              </div>
             </div>
           </div>
-          <button
-            type="button"
-            className="rounded-lg bg-white/80 px-3 py-1 text-xs font-semibold text-slate-800 shadow hover:bg-white"
-            onClick={() => setToastReaderOpen(true)}
-            aria-haspopup="dialog"
-            aria-expanded={toastReaderOpen}
-          >
-            Open toast reader
-          </button>
         </div>
+      ) : (
+        toastMessage && (
+          <div className="fixed top-20 right-4 z-[95] flex flex-col items-end gap-2">
+            <div
+              role="status"
+              aria-live="polite"
+              className="rounded-lg bg-slate-900/90 px-4 py-3 text-sm text-white shadow-lg"
+            >
+              <div>{toastMessage}</div>
+            </div>
+            <button
+              type="button"
+              className="rounded-lg bg-white/80 px-3 py-1 text-xs font-semibold text-slate-800 shadow hover:bg-white"
+              onClick={() => setToastReaderOpen(true)}
+              aria-haspopup="dialog"
+              aria-expanded={toastReaderOpen}
+            >
+              Open toast reader
+            </button>
+          </div>
+        )
       )}
 
       {helpToast && (
@@ -2625,7 +2767,6 @@ function RPSDoodleAppInner(){
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            onClick={handleRestoreCancel}
           >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
@@ -2685,10 +2826,10 @@ function RPSDoodleAppInner(){
                 <div className="flex justify-end gap-2">
                   <button
                     type="button"
-                    onClick={handleRestoreCancel}
+                    onClick={handleRestoreBack}
                     className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
                   >
-                    Cancel
+                    Back
                   </button>
                   <button
                     type="button"
@@ -2706,9 +2847,10 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
 
       {/* Header / Settings */}
-      <div className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between">
-        <motion.h1 layout className="text-2xl font-extrabold tracking-tight text-sky-700 drop-shadow-sm">RPS Lab</motion.h1>
-        <div className="flex items-center gap-2">
+      {showMainUi && (
+        <div className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between">
+          <motion.h1 layout className="text-2xl font-extrabold tracking-tight text-sky-700 drop-shadow-sm">RPS Lab</motion.h1>
+          <div className="flex items-center gap-2">
           {trainingActive && <span className="px-2 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-700">Training</span>}
           {showTrainingCompleteBadge && (
             <span className="px-2 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-700">Training complete</span>
@@ -2735,6 +2877,7 @@ function RPSDoodleAppInner(){
             <button
               onClick={() => {
                 if (!hasConsented) {
+                  setPlayerModalOrigin("welcome");
                   setPlayerModalMode(currentPlayer ? "edit" : "create");
                   return;
                 }
@@ -2754,13 +2897,14 @@ function RPSDoodleAppInner(){
               aria-haspopup="dialog"
               aria-expanded={settingsOpen}
             >
-              Settings ⚙️
-            </button>
+            Settings ⚙️
+          </button>
+          </div>
         </div>
-      </div>
+      )}
 
       <AnimatePresence>
-        {settingsOpen && (
+        {showMainUi && settingsOpen && (
           <motion.div
             className="fixed inset-0 z-[85] bg-slate-900/40 backdrop-blur-sm"
             initial={{ opacity: 0 }}
@@ -2811,6 +2955,7 @@ function RPSDoodleAppInner(){
                           onClick={() => {
                             if (!currentPlayer) return;
                             handleCloseSettings();
+                            setPlayerModalOrigin("settings");
                             setPlayerModalMode("edit");
                           }}
                           disabled={!currentPlayer}
@@ -2821,6 +2966,7 @@ function RPSDoodleAppInner(){
                           className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
                           onClick={() => {
                             handleCloseSettings();
+                            setPlayerModalOrigin("settings");
                             setPlayerModalMode("create");
                           }}
                         >
@@ -3032,7 +3178,7 @@ function RPSDoodleAppInner(){
                         <div className="text-sm font-semibold text-slate-800">Show welcome again</div>
                         <p className="text-xs text-slate-500">Replay the intro on the next launch.</p>
                       </div>
-                      <OnOffToggle value={!welcomeSeen} onChange={value => handleWelcomeReplayToggle(value)} />
+                      <OnOffToggle value={welcomePreference === "show"} onChange={handleWelcomeReplayToggle} />
                     </div>
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -3142,14 +3288,14 @@ function RPSDoodleAppInner(){
                       <button
                         type="button"
                         className="rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-700"
-                        onClick={() => completeWelcome("setup")}
+                        onClick={() => handleWelcomeAction("setup")}
                       >
                         Get started
                       </button>
                       <button
                         type="button"
                         className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        onClick={() => completeWelcome("restore")}
+                        onClick={() => handleWelcomeAction("restore")}
                         disabled={!hasLocalProfiles}
                       >
                         Already played? Load my data
@@ -3159,15 +3305,6 @@ function RPSDoodleAppInner(){
                   {!hasLocalProfiles && (
                     <p className="text-xs text-slate-500">No saved profiles detected on this device.</p>
                   )}
-                  <div className="flex justify-end">
-                    <button
-                      type="button"
-                      onClick={() => completeWelcome("dismiss")}
-                      className="text-sm font-semibold text-slate-500 transition hover:text-slate-700"
-                    >
-                      Dismiss
-                    </button>
-                  </div>
                 </div>
               ) : (
                 <div className="flex items-center justify-between gap-3">
@@ -3796,13 +3933,17 @@ function RPSDoodleAppInner(){
             exit={{ opacity: 0 }}
             onKeyDown={(e:any)=>{ if (e.key==='Escape' && hasConsented) setPlayerModalMode("hidden"); }}
           >
-            <motion.div role="dialog" aria-modal="true" aria-label="Player Setup" className="bg-white rounded-2xl shadow-xl w-[min(94vw,520px)]" initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 6, opacity: 0 }}>
+          <motion.div role="dialog" aria-modal="true" aria-label="Player Setup" className="bg-white rounded-2xl shadow-xl w-[min(94vw,520px)]" initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 6, opacity: 0 }}>
               <PlayerSetupForm
                 mode={resolvedModalMode}
                 player={modalPlayer}
-                onClose={()=> { if (hasConsented) setPlayerModalMode("hidden"); }}
+                onClose={handlePlayerModalClose}
                 onSaved={(result) => {
                   setPlayerModalMode("hidden");
+                  setPlayerModalOrigin(null);
+                  if (playerModalOrigin === "welcome") {
+                    finishWelcomeFlow("setup");
+                  }
                   if (result.action === "create") {
                     setToastMessage("New player starts a fresh training session (10 rounds).");
                     setLive("New player created. Training required before challenge modes unlock.");
@@ -3812,6 +3953,8 @@ function RPSDoodleAppInner(){
                 }}
                 createPlayer={createPlayer}
                 updatePlayer={updatePlayer}
+                origin={playerModalOrigin}
+                onBack={playerModalOrigin === "welcome" ? handlePlayerModalClose : undefined}
               />
             </motion.div>
           </motion.div>
@@ -3819,7 +3962,7 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
 
       {/* Footer robot idle (personality beat) */}
-      {!settingsOpen && (
+      {showMainUi && !settingsOpen && (
         <div className="pointer-events-none fixed bottom-3 right-3 z-[90] flex flex-col items-end gap-3">
           <AnimatePresence>
             {robotBubbleContent && (
@@ -3951,11 +4094,13 @@ interface PlayerSetupFormProps {
   onSaved: (result: { action: "create" | "update"; player: PlayerProfile }) => void;
   createPlayer: (input: Omit<PlayerProfile, "id">) => PlayerProfile;
   updatePlayer: (id: string, patch: Partial<Omit<PlayerProfile, "id">>) => void;
+  origin?: "welcome" | "settings" | null;
+  onBack?: () => void;
 }
 
 const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => 5 + index);
 
-function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updatePlayer }: PlayerSetupFormProps){
+function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updatePlayer, origin, onBack }: PlayerSetupFormProps){
   const [playerName, setPlayerName] = useState(player?.playerName ?? "");
   const [grade, setGrade] = useState<Grade | "">(player?.grade ?? "");
   const [age, setAge] = useState<string>(player?.age != null ? String(player.age) : "");
@@ -3978,6 +4123,14 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
   const title = mode === "edit" ? "Edit player demographics" : "Create new player";
   const showReviewNotice = mode === "edit" && player?.needsReview;
   const genderOptions = GENDER_OPTIONS;
+  const showBackButton = origin === "welcome" && mode === "create";
+  const handleBackClick = () => {
+    if (onBack) {
+      onBack();
+    } else {
+      onClose();
+    }
+  };
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -4015,7 +4168,13 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
     <form onSubmit={handleSubmit} className="p-5 space-y-4" aria-label="Player setup form">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
-        <button type="button" onClick={onClose} className="text-sm text-slate-500 hover:text-slate-700">Close</button>
+        <button
+          type="button"
+          onClick={showBackButton ? handleBackClick : onClose}
+          className="text-sm text-slate-500 hover:text-slate-700"
+        >
+          {showBackButton ? "Back" : "Close"}
+        </button>
       </div>
       <div className="grid gap-3">
         {showReviewNotice && (
@@ -4111,10 +4270,41 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
         </span>
       </label>
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={onClose} className="px-3 py-1.5 rounded bg-slate-100 text-slate-700 hover:bg-slate-200">Cancel</button>
-        <button type="submit" disabled={saveDisabled} className={`px-3 py-1.5 rounded text-white ${saveDisabled ? 'bg-slate-300 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-700 shadow'}`}>
-          Save profile
-        </button>
+        {showBackButton ? (
+          <>
+            <button
+              type="button"
+              onClick={handleBackClick}
+              className="px-3 py-1.5 rounded bg-slate-100 text-slate-700 hover:bg-slate-200"
+            >
+              Back
+            </button>
+            <button
+              type="submit"
+              disabled={saveDisabled}
+              className={`px-3 py-1.5 rounded text-white ${saveDisabled ? 'bg-slate-300 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-700 shadow'}`}
+            >
+              Save profile
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3 py-1.5 rounded bg-slate-100 text-slate-700 hover:bg-slate-200"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saveDisabled}
+              className={`px-3 py-1.5 rounded text-white ${saveDisabled ? 'bg-slate-300 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-700 shadow'}`}
+            >
+              Save profile
+            </button>
+          </>
+        )}
       </div>
     </form>
   );
