@@ -6,6 +6,13 @@ import { useStats } from "./stats";
 import type { MatchSummary, RoundLog, StatsProfile } from "./stats";
 import type { AIMode, Mode } from "./gameTypes";
 import { MatchTimings, MATCH_TIMING_DEFAULTS, normalizeMatchTimings } from "./matchTimings";
+import { useDevInstrumentationSnapshot } from "./devInstrumentation";
+import {
+  instrumentationSnapshots,
+  makeScope as makeInstrumentationScope,
+  useAutoCapture,
+} from "./instrumentationSnapshots";
+import InstrumentationTab from "./InstrumentationTab";
 import {
   appendAuditEntry,
   AuditEntry,
@@ -32,7 +39,7 @@ interface DeveloperConsoleProps {
   onTimingsReset: () => void;
 }
 
-const TAB_OPTIONS = ["overview", "data", "timers", "audit"] as const;
+const TAB_OPTIONS = ["overview", "data", "instrumentation", "timers", "audit"] as const;
 type TabKey = typeof TAB_OPTIONS[number];
 type TimingField = keyof MatchTimings["challenge"];
 
@@ -131,6 +138,12 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     difficulty: "",
     dateRange: { start: null, end: null },
   }));
+  const [instrumentationSource, setInstrumentationSource] = useState<"selected" | "active">("selected");
+  const [instrumentationView, setInstrumentationView] = useState<"live" | "history">("live");
+  const [liveStatus, setLiveStatus] = useState<{ running: boolean; label: string | null }>({
+    running: false,
+    label: null,
+  });
   const [matchSearch, setMatchSearch] = useState<MatchSearchFilters>({ player: "", profile: "", mode: "" });
   const [roundSearch, setRoundSearch] = useState<RoundSearchFilters>({ player: "", mode: "" });
   const [focusedMatchId, setFocusedMatchId] = useState<string | null>(null);
@@ -153,7 +166,6 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
   const [timingConfirmAction, setTimingConfirmAction] = useState<"save" | "revert" | "restore" | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const hashInitialized = useRef(false);
-
   const timerFields = useMemo(
     () => [
       { key: "countdownTickMs" as TimingField, label: "Countdown tick (ms)", helper: "Delay between countdown numbers." },
@@ -352,6 +364,30 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     ? playerSummaries.find(summary => summary.player.id === selectedPlayer.id) ?? null
     : null;
   const selectedProfileSummary = selectedProfile ? profileSummaryMap.get(selectedProfile.id) ?? null : null;
+  const instrumentationSnapshot = useDevInstrumentationSnapshot();
+  const instrumentationScope = useMemo(
+    () =>
+      filters.playerId
+        ? makeInstrumentationScope(
+            filters.playerId,
+            filters.profileId ?? null,
+            selectedPlayer?.playerName ?? null,
+            selectedProfile?.name ?? null,
+          )
+        : null,
+    [filters.playerId, filters.profileId, selectedPlayer?.playerName, selectedProfile?.name],
+  );
+  const autoCaptureEnabled = useAutoCapture(instrumentationScope);
+  const handleLiveStatusChange = useCallback((status: { running: boolean; label: string | null }) => {
+    setLiveStatus(status);
+  }, []);
+  const handleToggleAutoCapture = useCallback(
+    (next: boolean) => {
+      if (!instrumentationScope) return;
+      instrumentationSnapshots.setAutoCaptureEnabled(instrumentationScope, next);
+    },
+    [instrumentationScope],
+  );
   const jumpProfileOptions = useMemo(() => {
     if (!jumpSelection.playerId) return [] as StatsProfile[];
     return adminProfiles.filter(profile => profile.playerId === jumpSelection.playerId);
@@ -1357,6 +1393,32 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
                   </button>
                 ))}
               </nav>
+              {liveStatus.running && liveStatus.label && (
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTab("instrumentation");
+                      setInstrumentationView("live");
+                    }}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      background: "rgba(34,197,94,0.18)",
+                      border: "1px solid rgba(34,197,94,0.45)",
+                      color: "#bbf7d0",
+                      borderRadius: "999px",
+                      padding: "6px 12px",
+                      fontSize: "0.75rem",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <span style={{ display: "inline-block", width: "8px", height: "8px", borderRadius: "999px", background: "#22c55e" }} />
+                    Live: {liveStatus.label}
+                  </button>
+                </div>
+              )}
               <ContextHeader
                 player={selectedPlayer}
                 profile={selectedProfile}
@@ -1484,6 +1546,25 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
                     )}
                   </div>
                 </div>
+              )}
+
+              {tab === "instrumentation" && (
+                <InstrumentationTab
+                  snapshot={instrumentationSnapshot}
+                  scope={instrumentationScope}
+                  modeFilter={filters.mode}
+                  difficultyFilter={filters.difficulty}
+                  dateRange={filters.dateRange}
+                  playerName={selectedPlayer?.playerName ?? null}
+                  profileName={selectedProfile?.name ?? null}
+                  source={instrumentationSource}
+                  onSourceChange={setInstrumentationSource}
+                  autoCaptureEnabled={autoCaptureEnabled}
+                  onToggleAutoCapture={handleToggleAutoCapture}
+                  activeView={instrumentationView}
+                  onViewChange={setInstrumentationView}
+                  onLiveStatusChange={handleLiveStatusChange}
+                />
               )}
 
               {tab === "timers" && (

@@ -208,6 +208,7 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
             <button
               onClick={onClose}
               className="rounded-full bg-white/10 px-3 py-1 text-sm font-medium text-white hover:bg-white/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              data-dev-label="lb.close"
               data-focus-first
             >
               Close ✕
