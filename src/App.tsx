@@ -471,6 +471,7 @@ function ModeCard({ mode, onSelect, isDimmed, disabled = false }: { mode: Mode, 
   const label = mode.charAt(0).toUpperCase()+mode.slice(1);
   return (
     <motion.button className={`mode-card ${mode} ${isDimmed ? "dim" : ""} ${disabled ? "opacity-60 cursor-not-allowed" : ""} bg-white/80 rounded-2xl shadow relative overflow-hidden px-5 py-6 text-left`}
+      data-dev-label={`mode.${mode}.card`}
       layoutId={`card-${mode}`} onClick={() => { if (!disabled) onSelect(mode); }} disabled={disabled} whileTap={{ scale: disabled ? 1 : 0.98 }} whileHover={{ y: disabled ? 0 : -4 }} aria-label={`${label} mode`}>
       <div className="text-lg font-bold text-slate-800">{label}</div>
       <div className="text-sm text-slate-600 mt-1">
@@ -482,7 +483,7 @@ function ModeCard({ mode, onSelect, isDimmed, disabled = false }: { mode: Mode, 
   );
 }
 
-function OnOffToggle({ value, onChange, disabled = false }: { value: boolean; onChange: (next: boolean) => void; disabled?: boolean }) {
+function OnOffToggle({ value, onChange, disabled = false, onLabel, offLabel }: { value: boolean; onChange: (next: boolean) => void; disabled?: boolean; onLabel?: string; offLabel?: string }) {
   const baseButton = "px-3 py-1 text-xs font-semibold transition-colors";
   return (
     <div className="inline-flex items-center overflow-hidden rounded-full border border-slate-300 bg-white shadow-sm">
@@ -492,6 +493,7 @@ function OnOffToggle({ value, onChange, disabled = false }: { value: boolean; on
         aria-pressed={value}
         onClick={() => !disabled && onChange(true)}
         disabled={disabled}
+        data-dev-label={onLabel}
       >
         On
       </button>
@@ -501,6 +503,7 @@ function OnOffToggle({ value, onChange, disabled = false }: { value: boolean; on
         aria-pressed={!value}
         onClick={() => !disabled && onChange(false)}
         disabled={disabled}
+        data-dev-label={offLabel}
       >
         Off
       </button>
@@ -2935,23 +2938,50 @@ function RPSDoodleAppInner(){
         <div className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between">
           <motion.h1 layout className="text-2xl font-extrabold tracking-tight text-sky-700 drop-shadow-sm">RPS Lab</motion.h1>
           <div className="flex items-center gap-2">
-          {trainingActive && <span className="px-2 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-700">Training</span>}
-          {showTrainingCompleteBadge && (
-            <span className="px-2 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-700">Training complete</span>
-          )}
-          {liveAiConfidence !== null && <span className="px-2 py-1 text-xs font-semibold rounded-full bg-sky-100 text-sky-700">AI conf: {Math.round((liveAiConfidence ?? 0) * 100)}%</span>}
-            <button onClick={() => setStatsOpen(true)} className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900">Statistics</button>
+            {trainingActive && (
+              <span
+                className="px-2 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-700"
+                data-dev-label="hdr.trainingBadge"
+              >
+                Training
+              </span>
+            )}
+            {showTrainingCompleteBadge && (
+              <span
+                className="px-2 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-700"
+                data-dev-label="hdr.trainingBadge"
+              >
+                Training complete
+              </span>
+            )}
+            {liveAiConfidence !== null && (
+              <span
+                className="px-2 py-1 text-xs font-semibold rounded-full bg-sky-100 text-sky-700"
+                data-dev-label="hdr.aiConfBadge"
+              >
+                AI conf: {Math.round((liveAiConfidence ?? 0) * 100)}%
+              </span>
+            )}
+            <button
+              onClick={() => setStatsOpen(true)}
+              className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900"
+              data-dev-label="hdr.stats"
+            >
+              Statistics
+            </button>
             <button
               onClick={() => setLeaderboardOpen(true)}
               className={"px-3 py-1.5 rounded-xl shadow text-sm " + (hasConsented ? "bg-white/70 hover:bg-white text-sky-900" : "bg-white/50 text-slate-400 cursor-not-allowed")}
               disabled={!hasConsented}
               title={!hasConsented ? "Check consent to continue." : undefined}
+              data-dev-label="hdr.leaderboard"
             >
               Leaderboard
             </button>
             <div
               className={"px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 text-slate-700 flex items-center gap-2 " + (demographicsNeedReview ? "ring-2 ring-amber-400" : "")}
               aria-live="polite"
+              data-dev-label="hdr.player"
             >
               <span>{playerLabel}</span>
               {demographicsNeedReview && (
@@ -2970,6 +3000,7 @@ function RPSDoodleAppInner(){
               title={!hasConsented ? "Check consent to continue." : undefined}
               disabled={modesDisabled || !hasConsented}
               className={"px-3 py-1.5 rounded-xl shadow text-sm " + ((modesDisabled || !hasConsented) ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900")}
+              data-dev-label="hdr.modes"
             >
               Modes
             </button>
@@ -2980,6 +3011,7 @@ function RPSDoodleAppInner(){
               className={`px-3 py-1.5 rounded-xl shadow text-sm transition ${settingsOpen ? "bg-sky-600 text-white" : "bg-white/70 hover:bg-white text-sky-900"}`}
               aria-haspopup="dialog"
               aria-expanded={settingsOpen}
+              data-dev-label="hdr.settings"
             >
             Settings ⚙️
           </button>
@@ -3043,6 +3075,7 @@ function RPSDoodleAppInner(){
                             setPlayerModalMode("edit");
                           }}
                           disabled={!currentPlayer}
+                          data-dev-label="set.editDemographics"
                         >
                           Edit demographics
                         </button>
@@ -3053,6 +3086,7 @@ function RPSDoodleAppInner(){
                             setPlayerModalOrigin("settings");
                             setPlayerModalMode("create");
                           }}
+                          data-dev-label="set.createPlayer"
                         >
                           Create new player
                         </button>
@@ -3075,6 +3109,7 @@ function RPSDoodleAppInner(){
                           onChange={e => handleSelectProfile(e.target.value)}
                           className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-inner"
                           disabled={!statsProfiles.length}
+                          data-dev-label="set.profile.select"
                         >
                           {statsProfiles.length === 0 ? (
                             <option value="">No profiles yet</option>
@@ -3094,6 +3129,7 @@ function RPSDoodleAppInner(){
                           type="button"
                           className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-sky-700"
                           onClick={handleCreateProfile}
+                          data-dev-label="set.profile.createNew"
                         >
                           Create new
                         </button>
@@ -3110,6 +3146,7 @@ function RPSDoodleAppInner(){
                           onClick={event => handleOpenExportDialog("settings", event.currentTarget)}
                           disabled={!canExportData}
                           className="inline-flex items-center gap-1 rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                          data-dev-label="set.exportCSV"
                         >
                           Export (CSV)
                         </button>
@@ -3136,6 +3173,7 @@ function RPSDoodleAppInner(){
                         className="inline-flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 shadow-sm hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
                         title="Training history is preserved."
                         disabled={!currentProfile}
+                        data-dev-label="set.resetTraining"
                       >
                         Reset AI training
                       </button>
@@ -3155,6 +3193,8 @@ function RPSDoodleAppInner(){
                           value={predictorMode}
                           onChange={handlePredictorToggle}
                           disabled={!isTrained}
+                          onLabel="set.aiPredictor.on"
+                          offLabel="set.aiPredictor.off"
                         />
                       </div>
                       {!isTrained && (
@@ -3183,6 +3223,7 @@ function RPSDoodleAppInner(){
                               type="button"
                               role="radio"
                               aria-checked={isActive}
+                              data-dev-label={`set.difficulty.${level}`}
                               onFocus={() => setDifficultyHint(info.helper)}
                               onMouseEnter={() => setDifficultyHint(info.helper)}
                               onBlur={() => setDifficultyHint(difficultyDisabled ? "Enable the predictor to adjust difficulty." : DIFFICULTY_INFO[aiMode].helper)}
@@ -3218,6 +3259,7 @@ function RPSDoodleAppInner(){
                               type="button"
                               role="radio"
                               aria-checked={isActive}
+                              data-dev-label={`set.bestOf.${option}`}
                               onClick={() => setBestOf(option)}
                               className={`px-3 py-1 text-xs font-semibold transition-colors ${
                                 isActive ? "bg-sky-600 text-white" : "text-slate-600 hover:bg-slate-100"
@@ -3238,7 +3280,12 @@ function RPSDoodleAppInner(){
                       <div>
                         <span className="font-medium text-slate-800">Audio</span>
                       </div>
-                      <OnOffToggle value={audioOn} onChange={next => setAudioOn(next)} />
+                      <OnOffToggle
+                        value={audioOn}
+                        onChange={next => setAudioOn(next)}
+                        onLabel="set.audio.on"
+                        offLabel="set.audio.off"
+                      />
                     </div>
                     <div className="space-y-2">
                       <span className="font-medium text-slate-800">Text size</span>
@@ -3250,6 +3297,7 @@ function RPSDoodleAppInner(){
                         value={textScale}
                         onChange={e => setTextScale(parseFloat(e.target.value))}
                         className="w-full accent-sky-600"
+                        data-dev-label="set.textSize.slider"
                       />
                       <div className="flex justify-between text-[10px] uppercase tracking-wide text-slate-400">
                         <span>Smaller</span>
@@ -3262,7 +3310,12 @@ function RPSDoodleAppInner(){
                         <div className="text-sm font-semibold text-slate-800">Show welcome again</div>
                         <p className="text-xs text-slate-500">Replay the intro on the next launch.</p>
                       </div>
-                      <OnOffToggle value={welcomePreference === "show"} onChange={handleWelcomeReplayToggle} />
+                      <OnOffToggle
+                        value={welcomePreference === "show"}
+                        onChange={handleWelcomeReplayToggle}
+                        onLabel="set.welcomeAgain.on"
+                        offLabel="set.welcomeAgain.off"
+                      />
                     </div>
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -3273,6 +3326,7 @@ function RPSDoodleAppInner(){
                         type="button"
                         onClick={handleReboot}
                         className="rounded-full bg-slate-900/90 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-slate-900"
+                        data-dev-label="set.reboot"
                       >
                         Reboot
                       </button>
@@ -3619,6 +3673,7 @@ function RPSDoodleAppInner(){
                 return (
                   <button key={m} onClick={()=> onSelect(m)} disabled={phase!=="idle"}
                     className={["group relative px-4 py-4 bg-white rounded-2xl shadow hover:shadow-md transition active:scale-95", phase!=="idle"?"opacity-60 cursor-default":"", selected?"ring-4 ring-sky-300":""].join(" ")}
+                    data-dev-label={`hand.${m}`}
                     aria-pressed={selected} aria-label={`Choose ${m}`}>
                     <div className="text-4xl">{moveEmoji[m]}</div>
                     <div className="mt-1 text-sm text-slate-600 capitalize">{m}</div>
@@ -3720,7 +3775,7 @@ function RPSDoodleAppInner(){
             <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} transition={{ duration: 0.2 }} className="bg-white rounded-2xl shadow-2xl w-[min(95vw,900px)] max-h-[85vh] overflow-hidden" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" ref={statsModalRef}>
               <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
                 <h2 className="text-lg font-semibold text-slate-800">Statistics</h2>
-                <button onClick={() => setStatsOpen(false)} className="text-slate-500 hover:text-slate-700 text-sm">Close ✕</button>
+                <button onClick={() => setStatsOpen(false)} className="text-slate-500 hover:text-slate-700 text-sm" data-dev-label="stats.close">Close ✕</button>
               </div>
               <div className="px-4 pt-3 pb-2 space-y-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -3735,13 +3790,13 @@ function RPSDoodleAppInner(){
                   <div className="flex items-center gap-2">
                     <label className="text-sm text-slate-600 flex items-center gap-2">
                       <span>Profile</span>
-                      <select value={currentProfile?.id ?? ''} onChange={e => handleSelectProfile(e.target.value)} className="border rounded px-2 py-1" disabled={!statsProfiles.length}>
+                      <select value={currentProfile?.id ?? ''} onChange={e => handleSelectProfile(e.target.value)} className="border rounded px-2 py-1" disabled={!statsProfiles.length} data-dev-label="stats.profile.select">
                         {statsProfiles.map(profile => (
                           <option key={profile.id} value={profile.id}>{profile.name}</option>
                         ))}
                       </select>
                     </label>
-                    <button onClick={handleCreateProfile} className="px-2 py-1 rounded bg-sky-100 text-sky-700">New profile</button>
+                    <button onClick={handleCreateProfile} className="px-2 py-1 rounded bg-sky-100 text-sky-700" data-dev-label="stats.profile.new">New profile</button>
                   </div>
                 </div>
                 <p className="text-xs text-slate-500">Profiles keep logs, training, and exports separate. Switch profiles to return to previous stats instantly.</p>
@@ -3752,6 +3807,7 @@ function RPSDoodleAppInner(){
                     key={tab.key}
                     role="tab"
                     aria-selected={statsTab === tab.key}
+                    data-dev-label={`stats.tab.${tab.key}`}
                     data-focus-first={tab.key === statsTabs[0].key ? true : undefined}
                     onClick={() => setStatsTab(tab.key)}
                     className={"px-3 py-1.5 rounded-full text-sm " + (statsTab === tab.key ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200")}
@@ -3993,6 +4049,7 @@ function RPSDoodleAppInner(){
                   onClick={event => handleOpenExportDialog("stats", event.currentTarget)}
                   disabled={!canExportData}
                   className="px-3 py-1.5 rounded bg-sky-100 text-sky-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  data-dev-label="stats.exportCSV"
                 >
                   Export (CSV)
                 </button>
@@ -4074,6 +4131,7 @@ function RPSDoodleAppInner(){
                         key={button.label}
                         type="button"
                         className="rounded-full bg-sky-600 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-sky-700"
+                        data-dev-label="robot.bubble.link"
                         onClick={button.onClick}
                       >
                         {button.label}
@@ -4089,6 +4147,7 @@ function RPSDoodleAppInner(){
             type="button"
             ref={robotButtonRef}
             className="pointer-events-auto relative flex h-14 w-14 items-center justify-center rounded-full bg-white/80 shadow-lg ring-1 ring-slate-200 backdrop-blur transition hover:bg-white"
+            data-dev-label="robot.icon.click"
             onClick={() => {
               setHelpGuideOpen(prev => {
                 const next = !prev;

@@ -63,6 +63,9 @@ const CORE_ELEMENT_ALLOWLIST = new Set([
   "dev.inst.heatmap.toggle",
   "dev.inst.liveTab",
   "dev.inst.historyTab",
+  "dev.inst.autoCapture.on",
+  "dev.inst.autoCapture.off",
+  "dev.inst.history.record",
 ]);
 
 interface InstrumentationTabProps {
@@ -1050,6 +1053,7 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
                 type="button"
                 onClick={() => onViewChange("live")}
                 style={tabButtonStyle(activeView === "live")}
+                data-dev-label="dev.inst.liveTab"
               >
                 Live
               </button>
@@ -1057,6 +1061,7 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
                 type="button"
                 onClick={() => onViewChange("history")}
                 style={tabButtonStyle(activeView === "history")}
+                data-dev-label="dev.inst.historyTab"
               >
                 History
               </button>
@@ -1096,7 +1101,7 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
               </div>
             </div>
             <div style={controlRowStyle}>
-              <button type="button" onClick={handleCapture} style={primaryButtonStyle}>
+              <button type="button" onClick={handleCapture} style={primaryButtonStyle} data-dev-label="dev.inst.captureSnapshot">
                 Capture snapshot
               </button>
               <button
@@ -1104,6 +1109,7 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
                 onClick={handleAutoCaptureClick}
                 disabled={autoCaptureDisabled}
                 style={autoCaptureButtonStyle(autoCaptureEnabled, autoCaptureDisabled)}
+                data-dev-label={autoCaptureEnabled ? "dev.inst.autoCapture.on" : "dev.inst.autoCapture.off"}
               >
                 Auto-capture: {autoCaptureEnabled ? "On" : "Off"}
               </button>
@@ -1227,6 +1233,7 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
                           <tr
                             key={record.id}
                             onClick={() => handleRowClick(record)}
+                            data-dev-label="dev.inst.history.record"
                             style={{
                               cursor: "pointer",
                               background: isSelected ? "rgba(59,130,246,0.2)" : record.pinned ? "rgba(253,224,71,0.08)" : "transparent",
