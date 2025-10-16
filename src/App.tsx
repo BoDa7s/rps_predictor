@@ -5,7 +5,6 @@ import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, Decision
 import { PlayersProvider, usePlayers, Grade, Gender, PlayerProfile, CONSENT_TEXT_VERSION, GRADE_OPTIONS, GENDER_OPTIONS } from "./players";
 import { DEV_MODE_ENABLED } from "./devMode";
 import { DeveloperConsole } from "./DeveloperConsole";
-import DevInstrumentationPanel from "./DevInstrumentationPanel";
 import { devInstrumentation } from "./devInstrumentation";
 import { lockSecureStore } from "./secureStore";
 import {
@@ -618,6 +617,16 @@ function RPSDoodleAppInner(){
   const exportDialogRef = useRef<HTMLDivElement | null>(null);
   const exportDialogCheckboxRef = useRef<HTMLInputElement | null>(null);
   const exportDialogReturnFocusRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!DEV_MODE_ENABLED) return;
+    devInstrumentation.setScope({
+      playerId: currentPlayer?.id ?? null,
+      playerName: currentPlayer?.playerName ?? null,
+      profileId: currentProfile?.id ?? null,
+      profileName: currentProfile?.name ?? null,
+    });
+  }, [currentPlayer?.id, currentPlayer?.playerName, currentProfile?.id, currentProfile?.name]);
   useEffect(() => {
     if (!toastMessage) return;
     if (toastReaderOpen) return;
@@ -1327,8 +1336,10 @@ function RPSDoodleAppInner(){
       difficulty: aiMode,
       bestOf,
       readyAt,
+      playerId: currentPlayer?.id ?? null,
+      profileId: currentProfile?.id ?? null,
     });
-  }, [scene, phase, round, selectedMode, aiMode, bestOf]);
+  }, [scene, phase, round, selectedMode, aiMode, bestOf, currentPlayer?.id, currentProfile?.id]);
 
   useEffect(() => {
     const parts: string[] = [scene];
@@ -2050,6 +2061,10 @@ function RPSDoodleAppInner(){
       difficulty: aiMode,
       bestOf,
       startedAt,
+      playerId: currentPlayer?.id ?? null,
+      profileId: currentProfile?.id ?? null,
+      playerName: currentPlayer?.playerName ?? null,
+      profileName: currentProfile?.name ?? null,
     });
     if (mode) setSelectedMode(mode);
     setScene("MATCH");
@@ -2253,6 +2268,8 @@ function RPSDoodleAppInner(){
         devInstrumentation.matchEnded({
           matchId: currentMatchIdRef.current,
           endedAt: typeof performance !== "undefined" ? performance.now() : Date.now(),
+          playerId: currentPlayer?.id ?? null,
+          profileId: currentProfile?.id ?? null,
         });
         currentMatchRoundsRef.current = [];
         matchStartRef.current = new Date().toISOString();
@@ -4148,7 +4165,6 @@ function RPSDoodleAppInner(){
             onTimingsUpdate={updateMatchTimings}
             onTimingsReset={resetMatchTimings}
           />
-          <DevInstrumentationPanel />
         </>
       )}
     </div>

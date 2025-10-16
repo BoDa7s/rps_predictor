@@ -2,12 +2,23 @@ import { useEffect, useState } from "react";
 
 import { DEV_MODE_ENABLED } from "./devMode";
 import type { AIMode, Mode, Outcome, BestOf } from "./gameTypes";
+import { instrumentationSnapshots } from "./instrumentationSnapshots";
+import type { SnapshotTrigger } from "./instrumentationSnapshots";
 
 const IDLE_THRESHOLD_MS = 45_000;
 const BURST_WINDOW_MS = 10_000;
 const MAX_ROUND_HISTORY = 200;
 const MAX_CLICK_HISTORY = 400;
 const MAX_INTERVAL_HISTORY = 200;
+const AUTO_SNAPSHOT_ROUND_INTERVAL = 5;
+const AUTO_SNAPSHOT_INTERVAL_MS = 3 * 60_000;
+
+export type InstrumentationScope = {
+  playerId: string | null;
+  profileId: string | null;
+  playerName: string | null;
+  profileName: string | null;
+};
 
 type FocusEventEntry = { type: "focus" | "blur"; at: number };
 
@@ -17,6 +28,8 @@ type RoundMetrics = {
   mode: Mode;
   difficulty: AIMode;
   bestOf: BestOf;
+  playerId: string | null;
+  profileId: string | null;
   readyAt: number;
   firstInteractionAt?: number;
   moveSelectedAt?: number;
@@ -36,6 +49,10 @@ type MatchMetrics = {
   mode: Mode;
   difficulty: AIMode;
   bestOf: BestOf;
+  playerId: string | null;
+  profileId: string | null;
+  playerName: string | null;
+  profileName: string | null;
   startedAt: number;
   endedAt?: number;
   responseSpeed: number[];
@@ -53,11 +70,17 @@ type ClickRecord = {
   view: string;
   matchId?: string;
   roundNumber?: number;
+  mode?: Mode;
+  difficulty?: AIMode;
   target: string;
   elementId?: string;
   grid: string;
   x: number;
   y: number;
+  playerId?: string | null;
+  profileId?: string | null;
+  viewportWidth?: number;
+  viewportHeight?: number;
 };
 
 type PromptEntry = {
@@ -83,6 +106,9 @@ type StreakBreakdown = {
 };
 
 export type DevInstrumentationSnapshot = {
+  scope: InstrumentationScope;
+  timeOrigin: number;
+  capturedAt: number;
   session: {
     startedAt: number;
     activeMs: number;
@@ -104,6 +130,10 @@ export type DevInstrumentationSnapshot = {
     mode: Mode;
     difficulty: AIMode;
     bestOf: BestOf;
+    playerId: string | null;
+    profileId: string | null;
+    playerName: string | null;
+    profileName: string | null;
     startedAt: number;
     endedAt?: number;
     roundsPlayed: number;
@@ -122,6 +152,7 @@ export type DevInstrumentationSnapshot = {
     grid: Record<string, number>;
     topElements: { key: string; count: number }[];
   };
+  clickHistory: ClickRecord[];
   clickSpeed: {
     averageIntervalMs: number | null;
     medianIntervalMs: number | null;
@@ -140,6 +171,10 @@ interface MatchStartPayload {
   difficulty: AIMode;
   bestOf: BestOf;
   startedAt?: number;
+  playerId?: string | null;
+  profileId?: string | null;
+  playerName?: string | null;
+  profileName?: string | null;
 }
 
 interface RoundReadyPayload {
@@ -149,6 +184,8 @@ interface RoundReadyPayload {
   difficulty: AIMode;
   bestOf: BestOf;
   readyAt?: number;
+  playerId?: string | null;
+  profileId?: string | null;
 }
 
 interface MoveSelectedPayload {
@@ -169,6 +206,8 @@ interface RoundCompletedPayload {
 interface MatchEndedPayload {
   matchId: string;
   endedAt?: number;
+  playerId?: string | null;
+  profileId?: string | null;
 }
 
 function percentile(values: number[], percentileValue: number): number | null {
@@ -248,10 +287,15 @@ class DevInstrumentation {
     focusEvents: [] as FocusEventEntry[],
   };
   private activeTimer: number | null = null;
+  private scope: InstrumentationScope = { playerId: null, profileId: null, playerName: null, profileName: null };
+  private lastSnapshotAt: number | null = null;
+  private roundsSinceSnapshot = 0;
+  private readonly timeOrigin: number;
 
   constructor() {
     const now = typeof performance !== "undefined" ? performance.now() : 0;
     this.lastInteractionAt = now;
+    this.timeOrigin = typeof performance !== "undefined" ? Date.now() - now : Date.now();
     if (typeof window !== "undefined") {
       this.focused = document.hasFocus();
       if (this.focused) {
@@ -288,6 +332,15 @@ class DevInstrumentation {
     };
   }
 
+  setScope(scope: InstrumentationScope) {
+    this.scope = {
+      playerId: scope.playerId ?? null,
+      profileId: scope.profileId ?? null,
+      playerName: scope.playerName ?? null,
+      profileName: scope.profileName ?? null,
+    };
+  }
+
   getSnapshot(): DevInstrumentationSnapshot {
     const sessionSpeeds = this.roundHistory.map(round => round.responseSpeedMs).filter((value): value is number => value != null);
     const sessionTimes = this.roundHistory.map(round => round.responseTimeMs).filter((value): value is number => value != null);
@@ -313,6 +366,10 @@ class DevInstrumentation {
           mode: currentMatch.mode,
           difficulty: currentMatch.difficulty,
           bestOf: currentMatch.bestOf,
+          playerId: currentMatch.playerId,
+          profileId: currentMatch.profileId,
+          playerName: currentMatch.playerName,
+          profileName: currentMatch.profileName,
           startedAt: currentMatch.startedAt,
           endedAt: currentMatch.endedAt,
           roundsPlayed: currentMatch.rounds.length,
@@ -354,6 +411,14 @@ class DevInstrumentation {
     }
 
     return {
+      scope: {
+        playerId: this.scope.playerId,
+        profileId: this.scope.profileId,
+        playerName: this.scope.playerName,
+        profileName: this.scope.profileName,
+      },
+      timeOrigin: this.timeOrigin,
+      capturedAt: Date.now(),
       session: {
         startedAt: this.session.startedAt,
         activeMs: this.session.activeMs,
@@ -371,13 +436,14 @@ class DevInstrumentation {
         interRoundDelay: sessionDelaySummary,
       },
       currentMatch: currentMatchSummary,
-      recentRounds: this.roundHistory.slice(-8).reverse(),
+      recentRounds: this.roundHistory.slice(-20).reverse(),
       rollingResponseTime: rollingSummary,
       clickHeatmap: {
         total: this.clickRecords.length,
         grid: gridCounts,
         topElements,
       },
+      clickHistory: [...this.clickRecords],
       clickSpeed: {
         averageIntervalMs: avgInterval,
         medianIntervalMs: medianInterval,
@@ -393,6 +459,10 @@ class DevInstrumentation {
     this.currentView = view;
   }
 
+  captureSnapshot(trigger: SnapshotTrigger = "manual") {
+    this.requestSnapshot(trigger);
+  }
+
   matchStarted(payload: MatchStartPayload) {
     const { matchId, mode, difficulty, bestOf } = payload;
     const startedAt = payload.startedAt ?? (typeof performance !== "undefined" ? performance.now() : Date.now());
@@ -401,6 +471,10 @@ class DevInstrumentation {
       mode,
       difficulty,
       bestOf,
+      playerId: payload.playerId ?? this.scope.playerId,
+      profileId: payload.profileId ?? this.scope.profileId,
+      playerName: payload.playerName ?? this.scope.playerName,
+      profileName: payload.profileName ?? this.scope.profileName,
       startedAt,
       responseSpeed: [],
       responseTime: [],
@@ -414,6 +488,7 @@ class DevInstrumentation {
     this.matches.set(matchId, match);
     this.currentMatchId = matchId;
     this.currentRound = null;
+    this.roundsSinceSnapshot = 0;
     this.emit();
   }
 
@@ -428,6 +503,7 @@ class DevInstrumentation {
       this.currentMatchId = null;
       this.currentRound = null;
     }
+    this.requestSnapshot("match-ended");
     this.emit();
   }
 
@@ -440,6 +516,8 @@ class DevInstrumentation {
       mode: payload.mode,
       difficulty: payload.difficulty,
       bestOf: payload.bestOf,
+      playerId: payload.playerId ?? match?.playerId ?? this.scope.playerId,
+      profileId: payload.profileId ?? match?.profileId ?? this.scope.profileId,
       readyAt,
       interactions: 0,
       clicks: 0,
@@ -504,6 +582,10 @@ class DevInstrumentation {
           }
         }
       }
+    }
+    this.roundsSinceSnapshot += 1;
+    if (this.roundsSinceSnapshot >= AUTO_SNAPSHOT_ROUND_INTERVAL) {
+      this.requestSnapshot("round-interval");
     }
     this.emit();
   }
@@ -593,11 +675,18 @@ class DevInstrumentation {
       view: this.currentView,
       matchId: this.currentMatchId ?? undefined,
       roundNumber: this.currentRound?.roundNumber,
+      mode: this.currentRound?.mode ?? (this.currentMatchId ? this.matches.get(this.currentMatchId)?.mode : undefined),
+      difficulty:
+        this.currentRound?.difficulty ?? (this.currentMatchId ? this.matches.get(this.currentMatchId)?.difficulty : undefined),
       target: name,
       elementId: id,
       grid,
       x: event.clientX,
       y: event.clientY,
+      playerId: this.scope.playerId,
+      profileId: this.scope.profileId,
+      viewportWidth: typeof window !== "undefined" ? window.innerWidth : undefined,
+      viewportHeight: typeof window !== "undefined" ? window.innerHeight : undefined,
     };
     this.clickRecords.push(record);
     if (this.clickRecords.length > MAX_CLICK_HISTORY) {
@@ -632,6 +721,15 @@ class DevInstrumentation {
     }
     this.emit();
   };
+
+  private requestSnapshot(trigger: SnapshotTrigger) {
+    if (!this.scope.playerId) return;
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const snapshot = this.getSnapshot();
+    instrumentationSnapshots.saveSnapshot({ ...this.scope }, snapshot, trigger);
+    this.lastSnapshotAt = now;
+    this.roundsSinceSnapshot = 0;
+  }
 
   private handleFocus = () => {
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -684,6 +782,12 @@ class DevInstrumentation {
           match.idleSince = this.lastInteractionAt;
           match.idleGaps.push({ start: this.lastInteractionAt });
         }
+      }
+    }
+    if (this.scope.playerId) {
+      const last = this.lastSnapshotAt ?? this.session.startedAt;
+      if (now - last >= AUTO_SNAPSHOT_INTERVAL_MS) {
+        this.requestSnapshot("time-interval");
       }
     }
   };
@@ -753,6 +857,8 @@ class NoopInstrumentation {
     return null;
   }
   setView() {}
+  setScope() {}
+  captureSnapshot() {}
   matchStarted() {}
   matchEnded() {}
   roundReady() {}
@@ -765,6 +871,8 @@ export type DevInstrumentationApi = {
   subscribe: (listener: SnapshotListener) => () => void;
   getSnapshot: () => DevInstrumentationSnapshot | null;
   setView: (view: string) => void;
+  setScope: (scope: InstrumentationScope) => void;
+  captureSnapshot: (trigger?: SnapshotTrigger) => void;
   matchStarted: (payload: MatchStartPayload) => void;
   matchEnded: (payload: MatchEndedPayload) => void;
   roundReady: (payload: RoundReadyPayload) => void;
@@ -791,6 +899,8 @@ function createDevInstrumentation(): DevInstrumentationApi {
     subscribe: listener => instance.subscribe(listener),
     getSnapshot: () => instance.getSnapshot(),
     setView: view => instance.setView(view),
+    setScope: scope => instance.setScope(scope),
+    captureSnapshot: trigger => instance.captureSnapshot(trigger),
     matchStarted: payload => instance.matchStarted(payload),
     matchEnded: payload => instance.matchEnded(payload),
     roundReady: payload => instance.roundReady(payload),

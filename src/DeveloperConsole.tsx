@@ -6,6 +6,9 @@ import { useStats } from "./stats";
 import type { MatchSummary, RoundLog, StatsProfile } from "./stats";
 import type { AIMode, Mode } from "./gameTypes";
 import { MatchTimings, MATCH_TIMING_DEFAULTS, normalizeMatchTimings } from "./matchTimings";
+import { useDevInstrumentationSnapshot } from "./devInstrumentation";
+import { makeScope as makeInstrumentationScope } from "./instrumentationSnapshots";
+import InstrumentationTab from "./InstrumentationTab";
 import {
   appendAuditEntry,
   AuditEntry,
@@ -32,7 +35,7 @@ interface DeveloperConsoleProps {
   onTimingsReset: () => void;
 }
 
-const TAB_OPTIONS = ["overview", "data", "timers", "audit"] as const;
+const TAB_OPTIONS = ["overview", "data", "instrumentation", "timers", "audit"] as const;
 type TabKey = typeof TAB_OPTIONS[number];
 type TimingField = keyof MatchTimings["challenge"];
 
@@ -153,7 +156,6 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
   const [timingConfirmAction, setTimingConfirmAction] = useState<"save" | "revert" | "restore" | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const hashInitialized = useRef(false);
-
   const timerFields = useMemo(
     () => [
       { key: "countdownTickMs" as TimingField, label: "Countdown tick (ms)", helper: "Delay between countdown numbers." },
@@ -352,6 +354,19 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     ? playerSummaries.find(summary => summary.player.id === selectedPlayer.id) ?? null
     : null;
   const selectedProfileSummary = selectedProfile ? profileSummaryMap.get(selectedProfile.id) ?? null : null;
+  const instrumentationSnapshot = useDevInstrumentationSnapshot();
+  const instrumentationScope = useMemo(
+    () =>
+      filters.playerId
+        ? makeInstrumentationScope(
+            filters.playerId,
+            filters.profileId ?? null,
+            selectedPlayer?.playerName ?? null,
+            selectedProfile?.name ?? null,
+          )
+        : null,
+    [filters.playerId, filters.profileId, selectedPlayer?.playerName, selectedProfile?.name],
+  );
   const jumpProfileOptions = useMemo(() => {
     if (!jumpSelection.playerId) return [] as StatsProfile[];
     return adminProfiles.filter(profile => profile.playerId === jumpSelection.playerId);
@@ -1484,6 +1499,18 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
                     )}
                   </div>
                 </div>
+              )}
+
+              {tab === "instrumentation" && (
+                <InstrumentationTab
+                  snapshot={instrumentationSnapshot}
+                  scope={instrumentationScope}
+                  modeFilter={filters.mode}
+                  difficultyFilter={filters.difficulty}
+                  dateRange={filters.dateRange}
+                  playerName={selectedPlayer?.playerName ?? null}
+                  profileName={selectedProfile?.name ?? null}
+                />
               )}
 
               {tab === "timers" && (
