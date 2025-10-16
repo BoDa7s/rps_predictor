@@ -5,6 +5,8 @@ import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, Decision
 import { PlayersProvider, usePlayers, Grade, Gender, PlayerProfile, CONSENT_TEXT_VERSION, GRADE_OPTIONS, GENDER_OPTIONS } from "./players";
 import { DEV_MODE_ENABLED } from "./devMode";
 import { DeveloperConsole } from "./DeveloperConsole";
+import DevInstrumentationPanel from "./DevInstrumentationPanel";
+import { devInstrumentation } from "./devInstrumentation";
 import { lockSecureStore } from "./secureStore";
 import {
   MATCH_TIMING_DEFAULTS,
@@ -1284,9 +1286,17 @@ function RPSDoodleAppInner(){
     if (logged) {
       currentMatchRoundsRef.current = [...currentMatchRoundsRef.current, logged];
     }
+    devInstrumentation.roundCompleted({
+      matchId: currentMatchIdRef.current,
+      roundNumber: round,
+      outcome: outcomeForPlayer,
+      aiStreak,
+      youStreak,
+      completedAt: typeof performance !== "undefined" ? performance.now() : Date.now(),
+    });
     decisionTraceRef.current = null;
     lastDecisionMsRef.current = null;
-  }, [logRound, selectedMode, bestOf, aiMode]);
+  }, [logRound, selectedMode, bestOf, aiMode, round]);
 
   useEffect(() => {
     if (!needsTraining && !trainingActive) return;
@@ -1305,9 +1315,46 @@ function RPSDoodleAppInner(){
   useEffect(() => {
     if (scene !== "MATCH") return;
     if (phase !== "idle") return;
-    roundStartRef.current = performance.now();
+    const readyAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+    roundStartRef.current = readyAt;
     lastDecisionMsRef.current = null;
-  }, [scene, phase, round]);
+    const currentMatchId = currentMatchIdRef.current;
+    const matchMode: Mode = selectedMode ?? "practice";
+    devInstrumentation.roundReady({
+      matchId: currentMatchId,
+      roundNumber: round,
+      mode: matchMode,
+      difficulty: aiMode,
+      bestOf,
+      readyAt,
+    });
+  }, [scene, phase, round, selectedMode, aiMode, bestOf]);
+
+  useEffect(() => {
+    const parts: string[] = [scene];
+    if (statsOpen) parts.push("STATS");
+    if (leaderboardOpen) parts.push("LEADERBOARD");
+    if (settingsOpen) parts.push("SETTINGS");
+    if (helpGuideOpen) parts.push("HELP");
+    if (welcomeActive) parts.push("WELCOME");
+    devInstrumentation.setView(parts.join("+"));
+  }, [scene, statsOpen, leaderboardOpen, settingsOpen, helpGuideOpen, welcomeActive]);
+
+  useEffect(() => {
+    devInstrumentation.trackPromptState("help-guide", helpGuideOpen);
+  }, [helpGuideOpen]);
+
+  useEffect(() => {
+    devInstrumentation.trackPromptState("stats-modal", statsOpen);
+  }, [statsOpen]);
+
+  useEffect(() => {
+    devInstrumentation.trackPromptState("settings-panel", settingsOpen);
+  }, [settingsOpen]);
+
+  useEffect(() => {
+    devInstrumentation.trackPromptState("leaderboard-modal", leaderboardOpen);
+  }, [leaderboardOpen]);
 
   const armedRef = useRef(false);
   const armAudio = () => { if (!armedRef.current){ audio.ensureCtx(); audio.setEnabled(audioOn); armedRef.current = true; } };
@@ -1991,9 +2038,19 @@ function RPSDoodleAppInner(){
     aiStreakRef.current = 0;
     youStreakRef.current = 0;
     matchStartRef.current = new Date().toISOString();
-    currentMatchIdRef.current = makeLocalId("match");
-    roundStartRef.current = performance.now();
+    const matchMode: Mode = mode ?? selectedMode ?? "practice";
+    const matchId = makeLocalId("match");
+    currentMatchIdRef.current = matchId;
+    const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+    roundStartRef.current = startedAt;
     lastDecisionMsRef.current = null;
+    devInstrumentation.matchStarted({
+      matchId,
+      mode: matchMode,
+      difficulty: aiMode,
+      bestOf,
+      startedAt,
+    });
     if (mode) setSelectedMode(mode);
     setScene("MATCH");
   }
@@ -2028,12 +2085,18 @@ function RPSDoodleAppInner(){
 
   function onSelect(m: Move){
     if (phase !== "idle") return;
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     if (roundStartRef.current !== null) {
-      const elapsed = Math.max(0, Math.round(performance.now() - roundStartRef.current));
+      const elapsed = Math.max(0, Math.round(now - roundStartRef.current));
       lastDecisionMsRef.current = elapsed;
     } else {
       lastDecisionMsRef.current = null;
     }
+    devInstrumentation.moveSelected({
+      matchId: currentMatchIdRef.current,
+      roundNumber: round,
+      at: now,
+    });
     setPlayerPick(m);
     setPhase("selected");
     setLive(`You selected ${m}.`);
@@ -2186,6 +2249,10 @@ function RPSDoodleAppInner(){
           leaderboardRoundCount: matchScore?.rounds,
           leaderboardTimerBonus: matchScore?.timerBonus,
           leaderboardBeatConfidenceBonus: matchScore?.beatConfidenceBonus,
+        });
+        devInstrumentation.matchEnded({
+          matchId: currentMatchIdRef.current,
+          endedAt: typeof performance !== "undefined" ? performance.now() : Date.now(),
         });
         currentMatchRoundsRef.current = [];
         matchStartRef.current = new Date().toISOString();
@@ -4081,6 +4148,7 @@ function RPSDoodleAppInner(){
             onTimingsUpdate={updateMatchTimings}
             onTimingsReset={resetMatchTimings}
           />
+          <DevInstrumentationPanel />
         </>
       )}
     </div>
