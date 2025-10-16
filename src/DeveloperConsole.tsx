@@ -7,7 +7,11 @@ import type { MatchSummary, RoundLog, StatsProfile } from "./stats";
 import type { AIMode, Mode } from "./gameTypes";
 import { MatchTimings, MATCH_TIMING_DEFAULTS, normalizeMatchTimings } from "./matchTimings";
 import { useDevInstrumentationSnapshot } from "./devInstrumentation";
-import { makeScope as makeInstrumentationScope } from "./instrumentationSnapshots";
+import {
+  instrumentationSnapshots,
+  makeScope as makeInstrumentationScope,
+  useAutoCapture,
+} from "./instrumentationSnapshots";
 import InstrumentationTab from "./InstrumentationTab";
 import {
   appendAuditEntry,
@@ -134,6 +138,12 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     difficulty: "",
     dateRange: { start: null, end: null },
   }));
+  const [instrumentationSource, setInstrumentationSource] = useState<"selected" | "active">("selected");
+  const [instrumentationView, setInstrumentationView] = useState<"live" | "history">("live");
+  const [liveStatus, setLiveStatus] = useState<{ running: boolean; label: string | null }>({
+    running: false,
+    label: null,
+  });
   const [matchSearch, setMatchSearch] = useState<MatchSearchFilters>({ player: "", profile: "", mode: "" });
   const [roundSearch, setRoundSearch] = useState<RoundSearchFilters>({ player: "", mode: "" });
   const [focusedMatchId, setFocusedMatchId] = useState<string | null>(null);
@@ -367,6 +377,17 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
         : null,
     [filters.playerId, filters.profileId, selectedPlayer?.playerName, selectedProfile?.name],
   );
+  const autoCaptureEnabled = useAutoCapture(instrumentationScope);
+  const handleLiveStatusChange = useCallback((status: { running: boolean; label: string | null }) => {
+    setLiveStatus(status);
+  }, []);
+  const handleToggleAutoCapture = useCallback(
+    (next: boolean) => {
+      if (!instrumentationScope) return;
+      instrumentationSnapshots.setAutoCaptureEnabled(instrumentationScope, next);
+    },
+    [instrumentationScope],
+  );
   const jumpProfileOptions = useMemo(() => {
     if (!jumpSelection.playerId) return [] as StatsProfile[];
     return adminProfiles.filter(profile => profile.playerId === jumpSelection.playerId);
@@ -435,6 +456,22 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
       : adminProfiles;
     return scopedProfiles.slice().sort((a, b) => a.name.localeCompare(b.name));
   }, [adminProfiles, filters.playerId]);
+  const instrumentationPlayerOptions = useMemo(
+    () =>
+      playerSummaries.map(summary => ({
+        value: summary.player.id,
+        label: summary.player.playerName,
+      })),
+    [playerSummaries],
+  );
+  const instrumentationProfileOptions = useMemo(
+    () =>
+      profilesForList.map(profile => ({
+        value: profile.id,
+        label: profile.name,
+      })),
+    [profilesForList],
+  );
 
   const filteredMatches = useMemo(() => {
     const { playerId, profileId, mode, difficulty, dateRange } = filters;
@@ -1372,6 +1409,32 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
                   </button>
                 ))}
               </nav>
+              {liveStatus.running && liveStatus.label && (
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTab("instrumentation");
+                      setInstrumentationView("live");
+                    }}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      background: "rgba(34,197,94,0.18)",
+                      border: "1px solid rgba(34,197,94,0.45)",
+                      color: "#bbf7d0",
+                      borderRadius: "999px",
+                      padding: "6px 12px",
+                      fontSize: "0.75rem",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <span style={{ display: "inline-block", width: "8px", height: "8px", borderRadius: "999px", background: "#22c55e" }} />
+                    Live: {liveStatus.label}
+                  </button>
+                </div>
+              )}
               <ContextHeader
                 player={selectedPlayer}
                 profile={selectedProfile}
@@ -1510,6 +1573,23 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
                   dateRange={filters.dateRange}
                   playerName={selectedPlayer?.playerName ?? null}
                   profileName={selectedProfile?.name ?? null}
+                  selectedPlayerId={filters.playerId}
+                  selectedProfileId={filters.profileId}
+                  playerOptions={instrumentationPlayerOptions}
+                  profileOptions={instrumentationProfileOptions}
+                  onPlayerChange={handleSelectPlayer}
+                  onProfileChange={handleSelectProfile}
+                  onModeChange={handleModeFilterChange}
+                  onDifficultyChange={handleDifficultyFilterChange}
+                  onDateRangeChange={handleDateRangeChange}
+                  onClearDateRange={clearDateRange}
+                  source={instrumentationSource}
+                  onSourceChange={setInstrumentationSource}
+                  autoCaptureEnabled={autoCaptureEnabled}
+                  onToggleAutoCapture={handleToggleAutoCapture}
+                  activeView={instrumentationView}
+                  onViewChange={setInstrumentationView}
+                  onLiveStatusChange={handleLiveStatusChange}
                 />
               )}
 

@@ -1,12 +1,12 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { DevInstrumentationSnapshot, InstrumentationScope } from "./devInstrumentation";
 import { devInstrumentation } from "./devInstrumentation";
 import type { AIMode, Mode } from "./gameTypes";
 import {
   InstrumentationSnapshotRecord,
+  SnapshotTrigger,
   downloadSnapshot,
-  downloadSnapshotRange,
   instrumentationSnapshots,
   useInstrumentationSnapshots,
 } from "./instrumentationSnapshots";
@@ -21,6 +21,23 @@ interface InstrumentationTabProps {
   dateRange: { start: string | null; end: string | null };
   playerName: string | null;
   profileName: string | null;
+  selectedPlayerId: string | null;
+  selectedProfileId: string | null;
+  playerOptions: Array<{ value: string; label: string }>;
+  profileOptions: Array<{ value: string; label: string }>;
+  onPlayerChange: (playerId: string | null) => void;
+  onProfileChange: (profileId: string | null) => void;
+  onModeChange: (mode: Mode | "") => void;
+  onDifficultyChange: (difficulty: AIMode | "") => void;
+  onDateRangeChange: (field: "start" | "end", value: string) => void;
+  onClearDateRange: () => void;
+  source: "selected" | "active";
+  onSourceChange: (source: "selected" | "active") => void;
+  autoCaptureEnabled: boolean;
+  onToggleAutoCapture: (next: boolean) => void;
+  activeView: "live" | "history";
+  onViewChange: (view: "live" | "history") => void;
+  onLiveStatusChange?: (status: { running: boolean; label: string | null }) => void;
 }
 
 type RangedRound = DevInstrumentationSnapshot["recentRounds"][number];
@@ -448,6 +465,225 @@ function DeltaBadge({ value }: { value: number | null }) {
   return <span style={{ color, fontWeight: 600 }}>{`${sign}${value.toFixed(0)}`}</span>;
 }
 
+const MODE_CHOICES: Mode[] = ["practice", "challenge"];
+const DIFFICULTY_CHOICES: AIMode[] = ["fair", "normal", "ruthless"];
+
+function titleCase(value: string): string {
+  if (!value) return value;
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function formatRelativeTime(ms: number | null): string {
+  if (ms == null || Number.isNaN(ms)) return "—";
+  if (ms < 1_000) return "just now";
+  const seconds = Math.floor(ms / 1_000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    const remainder = seconds % 60;
+    return `${minutes}m${remainder ? ` ${remainder}s` : ""} ago`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainderMinutes = minutes % 60;
+  return `${hours}h${remainderMinutes ? ` ${remainderMinutes}m` : ""} ago`;
+}
+
+function formatTriggerLabel(trigger: SnapshotTrigger): string {
+  switch (trigger) {
+    case "manual":
+      return "Manual";
+    case "match-ended":
+      return "Match end";
+    case "round-interval":
+      return "10 rounds";
+    case "time-interval":
+      return "2 minutes";
+    default:
+      return trigger;
+  }
+}
+
+function resolveScopeLabels(
+  scope: InstrumentationScope | null,
+  fallbackPlayer: string | null,
+  fallbackProfile: string | null,
+): { player: string; profile: string } {
+  let player = scope?.playerName ?? fallbackPlayer ?? "";
+  if (!player) {
+    player = scope?.playerId ? "Player" : "All players";
+  }
+  let profile = scope?.profileName ?? fallbackProfile ?? "";
+  if (!profile) {
+    if (scope?.profileId) {
+      profile = "Profile";
+    } else if (scope?.playerId) {
+      profile = "Default profile";
+    } else {
+      profile = "All profiles";
+    }
+  }
+  return { player, profile };
+}
+
+function MetricCards({ metrics, showTrend = false }: { metrics: DerivedMetrics; showTrend?: boolean }) {
+  return (
+    <div style={metricsGridStyle}>
+      <div style={cardStyle}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h4 style={cardTitleStyle}>Response time</h4>
+          <span style={{ fontSize: "0.75rem", opacity: 0.7 }}>
+            {metrics.response.count ? `${metrics.response.count} rounds` : "No rounds"}
+          </span>
+        </div>
+        <div style={{ display: "grid", gap: "6px" }}>
+          <div style={statRowStyle}>
+            <span>Median</span>
+            <strong>{formatMs(metrics.response.median)}</strong>
+          </div>
+          <div style={statRowStyle}>
+            <span>P90</span>
+            <strong>{formatMs(metrics.response.p90)}</strong>
+          </div>
+          <div style={statRowStyle}>
+            <span>Latest</span>
+            <strong>{formatMs(metrics.response.latest)}</strong>
+          </div>
+          <div style={statRowStyle}>
+            <span>Average</span>
+            <strong>{formatMs(metrics.response.average)}</strong>
+          </div>
+        </div>
+        {showTrend && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <span style={{ fontSize: "0.75rem", opacity: 0.7 }}>Recent trend</span>
+            <Sparkline values={metrics.response.rollingValues} />
+            <span style={{ fontSize: "0.75rem", opacity: 0.7 }}>
+              Rolling average: {formatMs(metrics.response.rollingAverage)}
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div style={cardStyle}>
+        <h4 style={cardTitleStyle}>Engagement</h4>
+        <div style={{ display: "grid", gap: "6px", fontSize: "0.9rem" }}>
+          <div style={statRowStyle}>
+            <span>Session active</span>
+            <strong>{formatDuration(metrics.engagement.activeMs)}</strong>
+          </div>
+          <div style={statRowStyle}>
+            <span>Idle gaps</span>
+            <strong>{formatCount(metrics.engagement.idleCount)}</strong>
+          </div>
+          <div style={statRowStyle}>
+            <span>Idle duration</span>
+            <strong>{formatDuration(metrics.engagement.idleDurationMs)}</strong>
+          </div>
+          <div style={statRowStyle}>
+            <span>Focus events</span>
+            <strong>{formatCount(metrics.engagement.focusEvents)}</strong>
+          </div>
+          <div style={statRowStyle}>
+            <span>Current view</span>
+            <strong>{metrics.engagement.currentView || "–"}</strong>
+          </div>
+        </div>
+        {metrics.engagement.match && (
+          <div style={{ marginTop: "12px", padding: "12px", background: "rgba(30,41,59,0.55)", borderRadius: "10px" }}>
+            <p style={{ margin: "0 0 4px", fontSize: "0.8rem", opacity: 0.7 }}>Current match</p>
+            <p style={{ margin: "0 0 4px", fontSize: "0.85rem" }}>
+              {titleCase(metrics.engagement.match.mode)} · {titleCase(metrics.engagement.match.difficulty)} · Best of {metrics.engagement.match.bestOf}
+            </p>
+            <p style={matchStatStyle}>
+              Active {formatDuration(metrics.engagement.match.activeMs)} · Total {formatDuration(metrics.engagement.match.durationMs)}
+            </p>
+            <p style={matchStatStyle}>
+              Rounds {formatCount(metrics.engagement.match.roundsPlayed)} · Clicks {formatCount(metrics.engagement.match.clickCount)}
+            </p>
+            <p style={matchStatStyle}>
+              Idle {formatCount(metrics.engagement.match.idleCount)} · {formatDuration(metrics.engagement.match.idleDurationMs)}
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div style={cardStyle}>
+        <h4 style={cardTitleStyle}>Click activity</h4>
+        <div style={{ display: "grid", gap: "6px", fontSize: "0.9rem" }}>
+          <div style={statRowStyle}>
+            <span>Scoped clicks</span>
+            <strong>{formatCount(metrics.click.filteredClicks.length)}</strong>
+          </div>
+          <div style={statRowStyle}>
+            <span>Session clicks</span>
+            <strong>{formatCount(metrics.click.sessionTotalClicks)}</strong>
+          </div>
+          <div style={statRowStyle}>
+            <span>Session interactions</span>
+            <strong>{formatCount(metrics.click.sessionTotalInteractions)}</strong>
+          </div>
+        </div>
+        <div style={{ marginTop: "12px", display: "grid", gap: "8px" }}>
+          <div>
+            <p style={{ margin: "0 0 4px", fontSize: "0.8rem", opacity: 0.75 }}>Top views</p>
+            {metrics.click.topViews.length ? (
+              <ul style={listStyle}>
+                {metrics.click.topViews.map(item => (
+                  <li key={item.key}>
+                    <strong>{item.key}</strong> · {formatCount(item.count)}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p style={emptyListStyle}>No view clicks yet.</p>
+            )}
+          </div>
+          <div>
+            <p style={{ margin: "0 0 4px", fontSize: "0.8rem", opacity: 0.75 }}>Top elements</p>
+            {metrics.click.topElements.length ? (
+              <ul style={listStyle}>
+                {metrics.click.topElements.map(item => (
+                  <li key={item.key}>
+                    <strong>{item.key}</strong> · {formatCount(item.count)}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p style={emptyListStyle}>No element interactions yet.</p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div style={cardStyle}>
+        <h4 style={cardTitleStyle}>Click speed</h4>
+        <div style={{ display: "grid", gap: "6px", fontSize: "0.9rem" }}>
+          <div style={statRowStyle}>
+            <span>Average interval</span>
+            <strong>{formatMs(metrics.clickSpeed.average)}</strong>
+          </div>
+          <div style={statRowStyle}>
+            <span>Median interval</span>
+            <strong>{formatMs(metrics.clickSpeed.median)}</strong>
+          </div>
+          <div style={statRowStyle}>
+            <span>Last interval</span>
+            <strong>{formatMs(metrics.clickSpeed.last)}</strong>
+          </div>
+          <div style={statRowStyle}>
+            <span>Peak burst (10s)</span>
+            <strong>{formatCount(metrics.clickSpeed.peak10s)}</strong>
+          </div>
+          <div style={statRowStyle}>
+            <span>Latest burst</span>
+            <strong>{formatCount(metrics.clickSpeed.latest10s)}</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
   snapshot,
   scope,
@@ -456,26 +692,54 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
   dateRange,
   playerName,
   profileName,
+  selectedPlayerId,
+  selectedProfileId,
+  playerOptions,
+  profileOptions,
+  onPlayerChange,
+  onProfileChange,
+  onModeChange,
+  onDifficultyChange,
+  onDateRangeChange,
+  onClearDateRange,
+  source,
+  onSourceChange,
+  autoCaptureEnabled,
+  onToggleAutoCapture,
+  activeView,
+  onViewChange,
+  onLiveStatusChange,
 }) => {
-  const [heatmapResolution, setHeatmapResolution] = useState<"3x3" | "6x4">("3x3");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [compareSelection, setCompareSelection] = useState<string[]>([]);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
+
   const records = useInstrumentationSnapshots(scope);
+
   useEffect(() => {
     setPage(0);
     setCompareSelection([]);
+    setSelectedSnapshotId(null);
   }, [scope?.playerId, scope?.profileId]);
 
-  const metrics = useMemo(
-    () => deriveMetrics(snapshot, scope, modeFilter, difficultyFilter, dateRange),
-    [snapshot, scope, modeFilter, difficultyFilter, dateRange],
-  );
+  useEffect(() => {
+    if (!records.length) {
+      setSelectedSnapshotId(null);
+      return;
+    }
+    if (!selectedSnapshotId || !records.some(record => record.id === selectedSnapshotId)) {
+      setSelectedSnapshotId(records[0].id);
+    }
+  }, [records, selectedSnapshotId]);
 
-  const heatmapData = useMemo(() => computeHeatmap(metrics.click.filteredClicks, heatmapResolution), [metrics, heatmapResolution]);
+  useEffect(() => {
+    if (!statusMessage) return;
+    const handle = window.setTimeout(() => setStatusMessage(null), 3200);
+    return () => window.clearTimeout(handle);
+  }, [statusMessage]);
 
-  const liveRecords = records.slice(0, 6);
   const filteredHistory = useMemo(() => {
     if (!search.trim()) return records;
     const keyword = search.trim().toLowerCase();
@@ -499,499 +763,765 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
   );
 
   const comparisonMetrics = useMemo(() => {
-    if (selectedRecords.length < 2 || !scope) return null;
-    return selectedRecords.map(record => ({ record, metrics: deriveMetrics(record.data, scope, modeFilter, difficultyFilter, dateRange) }));
+    if (selectedRecords.length !== 2) return null;
+    return selectedRecords.map(record => {
+      const targetScope = scope ?? record.scope ?? null;
+      return {
+        record,
+        metrics: deriveMetrics(record.data, targetScope, modeFilter, difficultyFilter, dateRange),
+      };
+    });
   }, [selectedRecords, scope, modeFilter, difficultyFilter, dateRange]);
 
-  useEffect(() => {
-    if (!statusMessage) return;
-    const handle = window.setTimeout(() => setStatusMessage(null), 3000);
-    return () => window.clearTimeout(handle);
-  }, [statusMessage]);
+  const activeDetailRecord = useMemo(() => {
+    if (!records.length) return null;
+    if (selectedSnapshotId) {
+      const match = records.find(record => record.id === selectedSnapshotId);
+      if (match) return match;
+    }
+    return records[0];
+  }, [records, selectedSnapshotId]);
 
-  const handleCapture = () => {
-    if (!scope) return;
+  const detailMetrics = useMemo(() => {
+    if (!activeDetailRecord) return null;
+    const targetScope = scope ?? activeDetailRecord.scope ?? null;
+    return deriveMetrics(activeDetailRecord.data, targetScope, modeFilter, difficultyFilter, dateRange);
+  }, [activeDetailRecord, scope, modeFilter, difficultyFilter, dateRange]);
+
+  const liveSnapshot = useMemo(() => {
+    if (!snapshot) return null;
+    if (source === "active") return snapshot;
+    if (!scope) return null;
+    const samePlayer = snapshot.scope.playerId === scope.playerId;
+    const sameProfile = (snapshot.scope.profileId ?? null) === (scope.profileId ?? null);
+    return samePlayer && sameProfile ? snapshot : null;
+  }, [snapshot, scope, source]);
+
+  const liveScope = useMemo(() => {
+    if (source === "active") {
+      return snapshot?.scope ?? null;
+    }
+    return scope;
+  }, [scope, snapshot, source]);
+
+  const liveMetrics = useMemo(
+    () => deriveMetrics(liveSnapshot, liveScope, modeFilter, difficultyFilter, dateRange),
+    [liveSnapshot, liveScope, modeFilter, difficultyFilter, dateRange],
+  );
+
+  const lastEventEpoch = useMemo(() => {
+    if (!liveSnapshot) return null;
+    const timestamps: number[] = [];
+    const latestRound = liveMetrics.tableRounds[0];
+    if (latestRound) {
+      const roundEpoch = toEpoch(
+        liveSnapshot,
+        latestRound.completedAt ?? latestRound.moveSelectedAt ?? latestRound.readyAt ?? null,
+      );
+      if (roundEpoch != null) timestamps.push(roundEpoch);
+    }
+    if (liveMetrics.click.filteredClicks.length) {
+      const latestClick = liveMetrics.click.filteredClicks.reduce((max, entry) => {
+        const epoch = liveSnapshot.timeOrigin + entry.timestamp;
+        return Math.max(max, epoch);
+      }, 0);
+      if (latestClick) timestamps.push(latestClick);
+    }
+    const lastInteraction = liveSnapshot.session.lastInteractionAt;
+    if (lastInteraction != null) {
+      const sessionEpoch = toEpoch(liveSnapshot, lastInteraction);
+      if (sessionEpoch != null) timestamps.push(sessionEpoch);
+    }
+    if (!timestamps.length) return null;
+    return Math.max(...timestamps);
+  }, [liveSnapshot, liveMetrics]);
+
+  const liveLabels = resolveScopeLabels(
+    liveScope,
+    source === "active" ? snapshot?.scope.playerName ?? null : playerName,
+    source === "active" ? snapshot?.scope.profileName ?? null : profileName,
+  );
+
+  const liveStatus = useMemo(() => {
+    const hasData = Boolean(
+      liveSnapshot && (liveMetrics.filteredRounds.length || liveMetrics.click.filteredClicks.length || liveMetrics.hasSnapshot),
+    );
+    if (!hasData) {
+      return { state: "empty" as const, label: `${liveLabels.player} • ${liveLabels.profile}`, lastEventMs: null };
+    }
+    const age = lastEventEpoch != null ? Date.now() - lastEventEpoch : null;
+    if (age != null && age <= 30_000) {
+      return { state: "receiving" as const, label: `${liveLabels.player} • ${liveLabels.profile}`, lastEventMs: age };
+    }
+    return { state: "paused" as const, label: `${liveLabels.player} • ${liveLabels.profile}`, lastEventMs: age };
+  }, [liveSnapshot, liveMetrics, liveLabels, lastEventEpoch]);
+
+  useEffect(() => {
+    if (!onLiveStatusChange) return;
+    onLiveStatusChange({
+      running: liveStatus.state === "receiving",
+      label: liveStatus.state === "empty" ? null : liveStatus.label,
+    });
+  }, [liveStatus, onLiveStatusChange]);
+
+  const handleCapture = useCallback(() => {
     devInstrumentation.captureSnapshot("manual");
     setStatusMessage("Manual snapshot captured");
-  };
+  }, []);
 
-  const handleToggleCompare = (id: string) => {
+  const handleAutoCaptureClick = useCallback(() => {
+    if (!scope?.playerId) {
+      setStatusMessage("Select a player to enable auto-capture.");
+      return;
+    }
+    onToggleAutoCapture(!autoCaptureEnabled);
+    setStatusMessage(`Auto-capture ${!autoCaptureEnabled ? "enabled" : "disabled"}`);
+  }, [scope?.playerId, autoCaptureEnabled, onToggleAutoCapture]);
+
+  const handleSearchChange = useCallback((value: string) => {
+    setSearch(value);
+    setPage(0);
+  }, []);
+
+  const handleCompareToggle = useCallback((id: string) => {
     setCompareSelection(prev => {
       if (prev.includes(id)) {
         return prev.filter(item => item !== id);
       }
       if (prev.length >= 2) {
-        return [prev[1], id];
+        return prev;
       }
       return [...prev, id];
     });
-  };
+  }, []);
 
-  const scopeLabel = scope
-    ? `${playerName ?? "Unknown player"} • ${profileName ?? "All profiles"}`
-    : "Select a player to view instrumentation";
+  const handleRowClick = useCallback((record: InstrumentationSnapshotRecord) => {
+    setSelectedSnapshotId(record.id);
+  }, []);
 
-  if (!scope) {
-    return (
-      <div
-        style={{
-          background: "rgba(15,25,45,0.8)",
-          borderRadius: "12px",
-          padding: "24px",
-          color: "rgba(226,232,240,0.85)",
-        }}
-      >
-        <h3 style={{ margin: "0 0 8px" }}>Instrumentation</h3>
-        <p style={{ margin: 0, fontSize: "0.9rem", maxWidth: "520px" }}>
-          Choose a player and profile from the filter bar to review live instrumentation metrics, auto-saved snapshots, and
-          history comparisons.
-        </p>
-      </div>
-    );
-  }
+  const handlePageChange = useCallback(
+    (direction: "prev" | "next") => {
+      setPage(current => {
+        if (direction === "prev") {
+          return Math.max(0, current - 1);
+        }
+        return Math.min(pageCount - 1, current + 1);
+      });
+    },
+    [pageCount],
+  );
+
+  const handleSourceToggle = useCallback(
+    (next: "selected" | "active") => {
+      if (next === source) return;
+      onSourceChange(next);
+    },
+    [onSourceChange, source],
+  );
+
+  const autoCaptureDisabled = !scope?.playerId;
+  const historyEmpty = !records.length;
+  const liveEmpty = liveStatus.state === "empty";
 
   return (
     <div style={{ display: "grid", gap: "16px" }}>
-      <div
-        style={{
-          background: "rgba(15,25,45,0.75)",
-          borderRadius: "12px",
-          padding: "16px",
-          display: "flex",
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: "16px",
-        }}
-      >
-        <div>
-          <h3 style={{ margin: "0 0 6px" }}>Instrumentation</h3>
-          <p style={{ margin: 0, fontSize: "0.85rem", opacity: 0.7 }}>
-            Scope: {scopeLabel}
-            {modeFilter ? ` • Mode: ${modeFilter}` : ""}
-            {difficultyFilter ? ` • Difficulty: ${difficultyFilter}` : ""}
-            {dateRange.start || dateRange.end ? ` • Date: ${dateRange.start ?? "…"} → ${dateRange.end ?? "…"}` : ""}
-          </p>
-          {statusMessage && (
-            <p style={{ margin: "6px 0 0", fontSize: "0.8rem", color: "#93c5fd" }}>{statusMessage}</p>
+      <div style={scopeBarStyle}>
+        <div style={scopeControlsStyle}>
+          <label style={scopeLabelStyle}>
+            <span>Player</span>
+            <select
+              value={selectedPlayerId ?? ""}
+              onChange={event => onPlayerChange(event.target.value ? event.target.value : null)}
+              style={scopeSelectStyle}
+            >
+              <option value="">All players</option>
+              {playerOptions.map(option => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={scopeLabelStyle}>
+            <span>Profile</span>
+            <select
+              value={selectedProfileId ?? ""}
+              onChange={event => onProfileChange(event.target.value ? event.target.value : null)}
+              style={scopeSelectStyle}
+            >
+              <option value="">All profiles</option>
+              {profileOptions.map(option => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={scopeLabelStyle}>
+            <span>Mode</span>
+            <select
+              value={modeFilter}
+              onChange={event => onModeChange(event.target.value as Mode | "")}
+              style={scopeSelectStyle}
+            >
+              <option value="">Any mode</option>
+              {MODE_CHOICES.map(option => (
+                <option key={option} value={option}>
+                  {titleCase(option)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={scopeLabelStyle}>
+            <span>Difficulty</span>
+            <select
+              value={difficultyFilter}
+              onChange={event => onDifficultyChange(event.target.value as AIMode | "")}
+              style={scopeSelectStyle}
+            >
+              <option value="">All difficulties</option>
+              {DIFFICULTY_CHOICES.map(option => (
+                <option key={option} value={option}>
+                  {titleCase(option)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div style={dateRangeStyle}>
+            <span>Date range 📅</span>
+            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+              <input
+                type="date"
+                value={dateRange.start ?? ""}
+                onChange={event => onDateRangeChange("start", event.target.value)}
+                style={scopeSelectStyle}
+              />
+              <input
+                type="date"
+                value={dateRange.end ?? ""}
+                onChange={event => onDateRangeChange("end", event.target.value)}
+                style={scopeSelectStyle}
+              />
+              <button type="button" onClick={onClearDateRange} style={clearButtonStyle}>
+                Clear
+              </button>
+            </div>
+          </div>
+        </div>
+        <div style={sourceSwitchStyle}>
+          <span style={{ fontSize: "0.75rem", opacity: 0.75 }}>Observe:</span>
+          <button
+            type="button"
+            onClick={() => handleSourceToggle("selected")}
+            style={sourceButtonStyle(source === "selected")}
+          >
+            Selected scope
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSourceToggle("active")}
+            style={sourceButtonStyle(source === "active")}
+          >
+            Active game
+          </button>
+        </div>
+      </div>
+
+      {statusMessage && (
+        <div role="status" style={toastStyle}>
+          {statusMessage}
+        </div>
+      )}
+
+      <div style={tabSwitchStyle}>
+        <button
+          type="button"
+          onClick={() => onViewChange("live")}
+          style={tabButtonStyle(activeView === "live")}
+        >
+          Live
+        </button>
+        <button
+          type="button"
+          onClick={() => onViewChange("history")}
+          style={tabButtonStyle(activeView === "history")}
+        >
+          History
+        </button>
+      </div>
+
+      {activeView === "live" ? (
+        <div style={panelStyle}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: "1.15rem" }}>
+                  Live stream • {liveLabels.player} • {liveLabels.profile}
+                </h2>
+                <p style={{ margin: 0, fontSize: "0.8rem", opacity: 0.7 }}>
+                  Source: {source === "active" ? "Active game" : "Selected scope"}
+                </p>
+              </div>
+              <div style={statusPillStyle(liveStatus.state)}>
+                <span style={statusDotStyle(liveStatus.state)} />
+                <span>
+                  {liveStatus.state === "receiving" ? "Receiving" : liveStatus.state === "paused" ? "Paused" : "No events"}
+                </span>
+                <span style={{ opacity: 0.75 }}>
+                  {liveStatus.state === "empty"
+                    ? "Waiting for activity"
+                    : `last event: ${formatRelativeTime(liveStatus.lastEventMs)}`}
+                </span>
+              </div>
+            </div>
+            <div style={controlRowStyle}>
+              <button type="button" onClick={handleCapture} style={primaryButtonStyle}>
+                Capture snapshot
+              </button>
+              <button
+                type="button"
+                onClick={handleAutoCaptureClick}
+                disabled={autoCaptureDisabled}
+                style={autoCaptureButtonStyle(autoCaptureEnabled, autoCaptureDisabled)}
+              >
+                Auto-capture: {autoCaptureEnabled ? "On" : "Off"}
+              </button>
+            </div>
+          </div>
+
+          {liveEmpty ? (
+            <div style={emptyStateStyle}>
+              <p style={{ margin: 0, fontSize: "0.9rem" }}>
+                No events for this scope. Choose Active game as source or play a few rounds. Auto-capture is available once data appears.
+              </p>
+            </div>
+          ) : (
+            <MetricCards metrics={liveMetrics} showTrend />
           )}
         </div>
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-          <button
-            type="button"
-            onClick={handleCapture}
-            style={{
-              background: "#2563eb",
-              border: "none",
-              color: "white",
-              borderRadius: "8px",
-              padding: "8px 16px",
-              cursor: "pointer",
-            }}
-          >
-            Capture snapshot
-          </button>
-          <button
-            type="button"
-            onClick={() => setHeatmapResolution(resolution => (resolution === "3x3" ? "6x4" : "3x3"))}
-            style={{
-              background: "rgba(255,255,255,0.08)",
-              border: "1px solid rgba(255,255,255,0.12)",
-              color: "white",
-              borderRadius: "8px",
-              padding: "8px 14px",
-              cursor: "pointer",
-            }}
-          >
-            Heatmap: {heatmapResolution === "3x3" ? "3×3" : "6×4"}
-          </button>
-        </div>
-      </div>
-
-      {!metrics.hasSnapshot && (
-        <div
-          style={{
-            background: "rgba(15,25,45,0.8)",
-            borderRadius: "12px",
-            padding: "18px",
-            color: "rgba(226,232,240,0.8)",
-          }}
-        >
-          <p style={{ margin: 0 }}>Instrumentation data will appear once the session produces metrics.</p>
-        </div>
-      )}
-
-      {metrics.hasSnapshot && (
-        <div style={{ display: "grid", gap: "16px" }}>
-          <div
-            style={{
-              display: "grid",
-              gap: "16px",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              alignItems: "stretch",
-            }}
-          >
-            <div style={cardStyle}>
-              <h4 style={cardTitleStyle}>Response time</h4>
-              <div style={{ display: "grid", gap: "6px", fontSize: "0.9rem" }}>
-                <div style={statRowStyle}>
-                  <span>Median</span>
-                  <strong>{formatMs(metrics.response.median)}</strong>
-                </div>
-                <div style={statRowStyle}>
-                  <span>P90</span>
-                  <strong>{formatMs(metrics.response.p90)}</strong>
-                </div>
-                <div style={statRowStyle}>
-                  <span>Latest</span>
-                  <strong>{formatMs(metrics.response.latest)}</strong>
-                </div>
-                <div style={statRowStyle}>
-                  <span>Rolling avg (20)</span>
-                  <strong>{formatMs(metrics.response.rollingAverage)}</strong>
-                </div>
-              </div>
-              <div style={{ marginTop: "12px" }}>
-                <Sparkline values={metrics.response.rollingValues} />
+      ) : (
+        <div style={panelStyle}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: "1.15rem" }}>
+                  Snapshot history • {liveLabels.player} • {liveLabels.profile}
+                </h2>
+                <p style={{ margin: 0, fontSize: "0.8rem", opacity: 0.7 }}>
+                  Stored snapshots for this scope.
+                </p>
               </div>
             </div>
 
-            <div style={cardStyle}>
-              <h4 style={cardTitleStyle}>Engagement</h4>
-              <div style={{ display: "grid", gap: "6px", fontSize: "0.9rem" }}>
-                <div style={statRowStyle}>
-                  <span>Session age</span>
-                  <strong>{formatDuration(metrics.engagement.sessionAgeMs)}</strong>
-                </div>
-                <div style={statRowStyle}>
-                  <span>Active (focused)</span>
-                  <strong>{formatDuration(metrics.engagement.activeMs)}</strong>
-                </div>
-                <div style={statRowStyle}>
-                  <span>Idle gaps</span>
-                  <strong>
-                    {formatCount(metrics.engagement.idleCount)} · {formatDuration(metrics.engagement.idleDurationMs)}
-                  </strong>
-                </div>
-                <div style={statRowStyle}>
-                  <span>Focus events</span>
-                  <strong>{formatCount(metrics.engagement.focusEvents)}</strong>
-                </div>
-                <div style={statRowStyle}>
-                  <span>Current view</span>
-                  <strong>{metrics.engagement.currentView}</strong>
-                </div>
+            {historyEmpty ? (
+              <div style={emptyStateStyle}>
+                <p style={{ margin: 0, fontSize: "0.9rem" }}>
+                  No snapshots saved for this scope. Use Capture snapshot or enable Auto-capture. Snapshots also save on match end.
+                </p>
               </div>
-              {metrics.engagement.match && (
-                <div style={{ marginTop: "12px", padding: "12px", background: "rgba(30,41,59,0.55)", borderRadius: "10px" }}>
-                  <p style={{ margin: "0 0 4px", fontSize: "0.8rem", opacity: 0.7 }}>Current match</p>
-                  <p style={{ margin: "0 0 4px", fontSize: "0.85rem" }}>
-                    {metrics.engagement.match.mode} · {metrics.engagement.match.difficulty} · Best of {metrics.engagement.match.bestOf}
-                  </p>
-                  <p style={matchStatStyle}>
-                    Active {formatDuration(metrics.engagement.match.activeMs)} · Total {formatDuration(metrics.engagement.match.durationMs)}
-                  </p>
-                  <p style={matchStatStyle}>
-                    Rounds {formatCount(metrics.engagement.match.roundsPlayed)} · Clicks {formatCount(metrics.engagement.match.clickCount)}
-                  </p>
-                  <p style={matchStatStyle}>
-                    Idle {formatCount(metrics.engagement.match.idleCount)} · {formatDuration(metrics.engagement.match.idleDurationMs)}
-                  </p>
-                </div>
-              )}
-            </div>
+            ) : (
+              <>
+                {comparisonMetrics && (
+                  <div style={comparisonContainerStyle}>
+                    <p style={{ margin: "0 0 8px", fontSize: "0.85rem", opacity: 0.8 }}>
+                      Comparing {comparisonMetrics[0].record.name} ↔ {comparisonMetrics[1].record.name}
+                    </p>
+                    <div style={comparisonGridStyle}>
+                      <div style={compareCardStyle}>
+                        <p style={compareTitleStyle}>Median response time</p>
+                        <p style={compareValueStyle}>{formatMs(comparisonMetrics[0].metrics.response.median)}</p>
+                        <p style={compareDeltaStyle}>
+                          Δ <DeltaBadge value={(comparisonMetrics[1].metrics.response.median ?? 0) - (comparisonMetrics[0].metrics.response.median ?? 0)} /> ms
+                        </p>
+                      </div>
+                      <div style={compareCardStyle}>
+                        <p style={compareTitleStyle}>Active time</p>
+                        <p style={compareValueStyle}>{formatDuration(comparisonMetrics[0].metrics.engagement.activeMs)}</p>
+                        <p style={compareDeltaStyle}>
+                          Δ <DeltaBadge value={((comparisonMetrics[1].metrics.engagement.activeMs ?? 0) - (comparisonMetrics[0].metrics.engagement.activeMs ?? 0)) / 1000} /> s
+                        </p>
+                      </div>
+                      <div style={compareCardStyle}>
+                        <p style={compareTitleStyle}>Scoped clicks</p>
+                        <p style={compareValueStyle}>{formatCount(comparisonMetrics[0].metrics.click.filteredClicks.length)}</p>
+                        <p style={compareDeltaStyle}>
+                          Δ <DeltaBadge value={comparisonMetrics[1].metrics.click.filteredClicks.length - comparisonMetrics[0].metrics.click.filteredClicks.length} />
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
-            <div style={cardStyle}>
-              <h4 style={cardTitleStyle}>Click activity</h4>
-              <div style={{ display: "grid", gap: "6px", fontSize: "0.9rem" }}>
-                <div style={statRowStyle}>
-                  <span>Scoped clicks</span>
-                  <strong>{formatCount(metrics.click.filteredClicks.length)}</strong>
+                <div style={historyControlsStyle}>
+                  <input
+                    type="search"
+                    placeholder="Search snapshots"
+                    value={search}
+                    onChange={event => handleSearchChange(event.target.value)}
+                    style={searchInputStyle}
+                  />
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ fontSize: "0.75rem", opacity: 0.7 }}>
+                      Page {currentPage + 1} of {pageCount}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handlePageChange("prev")}
+                      disabled={currentPage === 0}
+                      style={smallButtonStyle}
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handlePageChange("next")}
+                      disabled={currentPage >= pageCount - 1}
+                      style={smallButtonStyle}
+                    >
+                      Next
+                    </button>
+                  </div>
                 </div>
-                <div style={statRowStyle}>
-                  <span>Session clicks</span>
-                  <strong>{formatCount(metrics.click.sessionTotalClicks)}</strong>
-                </div>
-                <div style={statRowStyle}>
-                  <span>Session interactions</span>
-                  <strong>{formatCount(metrics.click.sessionTotalInteractions)}</strong>
-                </div>
-              </div>
-              <div style={{ marginTop: "12px", display: "grid", gap: "8px" }}>
-                <div>
-                  <p style={{ margin: "0 0 4px", fontSize: "0.8rem", opacity: 0.75 }}>Top views</p>
-                  {metrics.click.topViews.length ? (
-                    <ul style={listStyle}>
-                      {metrics.click.topViews.map(item => (
-                        <li key={item.key}>
-                          <strong>{item.key}</strong> · {formatCount(item.count)}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p style={emptyListStyle}>No view clicks yet.</p>
-                  )}
-                </div>
-                <div>
-                  <p style={{ margin: "0 0 4px", fontSize: "0.8rem", opacity: 0.75 }}>Top elements</p>
-                  {metrics.click.topElements.length ? (
-                    <ul style={listStyle}>
-                      {metrics.click.topElements.map(item => (
-                        <li key={item.key}>
-                          <strong>{item.key}</strong> · {formatCount(item.count)}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p style={emptyListStyle}>No element interactions yet.</p>
-                  )}
-                </div>
-              </div>
-            </div>
 
-            <div style={cardStyle}>
-              <h4 style={cardTitleStyle}>Click speed</h4>
-              <div style={{ display: "grid", gap: "6px", fontSize: "0.9rem" }}>
-                <div style={statRowStyle}>
-                  <span>Average interval</span>
-                  <strong>{formatMs(metrics.clickSpeed.average)}</strong>
-                </div>
-                <div style={statRowStyle}>
-                  <span>Median interval</span>
-                  <strong>{formatMs(metrics.clickSpeed.median)}</strong>
-                </div>
-                <div style={statRowStyle}>
-                  <span>Last interval</span>
-                  <strong>{formatMs(metrics.clickSpeed.last)}</strong>
-                </div>
-                <div style={statRowStyle}>
-                  <span>Peak burst (10s)</span>
-                  <strong>{formatCount(metrics.clickSpeed.peak10s)}</strong>
-                </div>
-                <div style={statRowStyle}>
-                  <span>Latest burst</span>
-                  <strong>{formatCount(metrics.clickSpeed.latest10s)}</strong>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ background: "rgba(15,25,45,0.72)", borderRadius: "12px", padding: "16px", display: "grid", gap: "12px" }}>
-            <h4 style={{ margin: 0 }}>Click heatmap ({metrics.click.filteredClicks.length} clicks)</h4>
-            <Heatmap records={metrics.click.filteredClicks} resolution={heatmapResolution} />
-          </div>
-
-          <div style={{ background: "rgba(15,25,45,0.72)", borderRadius: "12px", padding: "16px" }}>
-            <h4 style={{ margin: "0 0 12px" }}>Recent rounds</h4>
-            <div style={{ overflowX: "auto" }}>
-              <table style={tableStyle}>
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Mode</th>
-                    <th>Difficulty</th>
-                    <th>Round time</th>
-                    <th>Response time</th>
-                    <th>Outcome</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {metrics.tableRounds.slice(0, 12).map(round => {
-                    const roundDuration = round.completedAt != null && round.readyAt != null ? round.completedAt - round.readyAt : null;
-                    return (
-                      <tr key={`${round.matchId}-${round.roundNumber}`}>
-                        <td>{round.roundNumber}</td>
-                        <td>{round.mode}</td>
-                        <td>{round.difficulty}</td>
-                        <td>{formatDuration(roundDuration)}</td>
-                        <td>{formatMs(round.responseTimeMs ?? null)}</td>
-                        <td style={{ textTransform: "capitalize" }}>{round.outcome ?? "–"}</td>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={tableStyle}>
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Captured</th>
+                        <th>Trigger</th>
+                        <th>Notes</th>
+                        <th>Pin</th>
+                        <th>Export</th>
                       </tr>
-                    );
-                  })}
-                  {!metrics.tableRounds.length && (
-                    <tr>
-                      <td colSpan={6} style={{ textAlign: "center", opacity: 0.7 }}>
-                        No rounds match the current filters yet.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
+                    </thead>
+                    <tbody>
+                      {paginatedHistory.map(record => {
+                        const isSelected = record.id === selectedSnapshotId;
+                        return (
+                          <tr
+                            key={record.id}
+                            onClick={() => handleRowClick(record)}
+                            style={{
+                              cursor: "pointer",
+                              background: isSelected ? "rgba(59,130,246,0.2)" : record.pinned ? "rgba(253,224,71,0.08)" : "transparent",
+                            }}
+                          >
+                            <td>
+                              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={compareSelection.includes(record.id)}
+                                  onChange={() => handleCompareToggle(record.id)}
+                                  onClick={event => event.stopPropagation()}
+                                />
+                                <span>{record.name}</span>
+                              </div>
+                            </td>
+                            <td>{formatDateTime(record.createdAt)}</td>
+                            <td>{formatTriggerLabel(record.trigger)}</td>
+                            <td style={{ minWidth: "160px" }}>
+                              <textarea
+                                value={record.notes}
+                                placeholder="Notes"
+                                onChange={event => instrumentationSnapshots.updateNotes(record.scope, record.id, event.target.value)}
+                                onClick={event => event.stopPropagation()}
+                                style={notesInputStyle}
+                              />
+                            </td>
+                            <td style={{ textAlign: "center" }}>
+                              <button
+                                type="button"
+                                onClick={event => {
+                                  event.stopPropagation();
+                                  instrumentationSnapshots.togglePin(record.scope, record.id);
+                                }}
+                                style={smallButtonStyle}
+                              >
+                                {record.pinned ? "Unpin" : "Pin"}
+                              </button>
+                            </td>
+                            <td>
+                              <div style={{ display: "flex", gap: "6px", justifyContent: "center" }}>
+                                <button
+                                  type="button"
+                                  onClick={event => {
+                                    event.stopPropagation();
+                                    downloadSnapshot(record, "json");
+                                  }}
+                                  style={smallButtonStyle}
+                                >
+                                  JSON
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={event => {
+                                    event.stopPropagation();
+                                    downloadSnapshot(record, "csv");
+                                  }}
+                                  style={smallButtonStyle}
+                                >
+                                  CSV
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {!paginatedHistory.length && (
+                        <tr>
+                          <td colSpan={6} style={{ textAlign: "center", opacity: 0.7 }}>
+                            No snapshots match this search.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
 
-      <div style={{ display: "grid", gap: "16px", background: "rgba(15,25,45,0.72)", borderRadius: "12px", padding: "16px" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
-          <h4 style={{ margin: 0 }}>Live snapshots</h4>
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            <button
-              type="button"
-              onClick={() => downloadSnapshotRange(records.slice(0, 10), "json", `${scope.playerId ?? "all"}_latest`)}
-              disabled={!records.length}
-              style={smallButtonStyle}
-            >
-              Export latest (JSON)
-            </button>
-            <button
-              type="button"
-              onClick={() => downloadSnapshotRange(records.slice(0, 10), "csv", `${scope.playerId ?? "all"}_latest`)}
-              disabled={!records.length}
-              style={smallButtonStyle}
-            >
-              Export latest (CSV)
-            </button>
-          </div>
-        </div>
-        {liveRecords.length ? (
-          <div style={{ display: "grid", gap: "12px" }}>
-            {liveRecords.map(record => (
-              <SnapshotCard
-                key={record.id}
-                record={record}
-                scope={scope}
-                selected={compareSelection.includes(record.id)}
-                onToggleCompare={() => handleToggleCompare(record.id)}
-              />
-            ))}
-          </div>
-        ) : (
-          <p style={{ margin: 0, opacity: 0.7 }}>No snapshots captured yet for this scope.</p>
-        )}
-      </div>
-
-      <div style={{ background: "rgba(15,25,45,0.72)", borderRadius: "12px", padding: "16px", display: "grid", gap: "12px" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
-          <h4 style={{ margin: 0 }}>Snapshot history</h4>
-          <input
-            type="search"
-            placeholder="Search snapshots"
-            value={search}
-            onChange={event => {
-              setSearch(event.target.value);
-              setPage(0);
-            }}
-            style={{
-              padding: "8px 12px",
-              borderRadius: "8px",
-              border: "1px solid rgba(255,255,255,0.12)",
-              background: "rgba(15,23,42,0.85)",
-              color: "white",
-              minWidth: "200px",
-            }}
-          />
-        </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={tableStyle}>
-            <thead>
-              <tr>
-                <th style={{ width: "24px" }}>Compare</th>
-                <th>Name</th>
-                <th>Captured</th>
-                <th>Trigger</th>
-                <th>Notes</th>
-                <th>Pin</th>
-                <th>Export</th>
-              </tr>
-            </thead>
-            <tbody>
-              {paginatedHistory.map(record => (
-                <HistoryRow
-                  key={record.id}
-                  record={record}
-                  scope={scope}
-                  selected={compareSelection.includes(record.id)}
-                  onToggleCompare={() => handleToggleCompare(record.id)}
-                />
-              ))}
-              {!paginatedHistory.length && (
-                <tr>
-                  <td colSpan={7} style={{ textAlign: "center", opacity: 0.7 }}>
-                    No snapshots match this search.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-          <span style={{ fontSize: "0.8rem", opacity: 0.7 }}>
-            Page {currentPage + 1} of {pageCount}
-          </span>
-          <div style={{ display: "flex", gap: "8px" }}>
-            <button
-              type="button"
-              onClick={() => setPage(prev => Math.max(0, prev - 1))}
-              disabled={currentPage === 0}
-              style={smallButtonStyle}
-            >
-              Previous
-            </button>
-            <button
-              type="button"
-              onClick={() => setPage(prev => Math.min(pageCount - 1, prev + 1))}
-              disabled={currentPage >= pageCount - 1}
-              style={smallButtonStyle}
-            >
-              Next
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {comparisonMetrics && comparisonMetrics.length === 2 && (
-        <div style={{ background: "rgba(15,25,45,0.8)", borderRadius: "12px", padding: "16px", display: "grid", gap: "12px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-            <h4 style={{ margin: 0 }}>Comparison</h4>
-            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-              <button
-                type="button"
-                onClick={() => downloadSnapshotRange(selectedRecords, "json", `${scope.playerId ?? "all"}_compare`)}
-                style={smallButtonStyle}
-              >
-                Export selected (JSON)
-              </button>
-              <button
-                type="button"
-                onClick={() => downloadSnapshotRange(selectedRecords, "csv", `${scope.playerId ?? "all"}_compare`)}
-                style={smallButtonStyle}
-              >
-                Export selected (CSV)
-              </button>
-            </div>
-          </div>
-          <p style={{ margin: 0, fontSize: "0.85rem", opacity: 0.75 }}>
-            Base: {comparisonMetrics[0].record.name} · Compare: {comparisonMetrics[1].record.name}
-          </p>
-          <div style={{ display: "grid", gap: "12px", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
-            <div style={compareCardStyle}>
-              <p style={compareTitleStyle}>Median response time</p>
-              <p style={compareValueStyle}>{formatMs(comparisonMetrics[0].metrics.response.median)}</p>
-              <p style={compareDeltaStyle}>
-                Δ <DeltaBadge value={(comparisonMetrics[1].metrics.response.median ?? 0) - (comparisonMetrics[0].metrics.response.median ?? 0)} /> ms
-              </p>
-            </div>
-            <div style={compareCardStyle}>
-              <p style={compareTitleStyle}>Active time</p>
-              <p style={compareValueStyle}>{formatDuration(comparisonMetrics[0].metrics.engagement.activeMs)}</p>
-              <p style={compareDeltaStyle}>
-                Δ <DeltaBadge value={((comparisonMetrics[1].metrics.engagement.activeMs ?? 0) - (comparisonMetrics[0].metrics.engagement.activeMs ?? 0)) / 1000} /> s
-              </p>
-            </div>
-            <div style={compareCardStyle}>
-              <p style={compareTitleStyle}>Scoped clicks</p>
-              <p style={compareValueStyle}>{formatCount(comparisonMetrics[0].metrics.click.filteredClicks.length)}</p>
-              <p style={compareDeltaStyle}>
-                Δ <DeltaBadge value={comparisonMetrics[1].metrics.click.filteredClicks.length - comparisonMetrics[0].metrics.click.filteredClicks.length} />
-              </p>
-            </div>
+                {activeDetailRecord && detailMetrics && (
+                  <div style={detailPanelStyle}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+                      <div>
+                        <h3 style={{ margin: "0 0 4px" }}>{activeDetailRecord.name}</h3>
+                        <p style={{ margin: 0, fontSize: "0.8rem", opacity: 0.7 }}>
+                          Captured {formatDateTime(activeDetailRecord.createdAt)} · {formatTriggerLabel(activeDetailRecord.trigger)}
+                        </p>
+                      </div>
+                    </div>
+                    <MetricCards metrics={detailMetrics} />
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}
     </div>
   );
+};
+
+const scopeBarStyle: React.CSSProperties = {
+  position: "sticky",
+  top: 0,
+  zIndex: 6,
+  background: "rgba(11,18,32,0.94)",
+  backdropFilter: "blur(10px)",
+  borderRadius: "12px",
+  padding: "16px",
+  display: "flex",
+  flexDirection: "column",
+  gap: "16px",
+};
+
+const scopeControlsStyle: React.CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "12px",
+};
+
+const scopeLabelStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "4px",
+  fontSize: "0.75rem",
+};
+
+const scopeSelectStyle: React.CSSProperties = {
+  padding: "6px 10px",
+  borderRadius: "8px",
+  border: "1px solid rgba(148,163,184,0.3)",
+  background: "rgba(9,14,26,0.85)",
+  color: "inherit",
+  minWidth: "140px",
+};
+
+const dateRangeStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "6px",
+  fontSize: "0.75rem",
+};
+
+const clearButtonStyle: React.CSSProperties = {
+  background: "transparent",
+  border: "1px solid rgba(148,163,184,0.4)",
+  color: "#e2e8f0",
+  borderRadius: "999px",
+  padding: "4px 10px",
+  cursor: "pointer",
+  fontSize: "0.75rem",
+};
+
+const sourceSwitchStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  flexWrap: "wrap",
+};
+
+function sourceButtonStyle(active: boolean): React.CSSProperties {
+  return {
+    background: active ? "rgba(59,130,246,0.35)" : "rgba(255,255,255,0.08)",
+    border: active ? "1px solid rgba(59,130,246,0.6)" : "1px solid rgba(148,163,184,0.3)",
+    color: "#e2e8f0",
+    borderRadius: "999px",
+    padding: "6px 14px",
+    cursor: "pointer",
+    fontSize: "0.75rem",
+    fontWeight: active ? 600 : 500,
+  };
+}
+
+const toastStyle: React.CSSProperties = {
+  background: "rgba(37,99,235,0.2)",
+  border: "1px solid rgba(37,99,235,0.5)",
+  color: "#bfdbfe",
+  padding: "10px 14px",
+  borderRadius: "10px",
+  fontSize: "0.85rem",
+};
+
+const tabSwitchStyle: React.CSSProperties = {
+  display: "flex",
+  gap: "12px",
+};
+
+function tabButtonStyle(active: boolean): React.CSSProperties {
+  return {
+    background: active ? "#2563eb" : "rgba(148,163,184,0.2)",
+    border: "none",
+    color: "white",
+    padding: "8px 16px",
+    borderRadius: "999px",
+    cursor: "pointer",
+    fontWeight: active ? 600 : 500,
+  };
+}
+
+const panelStyle: React.CSSProperties = {
+  background: "rgba(15,25,45,0.8)",
+  borderRadius: "12px",
+  padding: "16px",
+  display: "flex",
+  flexDirection: "column",
+  gap: "16px",
+};
+
+function statusPillStyle(state: "receiving" | "paused" | "empty"): React.CSSProperties {
+  const base: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "6px",
+    borderRadius: "999px",
+    padding: "6px 12px",
+    fontSize: "0.75rem",
+    fontWeight: 600,
+  };
+  if (state === "receiving") {
+    return { ...base, background: "rgba(34,197,94,0.18)", color: "#bbf7d0", border: "1px solid rgba(34,197,94,0.45)" };
+  }
+  if (state === "paused") {
+    return { ...base, background: "rgba(148,163,184,0.18)", color: "#e2e8f0", border: "1px solid rgba(148,163,184,0.4)" };
+  }
+  return { ...base, background: "rgba(251,191,36,0.18)", color: "#fde68a", border: "1px solid rgba(251,191,36,0.4)" };
+}
+
+function statusDotStyle(state: "receiving" | "paused" | "empty"): React.CSSProperties {
+  const color = state === "receiving" ? "#22c55e" : state === "paused" ? "#94a3b8" : "#facc15";
+  return { width: "8px", height: "8px", borderRadius: "999px", background: color };
+}
+
+const controlRowStyle: React.CSSProperties = {
+  display: "flex",
+  gap: "12px",
+  flexWrap: "wrap",
+};
+
+const primaryButtonStyle: React.CSSProperties = {
+  background: "#2563eb",
+  border: "none",
+  color: "white",
+  padding: "8px 16px",
+  borderRadius: "8px",
+  cursor: "pointer",
+  fontWeight: 600,
+};
+
+function autoCaptureButtonStyle(enabled: boolean, disabled: boolean): React.CSSProperties {
+  return {
+    background: enabled ? "rgba(34,197,94,0.2)" : "rgba(148,163,184,0.18)",
+    border: enabled ? "1px solid rgba(34,197,94,0.45)" : "1px solid rgba(148,163,184,0.35)",
+    color: enabled ? "#bbf7d0" : "#e2e8f0",
+    padding: "8px 16px",
+    borderRadius: "8px",
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.5 : 1,
+    fontWeight: 600,
+  };
+}
+
+const emptyStateStyle: React.CSSProperties = {
+  background: "rgba(15,23,42,0.75)",
+  borderRadius: "12px",
+  padding: "20px",
+  border: "1px dashed rgba(148,163,184,0.4)",
+};
+
+const metricsGridStyle: React.CSSProperties = {
+  display: "grid",
+  gap: "16px",
+  gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+};
+
+const comparisonContainerStyle: React.CSSProperties = {
+  background: "rgba(15,23,42,0.85)",
+  borderRadius: "12px",
+  padding: "16px",
+  display: "grid",
+  gap: "12px",
+};
+
+const comparisonGridStyle: React.CSSProperties = {
+  display: "grid",
+  gap: "12px",
+  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+};
+
+const historyControlsStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: "12px",
+  flexWrap: "wrap",
+};
+
+const searchInputStyle: React.CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: "8px",
+  border: "1px solid rgba(148,163,184,0.35)",
+  background: "rgba(9,14,26,0.85)",
+  color: "inherit",
+  minWidth: "220px",
+};
+
+const notesInputStyle: React.CSSProperties = {
+  width: "100%",
+  minHeight: "48px",
+  borderRadius: "8px",
+  border: "1px solid rgba(148,163,184,0.3)",
+  background: "rgba(9,14,26,0.9)",
+  color: "inherit",
+  padding: "6px 8px",
+  resize: "vertical",
+};
+
+const detailPanelStyle: React.CSSProperties = {
+  background: "rgba(15,23,42,0.85)",
+  borderRadius: "12px",
+  padding: "16px",
+  display: "grid",
+  gap: "12px",
 };
 
 const cardStyle: React.CSSProperties = {
@@ -1024,7 +1554,7 @@ const smallButtonStyle: React.CSSProperties = {
 };
 
 const compareCardStyle: React.CSSProperties = {
-  background: "rgba(30,41,59,0.65)",
+  background: "rgba(15,25,45,0.72)",
   borderRadius: "12px",
   padding: "16px",
   display: "grid",
@@ -1034,118 +1564,5 @@ const compareCardStyle: React.CSSProperties = {
 const compareTitleStyle: React.CSSProperties = { margin: 0, fontSize: "0.8rem", opacity: 0.7 };
 const compareValueStyle: React.CSSProperties = { margin: 0, fontSize: "1.1rem", fontWeight: 600 };
 const compareDeltaStyle: React.CSSProperties = { margin: 0, fontSize: "0.85rem", opacity: 0.8 };
-
-interface SnapshotCardProps {
-  record: InstrumentationSnapshotRecord;
-  scope: InstrumentationScope;
-  selected: boolean;
-  onToggleCompare: () => void;
-}
-
-function SnapshotCard({ record, scope, selected, onToggleCompare }: SnapshotCardProps) {
-  const handlePin = () => {
-    instrumentationSnapshots.togglePin(scope, record.id);
-  };
-  return (
-    <div style={{ background: "rgba(15,23,42,0.82)", borderRadius: "12px", padding: "14px", display: "grid", gap: "8px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
-        <div>
-          <p style={{ margin: "0 0 4px", fontWeight: 600 }}>{record.name}</p>
-          <p style={{ margin: 0, fontSize: "0.75rem", opacity: 0.65 }}>
-            {formatDateTime(record.createdAt)} · {record.trigger}
-          </p>
-        </div>
-        <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.75rem" }}>
-          <input type="checkbox" checked={selected} onChange={onToggleCompare} /> Compare
-        </label>
-      </div>
-      <textarea
-        placeholder="Add notes"
-        value={record.notes}
-        onChange={event => instrumentationSnapshots.updateNotes(scope, record.id, event.target.value)}
-        style={{
-          minHeight: "60px",
-          borderRadius: "8px",
-          border: "1px solid rgba(255,255,255,0.12)",
-          background: "rgba(15,23,42,0.9)",
-          color: "white",
-          padding: "8px",
-          resize: "vertical",
-        }}
-      />
-      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-        <button type="button" onClick={() => downloadSnapshot(record, "json")} style={smallButtonStyle}>
-          JSON
-        </button>
-        <button type="button" onClick={() => downloadSnapshot(record, "csv")} style={smallButtonStyle}>
-          CSV
-        </button>
-        <button
-          type="button"
-          onClick={handlePin}
-          style={{
-            ...smallButtonStyle,
-            background: record.pinned ? "rgba(234,179,8,0.25)" : smallButtonStyle.background,
-            border: record.pinned ? "1px solid rgba(234,179,8,0.6)" : smallButtonStyle.border,
-            color: record.pinned ? "#facc15" : smallButtonStyle.color,
-          }}
-        >
-          {record.pinned ? "Pinned" : "Pin"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-interface HistoryRowProps {
-  record: InstrumentationSnapshotRecord;
-  scope: InstrumentationScope;
-  selected: boolean;
-  onToggleCompare: () => void;
-}
-
-function HistoryRow({ record, scope, selected, onToggleCompare }: HistoryRowProps) {
-  const handlePin = () => instrumentationSnapshots.togglePin(scope, record.id);
-  return (
-    <tr style={{ background: record.pinned ? "rgba(253,224,71,0.08)" : "transparent" }}>
-      <td style={{ textAlign: "center" }}>
-        <input type="checkbox" checked={selected} onChange={onToggleCompare} />
-      </td>
-      <td>{record.name}</td>
-      <td>{formatDateTime(record.createdAt)}</td>
-      <td>{record.trigger}</td>
-      <td style={{ minWidth: "160px" }}>
-        <textarea
-          value={record.notes}
-          onChange={event => instrumentationSnapshots.updateNotes(scope, record.id, event.target.value)}
-          placeholder="Notes"
-          style={{
-            width: "100%",
-            minHeight: "48px",
-            borderRadius: "8px",
-            border: "1px solid rgba(148,163,184,0.2)",
-            background: "rgba(15,23,42,0.85)",
-            color: "white",
-            padding: "6px 8px",
-            resize: "vertical",
-          }}
-        />
-      </td>
-      <td style={{ textAlign: "center" }}>
-        <button type="button" onClick={handlePin} style={smallButtonStyle}>
-          {record.pinned ? "Unpin" : "Pin"}
-        </button>
-      </td>
-      <td style={{ display: "flex", gap: "6px", justifyContent: "center" }}>
-        <button type="button" onClick={() => downloadSnapshot(record, "json")} style={smallButtonStyle}>
-          JSON
-        </button>
-        <button type="button" onClick={() => downloadSnapshot(record, "csv")} style={smallButtonStyle}>
-          CSV
-        </button>
-      </td>
-    </tr>
-  );
-}
 
 export default InstrumentationTab;

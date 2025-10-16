@@ -21,6 +21,7 @@ export interface InstrumentationSnapshotRecord {
 interface StorageScopeEntry {
   version: number;
   snapshots: InstrumentationSnapshotRecord[];
+  autoCaptureEnabled?: boolean;
 }
 
 interface SnapshotStorage {
@@ -34,6 +35,21 @@ type Listener = () => void;
 
 function scopeKey(scope: InstrumentationScope): string {
   return `${scope.playerId ?? "__anon"}::${scope.profileId ?? "__all"}`;
+}
+
+function ensureScopeEntry(storage: SnapshotStorage, scope: InstrumentationScope): StorageScopeEntry {
+  const key = scopeKey(scope);
+  const existing = storage.scopes[key];
+  if (existing) {
+    return existing;
+  }
+  const entry: StorageScopeEntry = {
+    version: 0,
+    snapshots: [],
+    autoCaptureEnabled: false,
+  };
+  storage.scopes[key] = entry;
+  return entry;
 }
 
 function readStorage(): SnapshotStorage {
@@ -105,7 +121,7 @@ class InstrumentationSnapshotStore {
     }
     const current = readStorage();
     const key = scopeKey(scope);
-    const entry: StorageScopeEntry = current.scopes[key] ?? { version: 0, snapshots: [] };
+    const entry = ensureScopeEntry(current, scope);
     const createdAt = new Date().toISOString();
     const version = entry.version + 1;
     const record: InstrumentationSnapshotRecord = {
@@ -130,7 +146,7 @@ class InstrumentationSnapshotStore {
     if (snapshots.length > MAX_SNAPSHOTS_PER_SCOPE) {
       snapshots.length = MAX_SNAPSHOTS_PER_SCOPE;
     }
-    current.scopes[key] = { version, snapshots };
+    current.scopes[key] = { ...entry, version, snapshots };
     writeStorage(current);
     this.emit();
     return record;
@@ -191,6 +207,23 @@ class InstrumentationSnapshotStore {
     writeStorage(current);
     this.emit();
   }
+
+  isAutoCaptureEnabled(scope: InstrumentationScope): boolean {
+    const current = readStorage();
+    const key = scopeKey(scope);
+    const entry = current.scopes[key];
+    return Boolean(entry?.autoCaptureEnabled);
+  }
+
+  setAutoCaptureEnabled(scope: InstrumentationScope, enabled: boolean) {
+    const current = readStorage();
+    const entry = ensureScopeEntry(current, scope);
+    if (entry.autoCaptureEnabled === enabled) return;
+    entry.autoCaptureEnabled = enabled;
+    current.scopes[scopeKey(scope)] = { ...entry };
+    writeStorage(current);
+    this.emit();
+  }
 }
 
 export const instrumentationSnapshots = new InstrumentationSnapshotStore();
@@ -218,6 +251,23 @@ export function useInstrumentationScopes(): InstrumentationScope[] {
   }, []);
 
   return useMemo(() => scopes, [scopes]);
+}
+
+export function useAutoCapture(scope: InstrumentationScope | null): boolean {
+  const [enabled, setEnabled] = useState<boolean>(() => (scope ? instrumentationSnapshots.isAutoCaptureEnabled(scope) : false));
+
+  useEffect(() => {
+    if (!scope) {
+      setEnabled(false);
+      return () => {};
+    }
+    setEnabled(instrumentationSnapshots.isAutoCaptureEnabled(scope));
+    return instrumentationSnapshots.subscribe(() => {
+      setEnabled(instrumentationSnapshots.isAutoCaptureEnabled(scope));
+    });
+  }, [scope?.playerId, scope?.profileId, scope?.playerName, scope?.profileName]);
+
+  return enabled;
 }
 
 export function exportSnapshotToJson(record: InstrumentationSnapshotRecord): string {

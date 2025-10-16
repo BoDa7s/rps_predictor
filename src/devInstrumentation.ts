@@ -10,8 +10,8 @@ const BURST_WINDOW_MS = 10_000;
 const MAX_ROUND_HISTORY = 200;
 const MAX_CLICK_HISTORY = 400;
 const MAX_INTERVAL_HISTORY = 200;
-const AUTO_SNAPSHOT_ROUND_INTERVAL = 5;
-const AUTO_SNAPSHOT_INTERVAL_MS = 3 * 60_000;
+const AUTO_SNAPSHOT_ROUND_INTERVAL = 10;
+const AUTO_SNAPSHOT_INTERVAL_MS = 2 * 60_000;
 
 export type InstrumentationScope = {
   playerId: string | null;
@@ -460,7 +460,7 @@ class DevInstrumentation {
   }
 
   captureSnapshot(trigger: SnapshotTrigger = "manual") {
-    this.requestSnapshot(trigger);
+    this.requestSnapshot(trigger, { force: true });
   }
 
   matchStarted(payload: MatchStartPayload) {
@@ -722,13 +722,18 @@ class DevInstrumentation {
     this.emit();
   };
 
-  private requestSnapshot(trigger: SnapshotTrigger) {
+  private requestSnapshot(trigger: SnapshotTrigger, options: { force?: boolean } = {}) {
     if (!this.scope.playerId) return;
+    if (!options.force && !instrumentationSnapshots.isAutoCaptureEnabled(this.scope)) {
+      return;
+    }
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     const snapshot = this.getSnapshot();
-    instrumentationSnapshots.saveSnapshot({ ...this.scope }, snapshot, trigger);
-    this.lastSnapshotAt = now;
-    this.roundsSinceSnapshot = 0;
+    const saved = instrumentationSnapshots.saveSnapshot({ ...this.scope }, snapshot, trigger);
+    if (saved) {
+      this.lastSnapshotAt = now;
+      this.roundsSinceSnapshot = 0;
+    }
   }
 
   private handleFocus = () => {
