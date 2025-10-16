@@ -241,7 +241,8 @@ function describeElement(target: EventTarget | null): { name: string; id?: strin
     return { name: "unknown" };
   }
   const element = target as HTMLElement;
-  const id = element.id || undefined;
+  const dataId = element.dataset.devLabel || element.dataset.analyticsId;
+  const id = dataId || element.id || undefined;
   const dataName = element.dataset.analyticsId || element.dataset.devLabel;
   const aria = element.getAttribute("aria-label") || element.getAttribute("aria-labelledby");
   const text = element.textContent?.trim();
