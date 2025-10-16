@@ -1450,17 +1450,19 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
                 roundMatchFilter={roundMatchFilter}
                 focusedMatch={focusedMatch}
               />
-              <FilterBar
-                playerOptions={playerSummaries}
-                profileOptions={profilesForList}
-                filters={filters}
-                onPlayerChange={handleSelectPlayer}
-                onProfileChange={handleSelectProfile}
-                onModeChange={handleModeFilterChange}
-                onDifficultyChange={handleDifficultyFilterChange}
-                onDateChange={handleDateRangeChange}
-                onClearAll={clearAllFilters}
-              />
+              {tab !== "instrumentation" && (
+                <FilterBar
+                  playerOptions={playerSummaries}
+                  profileOptions={profilesForList}
+                  filters={filters}
+                  onPlayerChange={handleSelectPlayer}
+                  onProfileChange={handleSelectProfile}
+                  onModeChange={handleModeFilterChange}
+                  onDifficultyChange={handleDifficultyFilterChange}
+                  onDateChange={handleDateRangeChange}
+                  onClearAll={clearAllFilters}
+                />
+              )}
             </div>
             <div
               style={{
