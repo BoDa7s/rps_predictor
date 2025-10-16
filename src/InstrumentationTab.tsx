@@ -1220,9 +1220,6 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
 };
 
 const scopeBarStyle: React.CSSProperties = {
-  position: "sticky",
-  top: 0,
-  zIndex: 6,
   background: "rgba(11,18,32,0.94)",
   backdropFilter: "blur(10px)",
   borderRadius: "12px",
@@ -1231,7 +1228,7 @@ const scopeBarStyle: React.CSSProperties = {
   gap: "16px",
 };
 
-  const scopeSummaryStyle: React.CSSProperties = {
+const scopeSummaryStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: "6px",
