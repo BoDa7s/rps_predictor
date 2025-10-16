@@ -13,60 +13,87 @@ import {
 
 const PAGE_SIZE = 8;
 const CORE_ONLY_STORAGE_KEY = "rps_dev_instrumentation_core_only";
-const CORE_ELEMENT_ALLOWLIST = new Set([
-  "hdr.stats",
-  "hdr.leaderboard",
-  "hdr.player",
-  "hdr.modes",
-  "hdr.settings",
-  "hdr.trainingBadge",
-  "hdr.aiConfBadge",
-  "mode.challenge.card",
-  "mode.practice.card",
-  "hand.rock",
-  "hand.paper",
-  "hand.scissors",
-  "robot.icon.click",
-  "robot.bubble.link",
-  "set.editDemographics",
-  "set.createPlayer",
-  "set.profile.select",
-  "set.profile.createNew",
-  "set.exportCSV",
-  "set.resetTraining",
-  "set.aiPredictor.on",
-  "set.aiPredictor.off",
-  "set.difficulty.fair",
-  "set.difficulty.normal",
-  "set.difficulty.ruthless",
-  "set.bestOf.3",
-  "set.bestOf.5",
-  "set.bestOf.7",
-  "set.audio.on",
-  "set.audio.off",
-  "set.textSize.slider",
-  "set.welcomeAgain.on",
-  "set.welcomeAgain.off",
-  "set.reboot",
-  "stats.tab.overview",
-  "stats.tab.matches",
-  "stats.tab.rounds",
-  "stats.tab.insights",
-  "stats.profile.select",
-  "stats.profile.new",
-  "stats.exportCSV",
-  "stats.close",
-  "lb.close",
-  "dev.inst.captureSnapshot",
-  "dev.inst.exportLatest.json",
-  "dev.inst.exportLatest.csv",
-  "dev.inst.heatmap.toggle",
-  "dev.inst.liveTab",
-  "dev.inst.historyTab",
-  "dev.inst.autoCapture.on",
-  "dev.inst.autoCapture.off",
-  "dev.inst.history.record",
-]);
+const CORE_CONTROL_GROUPS = [
+  {
+    title: "Header (Modes & Training)",
+    buttons: [
+      { id: "hdr.stats", label: "Statistics" },
+      { id: "hdr.leaderboard", label: "Leaderboard" },
+      { id: "hdr.player", label: "Player • Name/Grade" },
+      { id: "hdr.modes", label: "Modes" },
+      { id: "hdr.settings", label: "Settings" },
+      { id: "hdr.trainingBadge", label: "Training badge" },
+      { id: "hdr.aiConfBadge", label: "AI conf badge" },
+    ],
+  },
+  {
+    title: "Modes screen",
+    buttons: [
+      { id: "mode.challenge.card", label: "Challenge card" },
+      { id: "mode.practice.card", label: "Practice card" },
+    ],
+  },
+  {
+    title: "Training / Match",
+    buttons: [
+      { id: "hand.rock", label: "Rock" },
+      { id: "hand.paper", label: "Paper" },
+      { id: "hand.scissors", label: "Scissors" },
+    ],
+  },
+  {
+    title: "Robot",
+    buttons: [
+      { id: "robot.icon.click", label: "Robot icon" },
+      { id: "robot.bubble.link", label: "Robot quick action" },
+    ],
+  },
+  {
+    title: "Settings (drawer)",
+    buttons: [
+      { id: "set.editDemographics", label: "Edit demographics" },
+      { id: "set.createPlayer", label: "Create new player" },
+      { id: "set.profile.select", label: "Profile dropdown" },
+      { id: "set.profile.createNew", label: "Create new profile" },
+      { id: "set.exportCSV", label: "Export CSV" },
+      { id: "set.resetTraining", label: "Reset AI training" },
+      { id: "set.aiPredictor.on", label: "AI Predictor • On" },
+      { id: "set.aiPredictor.off", label: "AI Predictor • Off" },
+      { id: "set.difficulty.fair", label: "Difficulty • Fair" },
+      { id: "set.difficulty.normal", label: "Difficulty • Normal" },
+      { id: "set.difficulty.ruthless", label: "Difficulty • Ruthless" },
+      { id: "set.bestOf.3", label: "Best of 3" },
+      { id: "set.bestOf.5", label: "Best of 5" },
+      { id: "set.bestOf.7", label: "Best of 7" },
+      { id: "set.audio.on", label: "Audio • On" },
+      { id: "set.audio.off", label: "Audio • Off" },
+      { id: "set.welcomeAgain.on", label: "Show welcome again • On" },
+      { id: "set.welcomeAgain.off", label: "Show welcome again • Off" },
+      { id: "set.reboot", label: "Reboot" },
+    ],
+  },
+  {
+    title: "Statistics (modal)",
+    buttons: [
+      { id: "stats.tab.overview", label: "Overview tab" },
+      { id: "stats.tab.matches", label: "Matches tab" },
+      { id: "stats.tab.rounds", label: "Rounds tab" },
+      { id: "stats.tab.insights", label: "Insights tab" },
+      { id: "stats.profile.select", label: "Profile dropdown" },
+      { id: "stats.profile.new", label: "New profile" },
+      { id: "stats.exportCSV", label: "Export CSV" },
+      { id: "stats.close", label: "Close" },
+    ],
+  },
+  {
+    title: "Leaderboard (modal)",
+    buttons: [{ id: "lb.close", label: "Close" }],
+  },
+];
+
+const CORE_CONTROL_IDS = CORE_CONTROL_GROUPS.flatMap(group => group.buttons.map(button => button.id));
+
+const CORE_ELEMENT_ALLOWLIST = new Set(CORE_CONTROL_IDS);
 
 interface InstrumentationTabProps {
   snapshot: DevInstrumentationSnapshot | null;
@@ -137,6 +164,10 @@ type DerivedMetrics = {
     peak10s: number;
     latest10s: number;
   };
+  coreButtons: Array<{
+    group: string;
+    buttons: Array<{ id: string; label: string; count10m: number }>;
+  }>;
 };
 
 function formatMs(value: number | null, options: { decimals?: number } = {}): string {
@@ -363,6 +394,10 @@ function deriveMetrics(
         topElements: [],
       },
       clickSpeed: { average: null, median: null, last: null, peak10s: 0, latest10s: 0 },
+      coreButtons: CORE_CONTROL_GROUPS.map(group => ({
+        group: group.title,
+        buttons: group.buttons.map(button => ({ ...button, count10m: 0 })),
+      })),
     };
   }
 
@@ -415,6 +450,27 @@ function deriveMetrics(
   const topElements = buildTopList(filteredClicks, entry => (entry.elementId ? `${entry.target}#${entry.elementId}` : entry.target));
   const clickSpeed = computeClickSpeed(filteredClicks);
 
+  const counts = new Map<string, number>();
+  if (coreOnly) {
+    const relativeNow = Math.max(0, snapshot.capturedAt - snapshot.timeOrigin);
+    const windowStart = Math.max(0, relativeNow - 10 * 60 * 1000);
+    filteredClicks.forEach(entry => {
+      const id = entry.elementId;
+      if (!id) return;
+      if (entry.timestamp >= windowStart) {
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+      }
+    });
+  }
+
+  const coreButtons = CORE_CONTROL_GROUPS.map(group => ({
+    group: group.title,
+    buttons: group.buttons.map(button => ({
+      ...button,
+      count10m: counts.get(button.id) ?? 0,
+    })),
+  }));
+
   return {
     hasSnapshot: true,
     filteredRounds,
@@ -445,6 +501,7 @@ function deriveMetrics(
       topElements,
     },
     clickSpeed,
+    coreButtons,
   };
 }
 
@@ -576,7 +633,15 @@ function resolveScopeLabels(
   return { player, profile };
 }
 
-function MetricCards({ metrics, showTrend = false }: { metrics: DerivedMetrics; showTrend?: boolean }) {
+function MetricCards({
+  metrics,
+  showTrend = false,
+  coreOnly,
+}: {
+  metrics: DerivedMetrics;
+  showTrend?: boolean;
+  coreOnly: boolean;
+}) {
   return (
     <div style={metricsGridStyle}>
       <div style={cardStyle}>
@@ -657,6 +722,30 @@ function MetricCards({ metrics, showTrend = false }: { metrics: DerivedMetrics; 
           </div>
         )}
       </div>
+
+      {coreOnly && metrics.coreButtons.length > 0 && (
+        <div style={cardStyle}>
+          <h4 style={cardTitleStyle}>Core controls (last 10 minutes)</h4>
+          <p style={{ margin: 0, fontSize: "0.75rem", opacity: 0.75 }}>
+            Auto-refreshing counts for allowlisted buttons while the view is live. Recorded snapshots reflect totals at capture
+            time.
+          </p>
+          <div style={{ display: "grid", gap: "12px" }}>
+            {metrics.coreButtons.map(group => (
+              <div key={group.group}>
+                <p style={coreGroupTitleStyle}>{group.group}</p>
+                <ul style={listStyle}>
+                  {group.buttons.map(button => (
+                    <li key={button.id}>
+                      <strong>{button.label}</strong> · {formatCount(button.count10m)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={cardStyle}>
         <h4 style={cardTitleStyle}>Click activity</h4>
@@ -1127,7 +1216,7 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
               </p>
             </div>
           ) : (
-            <MetricCards metrics={liveMetrics} showTrend />
+            <MetricCards metrics={liveMetrics} showTrend coreOnly={coreOnly} />
           )}
         </div>
       ) : (
@@ -1326,7 +1415,7 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
                         <p style={{ margin: 0, fontSize: "0.9rem" }}>No core-control interactions for this scope.</p>
                       </div>
                     ) : (
-                      <MetricCards metrics={detailMetrics} />
+                      <MetricCards metrics={detailMetrics} coreOnly={coreOnly} />
                     )}
                   </div>
                 )}
@@ -1606,6 +1695,7 @@ const cardStyle: React.CSSProperties = {
 };
 
 const cardTitleStyle: React.CSSProperties = { margin: 0, fontSize: "0.95rem", fontWeight: 600 };
+const coreGroupTitleStyle: React.CSSProperties = { margin: "0 0 6px", fontSize: "0.8rem", opacity: 0.75, fontWeight: 600 };
 const statRowStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: "12px" };
 const matchStatStyle: React.CSSProperties = { margin: "4px 0", fontSize: "0.8rem", opacity: 0.8 };
 const listStyle: React.CSSProperties = { margin: 0, paddingLeft: "18px", display: "grid", gap: "4px", fontSize: "0.85rem" };
