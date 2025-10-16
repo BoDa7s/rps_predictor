@@ -456,22 +456,6 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
       : adminProfiles;
     return scopedProfiles.slice().sort((a, b) => a.name.localeCompare(b.name));
   }, [adminProfiles, filters.playerId]);
-  const instrumentationPlayerOptions = useMemo(
-    () =>
-      playerSummaries.map(summary => ({
-        value: summary.player.id,
-        label: summary.player.playerName,
-      })),
-    [playerSummaries],
-  );
-  const instrumentationProfileOptions = useMemo(
-    () =>
-      profilesForList.map(profile => ({
-        value: profile.id,
-        label: profile.name,
-      })),
-    [profilesForList],
-  );
 
   const filteredMatches = useMemo(() => {
     const { playerId, profileId, mode, difficulty, dateRange } = filters;
@@ -1450,19 +1434,17 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
                 roundMatchFilter={roundMatchFilter}
                 focusedMatch={focusedMatch}
               />
-              {tab !== "instrumentation" && (
-                <FilterBar
-                  playerOptions={playerSummaries}
-                  profileOptions={profilesForList}
-                  filters={filters}
-                  onPlayerChange={handleSelectPlayer}
-                  onProfileChange={handleSelectProfile}
-                  onModeChange={handleModeFilterChange}
-                  onDifficultyChange={handleDifficultyFilterChange}
-                  onDateChange={handleDateRangeChange}
-                  onClearAll={clearAllFilters}
-                />
-              )}
+              <FilterBar
+                playerOptions={playerSummaries}
+                profileOptions={profilesForList}
+                filters={filters}
+                onPlayerChange={handleSelectPlayer}
+                onProfileChange={handleSelectProfile}
+                onModeChange={handleModeFilterChange}
+                onDifficultyChange={handleDifficultyFilterChange}
+                onDateChange={handleDateRangeChange}
+                onClearAll={clearAllFilters}
+              />
             </div>
             <div
               style={{
@@ -1575,16 +1557,6 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
                   dateRange={filters.dateRange}
                   playerName={selectedPlayer?.playerName ?? null}
                   profileName={selectedProfile?.name ?? null}
-                  selectedPlayerId={filters.playerId}
-                  selectedProfileId={filters.profileId}
-                  playerOptions={instrumentationPlayerOptions}
-                  profileOptions={instrumentationProfileOptions}
-                  onPlayerChange={handleSelectPlayer}
-                  onProfileChange={handleSelectProfile}
-                  onModeChange={handleModeFilterChange}
-                  onDifficultyChange={handleDifficultyFilterChange}
-                  onDateRangeChange={handleDateRangeChange}
-                  onClearDateRange={clearDateRange}
                   source={instrumentationSource}
                   onSourceChange={setInstrumentationSource}
                   autoCaptureEnabled={autoCaptureEnabled}

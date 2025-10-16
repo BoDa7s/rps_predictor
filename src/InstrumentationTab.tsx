@@ -21,16 +21,6 @@ interface InstrumentationTabProps {
   dateRange: { start: string | null; end: string | null };
   playerName: string | null;
   profileName: string | null;
-  selectedPlayerId: string | null;
-  selectedProfileId: string | null;
-  playerOptions: Array<{ value: string; label: string }>;
-  profileOptions: Array<{ value: string; label: string }>;
-  onPlayerChange: (playerId: string | null) => void;
-  onProfileChange: (profileId: string | null) => void;
-  onModeChange: (mode: Mode | "") => void;
-  onDifficultyChange: (difficulty: AIMode | "") => void;
-  onDateRangeChange: (field: "start" | "end", value: string) => void;
-  onClearDateRange: () => void;
   source: "selected" | "active";
   onSourceChange: (source: "selected" | "active") => void;
   autoCaptureEnabled: boolean;
@@ -692,16 +682,6 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
   dateRange,
   playerName,
   profileName,
-  selectedPlayerId,
-  selectedProfileId,
-  playerOptions,
-  profileOptions,
-  onPlayerChange,
-  onProfileChange,
-  onModeChange,
-  onDifficultyChange,
-  onDateRangeChange,
-  onClearDateRange,
   source,
   onSourceChange,
   autoCaptureEnabled,
@@ -922,91 +902,28 @@ const InstrumentationTab: React.FC<InstrumentationTabProps> = ({
   const autoCaptureDisabled = !scope?.playerId;
   const historyEmpty = !records.length;
   const liveEmpty = liveStatus.state === "empty";
+  const scopePlayerLabel = playerName ?? "All players";
+  const scopeProfileLabel = profileName ?? "All profiles";
+  const scopeModeLabel = modeFilter ? titleCase(modeFilter) : "Any mode";
+  const scopeDifficultyLabel = difficultyFilter ? titleCase(difficultyFilter) : "All difficulties";
+  const scopeDateLabel =
+    dateRange.start || dateRange.end ? `${dateRange.start ?? "…"} → ${dateRange.end ?? "…"}` : "Full history";
 
   return (
     <div style={{ display: "grid", gap: "16px" }}>
       <div style={scopeBarStyle}>
-        <div style={scopeControlsStyle}>
-          <label style={scopeLabelStyle}>
-            <span>Player</span>
-            <select
-              value={selectedPlayerId ?? ""}
-              onChange={event => onPlayerChange(event.target.value ? event.target.value : null)}
-              style={scopeSelectStyle}
-            >
-              <option value="">All players</option>
-              {playerOptions.map(option => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label style={scopeLabelStyle}>
-            <span>Profile</span>
-            <select
-              value={selectedProfileId ?? ""}
-              onChange={event => onProfileChange(event.target.value ? event.target.value : null)}
-              style={scopeSelectStyle}
-            >
-              <option value="">All profiles</option>
-              {profileOptions.map(option => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label style={scopeLabelStyle}>
-            <span>Mode</span>
-            <select
-              value={modeFilter}
-              onChange={event => onModeChange(event.target.value as Mode | "")}
-              style={scopeSelectStyle}
-            >
-              <option value="">Any mode</option>
-              {MODE_CHOICES.map(option => (
-                <option key={option} value={option}>
-                  {titleCase(option)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label style={scopeLabelStyle}>
-            <span>Difficulty</span>
-            <select
-              value={difficultyFilter}
-              onChange={event => onDifficultyChange(event.target.value as AIMode | "")}
-              style={scopeSelectStyle}
-            >
-              <option value="">All difficulties</option>
-              {DIFFICULTY_CHOICES.map(option => (
-                <option key={option} value={option}>
-                  {titleCase(option)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div style={dateRangeStyle}>
-            <span>Date range 📅</span>
-            <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-              <input
-                type="date"
-                value={dateRange.start ?? ""}
-                onChange={event => onDateRangeChange("start", event.target.value)}
-                style={scopeSelectStyle}
-              />
-              <input
-                type="date"
-                value={dateRange.end ?? ""}
-                onChange={event => onDateRangeChange("end", event.target.value)}
-                style={scopeSelectStyle}
-              />
-              <button type="button" onClick={onClearDateRange} style={clearButtonStyle}>
-                Clear
-              </button>
-            </div>
+    <div style={scopeSummaryStyle}>
+          <span style={{ fontSize: "0.75rem", opacity: 0.7 }}>Instrumentation scope</span>
+          <div style={scopeSummaryValuesStyle}>
+            <span>{scopePlayerLabel}</span>
+            <span>• {scopeProfileLabel}</span>
           </div>
+          <div style={scopeSummaryFiltersStyle}>
+            <span>Mode: {scopeModeLabel}</span>
+            <span>Difficulty: {scopeDifficultyLabel}</span>
+            <span>Dates: {scopeDateLabel}</span>
+          </div>
+          <span style={scopeSummaryHintStyle}>Adjust the global filter bar above to change these values.</span>
         </div>
         <div style={scopeActionsStyle}>
           <div style={sourceSwitchStyle}>
@@ -1314,38 +1231,30 @@ const scopeBarStyle: React.CSSProperties = {
   gap: "16px",
 };
 
-const scopeControlsStyle: React.CSSProperties = {
-  display: "grid",
-  gap: "12px",
-  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-  alignItems: "start",
-};
-
-const scopeLabelStyle: React.CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: "4px",
-  fontSize: "0.75rem",
-  width: "100%",
-};
-
-const scopeSelectStyle: React.CSSProperties = {
-  padding: "6px 10px",
-  borderRadius: "8px",
-  border: "1px solid rgba(148,163,184,0.3)",
-  background: "rgba(9,14,26,0.85)",
-  color: "inherit",
-  width: "100%",
-  minWidth: 0,
-};
-
-const dateRangeStyle: React.CSSProperties = {
+  const scopeSummaryStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: "6px",
+  fontSize: "0.85rem",
+};
+
+const scopeSummaryValuesStyle: React.CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "6px",
+  fontWeight: 600,
+};
+
+const scopeSummaryFiltersStyle: React.CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "10px",
   fontSize: "0.75rem",
-  gridColumn: "1 / -1",
-  width: "100%",
+  opacity: 0.8,
+};
+const scopeSummaryHintStyle: React.CSSProperties = {
+  fontSize: "0.7rem",
+  opacity: 0.65,
 };
 
 const scopeActionsStyle: React.CSSProperties = {
@@ -1356,15 +1265,6 @@ const scopeActionsStyle: React.CSSProperties = {
   flexWrap: "wrap",
 };
 
-const clearButtonStyle: React.CSSProperties = {
-  background: "transparent",
-  border: "1px solid rgba(148,163,184,0.4)",
-  color: "#e2e8f0",
-  borderRadius: "999px",
-  padding: "4px 10px",
-  cursor: "pointer",
-  fontSize: "0.75rem",
-};
 
 const sourceSwitchStyle: React.CSSProperties = {
   display: "flex",
