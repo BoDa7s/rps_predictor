@@ -3549,8 +3549,25 @@ function RPSDoodleAppInner(){
 
             {/* Fullscreen morph container */}
             <AnimatePresence>
+              {/* Trying to add different colors to challenge and training backgrounds.  Original code block commented out below.  This changed the splash page that welcomes player to the challenge or training mode.  */}
               {selectedMode && (
-                <motion.div key="fs" className={`fullscreen ${selectedMode}`} layoutId={`card-${selectedMode}`} initial={{ borderRadius: 16 }} animate={{ borderRadius: 0, transition: { duration: 0.44, ease: [0.22,0.61,0.36,1] }}}>
+                <motion.div
+                  key="fs"
+                  className={`fullscreen ${
+                    selectedMode === 'challenge'
+                      ? 'bg-red-700'
+                      : selectedMode === 'training'
+                      ? 'bg-blue-700'
+                      : 'bg-gray-700'
+                  }`}
+                  layoutId={`card-${selectedMode}`}
+                  initial={{ borderRadius: 16 }}
+                  animate={{
+                    borderRadius: 0,
+                    transition: { duration: 0.44, ease: [0.22, 0.61, 0.36, 1] },
+                  }}
+                >
+                  {/* <motion.div key="fs" className={`fullscreen ${selectedMode}`} layoutId={`card-${selectedMode}`} initial={{ borderRadius: 16 }} animate={{ borderRadius: 0, transition: { duration: 0.44, ease: [0.22,0.61,0.36,1] }}/> */}
                   <div className="absolute inset-0 grid place-items-center">
                     <motion.div initial={{ scale: .9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: .36 }} className="text-7xl">
                       {selectedMode === 'challenge' ? '🎯' : '💡'}
