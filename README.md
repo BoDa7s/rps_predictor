@@ -1,31 +1,56 @@
 ## [Releases History](../../releases)
 
 Explore previous versions, changelogs, and downloadable artifacts on the project's Releases page.
-# rps_predictor
-Interactive Rock-Paper-Scissors predictor built with React, Framer Motion, and a collection of ensemble AI forecasters.
+# RPS AI Predictor
 
-## Local development
+The RPS AI Predirtor is an interactive Rock–Paper–Scissors web game powered by AI machine learning that challenges players to outsmart an adaptive AI opponent. Instead of picking moves at random, the AI analyzes your play patterns using simple machine-learning logic (like Markov prediction and frequency analysis) to predict your next move.
 
-1. Install dependencies: `npm install`
-2. Start the Vite dev server: `npm run dev`
-3. Open the URL that Vite prints (defaults to http://localhost:5173).
+Players can experiment with different strategies, view live prediction confidence, and see how the AI “learns” over time — making it both fun and educational.
 
-## Production build
+Built with React + TypeScript, the project focuses on:
 
-- Generate an optimized build with `npm run build`. The compiled assets land in `dist/`.
-- Preview the production bundle locally with `npm run preview` (served on http://localhost:4173).
+* Transparent AI behavior (“glass-box” learning)
 
-## Developer console & instrumentation
+* Real-time stats and visual feedback
 
-- Unlock the in-game Developer Control Room to inspect live data.
-- A dedicated **Instrumentation** tab surfaces response-time, engagement, click-activity, and click-speed cards alongside a rolling rounds table and heatmap.
-- Snapshot capture happens automatically on match end, every few rounds, and every few minutes; manual capture is available from the tab.
-- Use the Live Snapshots panel for the most recent entries and paginate/search the full history, with per-snapshot notes, pinning, comparison, and CSV/JSON export.
+* Player profiles and downloadable gameplay data
 
-## Docker
+# Project Background
+This project was developed as part of the University of Texas at San Antonio (UTSA) College of AI, Cyber, and Computing, under the guidance of Dr. Fred Martin.
+
+## Contributors
+
+* Adam Ali – Lead Developer, AI logic & architecture
+
+* John Weaver – Partner & Contributor: background transitions, launchers, and interface refinements
+
+# Installation guides
+
+## Docker (Recommended)
 
 1. Build the image: `docker build -t rps-predictor .`
 2. Run the container: `docker run --rm -p 8080:80 rps-predictor`
 3. Visit http://localhost:8080 to play the game.
 
 The Docker image uses a multi-stage build (Node for compilation, Nginx for serving static files). Rebuild the image whenever you change application code.
+
+## Local development
+
+1. Install dependencies: `npm install`
+2. Build project with `npm run build`
+3. Start the Vite dev server: `npm run dev`
+4. Open the URL that Vite prints (defaults to http://localhost:5173).
+
+## Windows batch launcher
+
+For a one-click experience on Windows, use the provided `launch_RPS_Predictor.bat` script (stored alongside `package.json`). The
+launcher automatically:
+
+- Switches to the project directory where the batch file lives so it stays portable if you move the folder.
+- Verifies that Node.js and npm are available, stopping with helpful guidance if either is missing.
+- Installs dependencies on demand by running `npm install` whenever `node_modules/` is absent.
+- Starts the development server in a new Command Prompt window (`npm run dev`).
+- Opens your default browser to http://localhost:5173 after giving the server a moment to boot.
+
+Just double-click the batch file to start the predictor; close the new Command Prompt window to stop the dev server when you are
+done.
