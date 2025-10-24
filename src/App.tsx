@@ -3556,7 +3556,7 @@ function RPSDoodleAppInner(){
                   className={`fullscreen ${
                     selectedMode === 'challenge'
                       ? 'bg-red-700'
-                      : selectedMode === 'training'
+                      : selectedMode === 'practice'
                       ? 'bg-blue-700'
                       : 'bg-gray-700'
                   }`}
