@@ -2,7 +2,18 @@
 
 Explore previous versions, changelogs, and downloadable artifacts on the project's Releases page.
 # RPS AI Predictor
-Interactive Rock-Paper-Scissors predictor built with React, Framer Motion, and a collection of ensemble AI forecasters.
+
+The RPS AI Predirtor is an interactive Rock–Paper–Scissors web game powered by AI machine learning that challenges players to outsmart an adaptive AI opponent. Instead of picking moves at random, the AI analyzes your play patterns using simple machine-learning logic (like Markov prediction and frequency analysis) to predict your next move.
+
+Players can experiment with different strategies, view live prediction confidence, and see how the AI “learns” over time — making it both fun and educational.
+
+Built with React + TypeScript, the project focuses on:
+
+* Transparent AI behavior (“glass-box” learning)
+
+* Real-time stats and visual feedback
+
+* Player profiles and downloadable gameplay data
 
 # Installation guides
 
