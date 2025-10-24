@@ -5,6 +5,7 @@ Explore previous versions, changelogs, and downloadable artifacts on the project
 Interactive Rock-Paper-Scissors predictor built with React, Framer Motion, and a collection of ensemble AI forecasters.
 
 # Installation guides
+
 ## Docker (Recommended)
 
 1. Build the image: `docker build -t rps-predictor .`
@@ -16,8 +17,9 @@ The Docker image uses a multi-stage build (Node for compilation, Nginx for servi
 ## Local development
 
 1. Install dependencies: `npm install`
-2. Start the Vite dev server: `npm run dev`
-3. Open the URL that Vite prints (defaults to http://localhost:5173).
+2. Build project with `npm run build`
+3. Start the Vite dev server: `npm run dev`
+4. Open the URL that Vite prints (defaults to http://localhost:5173).
 
 ## Windows batch launcher
 
@@ -32,8 +34,3 @@ launcher automatically:
 
 Just double-click the batch file to start the predictor; close the new Command Prompt window to stop the dev server when you are
 done.
-
-## Production build
-
-- Generate an optimized build with `npm run build`. The compiled assets land in `dist/`.
-- Preview the production bundle locally with `npm run preview` (served on http://localhost:4173).
