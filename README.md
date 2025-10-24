@@ -15,8 +15,14 @@ Built with React + TypeScript, the project focuses on:
 
 * Player profiles and downloadable gameplay data
 
-### Project Background
+# Project Background
 This project was developed as part of the University of Texas at San Antonio (UTSA) College of AI, Cyber, and Computing, under the guidance of Dr. Fred Martin.
+
+## Contributors
+
+* Adam Ali – Lead Developer, AI logic & architecture
+
+* John Weaver – Partner & Contributor: background transitions, launchers, and interface refinements
 
 # Installation guides
 
