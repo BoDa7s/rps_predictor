@@ -4085,13 +4085,21 @@ function RPSDoodleAppInner(){
         {isPlayerModalOpen && (
           <motion.div
             key="pmask"
-            className="fixed inset-0 z-[70] bg-black/30 grid place-items-center"
+            className="fixed inset-0 z-[70] bg-black/30 flex items-start justify-center overflow-y-auto p-4 sm:items-center sm:p-6"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onKeyDown={(e:any)=>{ if (e.key==='Escape' && hasConsented) setPlayerModalMode("hidden"); }}
           >
-          <motion.div role="dialog" aria-modal="true" aria-label="Player Setup" className="flex max-h-[90vh] w-[min(94vw,520px)] flex-col overflow-hidden rounded-2xl bg-white shadow-xl" initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 6, opacity: 0 }}>
+            <motion.div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Player Setup"
+              className="flex w-full max-w-[520px] flex-col overflow-hidden rounded-2xl bg-white shadow-xl max-h-[calc(100vh-2rem)] sm:max-h-[90vh]"
+              initial={{ y: 10, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 6, opacity: 0 }}
+            >
               <PlayerSetupForm
                 mode={resolvedModalMode}
                 player={modalPlayer}
