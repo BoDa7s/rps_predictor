@@ -7,7 +7,7 @@ The RPS AI Predirtor is an interactive Rock–Paper–Scissors web game powered 
 
 Players can experiment with different strategies, view live prediction confidence, and see how the AI “learns” over time — making it both fun and educational.
 
-Built with React + TypeScript, the project focuses on:
+**Built with React + TypeScript, the project focuses on:**
 
 * Transparent AI behavior (“glass-box” learning)
 
@@ -16,13 +16,13 @@ Built with React + TypeScript, the project focuses on:
 * Player profiles and downloadable gameplay data
 
 # Project Background
-This project was developed as part of the University of Texas at San Antonio (UTSA) College of AI, Cyber, and Computing, under the guidance of Dr. Fred Martin.
+This project was developed as part of the University of Texas at San Antonio (UTSA) College of AI, Cyber, and Computing, under the guidance of **Dr. Fred Martin**.
 
-## Contributors
+## Contributors 
 
-* Adam Ali – Lead Developer, AI logic & architecture
+* [Adam Ali](https://github.com/BoDa7s) – Lead Developer, AI logic & architecture
 
-* John Weaver – Partner & Contributor: background transitions, launchers, and interface refinements
+* [John Weaver](https://github.com/John-N-Weaver) – Partner & Contributor: background transitions, launchers, and interface refinements
 
 # Installation guides
 
