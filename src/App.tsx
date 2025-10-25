@@ -3683,16 +3683,16 @@ function RPSDoodleAppInner(){
                 </motion.div>
               </div>
 
-              <div className="pointer-events-none flex items-center justify-center py-2 sm:py-0 sm:min-w-[96px]">
-                <AnimatePresence>
+              <div className="pointer-events-none flex items-center justify-center py-6 sm:py-0 sm:min-w-[112px]">
+                <AnimatePresence mode="wait">
                   {phase === "countdown" && count>0 && (
                     <motion.div
                       key={count}
-                      initial={{ y: -16, opacity: 0 }}
-                      animate={{ y: 0, opacity: 1 }}
-                      exit={{ y: 16, opacity: 0 }}
-                      transition={{ duration: .3, ease: [0.22,0.61,0.36,1] }}
-                      className="rounded-full bg-white/80 px-6 py-3 text-2xl font-black text-slate-800 shadow"
+                      initial={{ y: -48, opacity: 0, scale: 0.9, filter: "blur(4px)" }}
+                      animate={{ y: 0, opacity: 1, scale: 1, filter: "blur(0px)" }}
+                      exit={{ y: 48, opacity: 0, scale: 0.9, filter: "blur(4px)" }}
+                      transition={{ duration: .35, ease: [0.22, 0.61, 0.36, 1] }}
+                      className="rounded-full bg-white/90 px-7 py-3 text-2xl font-black text-slate-800 shadow-lg"
                     >
                       {count}
                     </motion.div>
