@@ -2449,7 +2449,7 @@ function RPSDoodleAppInner(){
   },[]);
 
   return (
-    <div className="relative min-h-screen overflow-hidden select-none" style={{ fontSize: `${textScale*16}px` }}>
+    <div className="relative flex min-h-screen flex-col select-none overflow-x-hidden overflow-y-auto" style={{ fontSize: `${textScale*16}px` }}>
       <style>{style}</style>
 
       {/* Parallax background */}
@@ -3789,7 +3789,7 @@ function RPSDoodleAppInner(){
       <AnimatePresence>
         {statsOpen && (
           <motion.div className="fixed inset-0 z-[80] grid place-items-center bg-black/40" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setStatsOpen(false)}>
-            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} transition={{ duration: 0.2 }} className="bg-white rounded-2xl shadow-2xl w-[min(95vw,900px)] max-h-[85vh] overflow-hidden" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" ref={statsModalRef}>
+            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} transition={{ duration: 0.2 }} className="flex w-[min(95vw,900px)] max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" ref={statsModalRef}>
               <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
                 <h2 className="text-lg font-semibold text-slate-800">Statistics</h2>
                 <button onClick={() => setStatsOpen(false)} className="text-slate-500 hover:text-slate-700 text-sm" data-dev-label="stats.close">Close ✕</button>
@@ -3833,7 +3833,7 @@ function RPSDoodleAppInner(){
                   </button>
                 ))}
               </div>
-              <div className="px-4 pb-4 pt-3 overflow-y-auto space-y-4" style={{ maxHeight: "65vh" }}>
+              <div className="flex-1 space-y-4 overflow-y-auto px-4 pb-4 pt-3">
                 {statsTab === "overview" && (
                   <div className="space-y-4">
                     <div className="grid gap-3 sm:grid-cols-4">
@@ -4091,7 +4091,7 @@ function RPSDoodleAppInner(){
             exit={{ opacity: 0 }}
             onKeyDown={(e:any)=>{ if (e.key==='Escape' && hasConsented) setPlayerModalMode("hidden"); }}
           >
-          <motion.div role="dialog" aria-modal="true" aria-label="Player Setup" className="bg-white rounded-2xl shadow-xl w-[min(94vw,520px)]" initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 6, opacity: 0 }}>
+          <motion.div role="dialog" aria-modal="true" aria-label="Player Setup" className="flex max-h-[90vh] w-[min(94vw,520px)] flex-col overflow-hidden rounded-2xl bg-white shadow-xl" initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 6, opacity: 0 }}>
               <PlayerSetupForm
                 mode={resolvedModalMode}
                 player={modalPlayer}
@@ -4344,8 +4344,8 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
   };
 
   return (
-    <form onSubmit={handleSubmit} className="p-5 space-y-4" aria-label="Player setup form">
-      <div className="flex items-center justify-between">
+    <form onSubmit={handleSubmit} className="flex h-full flex-col" aria-label="Player setup form">
+      <div className="flex items-center justify-between px-5 pt-5">
         <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
         <button
           type="button"
@@ -4355,133 +4355,137 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
           {showBackButton ? "Back" : "Close"}
         </button>
       </div>
-      <div className="grid gap-3">
-        {showReviewNotice && (
-          <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-            Please confirm the player name, grade, and age to continue.
-          </div>
-        )}
-        {mode === "create" && (
-          <div className="rounded border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-700">
-            A new player will begin a fresh training session after saving.
-          </div>
-        )}
-        <label className="text-sm font-medium text-slate-700">
-          First name
-          <input
-            type="text"
-            value={firstName}
-            onChange={e => setFirstName(e.target.value)}
-            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
-            placeholder="e.g. Alex"
-            required
-          />
-        </label>
-        <label className="text-sm font-medium text-slate-700">
-          Last name initial
-          <input
-            type="text"
-            value={lastInitial}
-            onChange={e => setLastInitial(e.target.value)}
-            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
-            placeholder="e.g. W"
-            maxLength={3}
-            required
-          />
-        </label>
-        <label className="text-sm font-medium text-slate-700">
-          Grade
-          <select
-            value={grade}
-            onChange={e => setGrade(e.target.value as Grade | "")}
-            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
-            required
-          >
-            <option value="" disabled>
-              Select grade
-            </option>
-            {GRADE_OPTIONS.map(option => (
-              <option key={option} value={option}>
-                {option}
+      <div className="mt-4 flex-1 overflow-y-auto px-5">
+        <div className="space-y-3 pb-5">
+          {showReviewNotice && (
+            <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">
+              Please confirm the player name, grade, and age to continue.
+            </div>
+          )}
+          {mode === "create" && (
+            <div className="rounded border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-700">
+              A new player will begin a fresh training session after saving.
+            </div>
+          )}
+          <label className="text-sm font-medium text-slate-700">
+            First name
+            <input
+              type="text"
+              value={firstName}
+              onChange={e => setFirstName(e.target.value)}
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+              placeholder="e.g. Alex"
+              required
+            />
+          </label>
+          <label className="text-sm font-medium text-slate-700">
+            Last name initial
+            <input
+              type="text"
+              value={lastInitial}
+              onChange={e => setLastInitial(e.target.value)}
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+              placeholder="e.g. W"
+              maxLength={3}
+              required
+            />
+          </label>
+          <label className="text-sm font-medium text-slate-700">
+            Grade
+            <select
+              value={grade}
+              onChange={e => setGrade(e.target.value as Grade | "")}
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+              required
+            >
+              <option value="" disabled>
+                Select grade
               </option>
-            ))}
-          </select>
-        </label>
-        <label className="text-sm font-medium text-slate-700">
-          Age
-          <select
-            value={age}
-            onChange={e => setAge(e.target.value)}
-            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
-            required
-          >
-            <option value="" disabled>
-              Select age
-            </option>
-            {AGE_OPTIONS.map(option => (
-              <option key={option} value={option}>
-                {option}
+              {GRADE_OPTIONS.map(option => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm font-medium text-slate-700">
+            Age
+            <select
+              value={age}
+              onChange={e => setAge(e.target.value)}
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+              required
+            >
+              <option value="" disabled>
+                Select age
               </option>
-            ))}
-          </select>
-        </label>
-        <label className="text-sm font-medium text-slate-700">
-          School (optional)
-          <input
-            type="text"
-            value={school}
-            onChange={e => setSchool(e.target.value)}
-            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
-            placeholder="e.g. Roosevelt Elementary"
-          />
-        </label>
-        <label className="text-sm font-medium text-slate-700">
-          Prior experience (optional)
-          <textarea
-            value={priorExperience}
-            onChange={e => setPriorExperience(e.target.value)}
-            rows={3}
-            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
-            placeholder="Tell us, have you played Rock-Paper-Scissors before, or do you know some AI basics?"
-          />
-        </label>
+              {AGE_OPTIONS.map(option => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm font-medium text-slate-700">
+            School (optional)
+            <input
+              type="text"
+              value={school}
+              onChange={e => setSchool(e.target.value)}
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+              placeholder="e.g. Roosevelt Elementary"
+            />
+          </label>
+          <label className="text-sm font-medium text-slate-700">
+            Prior experience (optional)
+            <textarea
+              value={priorExperience}
+              onChange={e => setPriorExperience(e.target.value)}
+              rows={3}
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+              placeholder="Tell us, have you played Rock-Paper-Scissors before, or do you know some AI basics?"
+            />
+          </label>
+        </div>
       </div>
-      <div className="flex justify-end gap-2">
-        {showBackButton ? (
-          <>
-            <button
-              type="button"
-              onClick={handleBackClick}
-              className="px-3 py-1.5 rounded bg-slate-100 text-slate-700 hover:bg-slate-200"
-            >
-              Back
-            </button>
-            <button
-              type="submit"
-              disabled={saveDisabled}
-              className={`px-3 py-1.5 rounded text-white ${saveDisabled ? 'bg-slate-300 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-700 shadow'}`}
-            >
-              Save profile
-            </button>
-          </>
-        ) : (
-          <>
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-3 py-1.5 rounded bg-slate-100 text-slate-700 hover:bg-slate-200"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={saveDisabled}
-              className={`px-3 py-1.5 rounded text-white ${saveDisabled ? 'bg-slate-300 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-700 shadow'}`}
-            >
-              Save profile
-            </button>
-          </>
-        )}
+      <div className="border-t border-slate-200 bg-white px-5 py-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+          {showBackButton ? (
+            <>
+              <button
+                type="button"
+                onClick={handleBackClick}
+                className="px-3 py-1.5 rounded bg-slate-100 text-slate-700 hover:bg-slate-200"
+              >
+                Back
+              </button>
+              <button
+                type="submit"
+                disabled={saveDisabled}
+                className={`px-3 py-1.5 rounded text-white ${saveDisabled ? 'bg-slate-300 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-700 shadow'}`}
+              >
+                Save profile
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-3 py-1.5 rounded bg-slate-100 text-slate-700 hover:bg-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saveDisabled}
+                className={`px-3 py-1.5 rounded text-white ${saveDisabled ? 'bg-slate-300 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-700 shadow'}`}
+              >
+                Save profile
+              </button>
+            </>
+          )}
+        </div>
       </div>
     </form>
   );
