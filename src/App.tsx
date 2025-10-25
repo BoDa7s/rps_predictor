@@ -3646,11 +3646,6 @@ function RPSDoodleAppInner(){
                       </div>
                     </div>
                   </div>
-                  {showTrainingCompleteBadge && (
-                    <div className="mt-2">
-                      <span className="inline-flex items-center px-2 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-700">Training complete</span>
-                    </div>
-                  )}
                 </>
               )}
             </motion.div>
@@ -3667,7 +3662,7 @@ function RPSDoodleAppInner(){
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: .1 }}
-              className="relative mt-6 grid w-[min(92vw,820px)] gap-4 sm:grid-cols-2"
+              className="relative mt-6 grid w-[min(92vw,820px)] gap-4 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]"
             >
               <div className="flex">
                 <motion.div layout className="relative flex w-full flex-col rounded-3xl bg-white/80 p-5 shadow-lg">
@@ -3686,6 +3681,23 @@ function RPSDoodleAppInner(){
                     </AnimatePresence>
                   </motion.div>
                 </motion.div>
+              </div>
+
+              <div className="pointer-events-none flex items-center justify-center py-2 sm:py-0 sm:min-w-[96px]">
+                <AnimatePresence>
+                  {phase === "countdown" && count>0 && (
+                    <motion.div
+                      key={count}
+                      initial={{ y: -16, opacity: 0 }}
+                      animate={{ y: 0, opacity: 1 }}
+                      exit={{ y: 16, opacity: 0 }}
+                      transition={{ duration: .3, ease: [0.22,0.61,0.36,1] }}
+                      className="rounded-full bg-white/80 px-6 py-3 text-2xl font-black text-slate-800 shadow"
+                    >
+                      {count}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
 
               <div className="flex">
@@ -3707,33 +3719,6 @@ function RPSDoodleAppInner(){
                 </motion.div>
               </div>
 
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <AnimatePresence>
-                  {phase === "countdown" && count>0 && (
-                    <motion.div
-                      key={count}
-                      initial={{ scale: .9, opacity: 0 }}
-                      animate={{ scale: 1.08, opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      transition={{ duration: .3, ease: [0.22,0.61,0.36,1] }}
-                      className="rounded-full bg-white/80 px-6 py-3 text-2xl font-black text-slate-800 shadow"
-                    >
-                      {count}
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-            </motion.div>
-
-            {/* Outcome feedback */}
-            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .15 }} className="h-8 mt-2 text-center text-lg font-semibold">
-              <AnimatePresence mode="wait">
-                {(phase === "resolve" || phase === "feedback") && outcome && (
-                  <motion.div key={outcome} initial={{ y: 8, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -8, opacity: 0 }} transition={{ duration: .22 }} className={ outcome === "win" ? "text-green-700" : outcome === "lose" ? "text-rose-700" : "text-amber-700" }>
-                    {outcome === "win" ? "You win!" : outcome === "lose" ? "You lose." : "Tie."}
-                  </motion.div>
-                )}
-              </AnimatePresence>
             </motion.div>
 
             {/* Controls */}
