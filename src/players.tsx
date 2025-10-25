@@ -17,8 +17,6 @@ export type Grade =
   | "Not applicable";
 
 export type Age = number;
-export type Gender = "Male" | "Female" | "Non-binary" | "Prefer not to say";
-
 export interface PlayerConsent {
   agreed: boolean;
   timestamp?: string; // ISO
@@ -31,7 +29,6 @@ export interface PlayerProfile {
   grade: Grade;
   age: Age | null;
   school?: string;
-  gender?: Gender;
   priorExperience?: string; // free text or simple flag
   consent: PlayerConsent;
   needsReview: boolean;
@@ -62,12 +59,6 @@ function isGrade(value: unknown): value is Grade {
   return typeof value === "string" && GRADE_OPTIONS.includes(value as Grade);
 }
 
-export const GENDER_OPTIONS: Gender[] = ["Male", "Female", "Non-binary", "Prefer not to say"];
-
-function isGender(value: unknown): value is Gender {
-  return typeof value === "string" && GENDER_OPTIONS.includes(value as Gender);
-}
-
 export function sanitizeAge(value: unknown): Age | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     const rounded = Math.round(value);
@@ -81,14 +72,13 @@ export function sanitizeAge(value: unknown): Age | null {
 }
 
 function normalizeConsent(value: any): PlayerConsent {
-  if (value && typeof value === "object" && typeof value.agreed === "boolean") {
-    return {
-      agreed: value.agreed,
-      timestamp: typeof value.timestamp === "string" ? value.timestamp : undefined,
-      consentTextVersion: typeof value.consentTextVersion === "string" ? value.consentTextVersion : CONSENT_TEXT_VERSION,
-    };
-  }
-  return { agreed: false, consentTextVersion: CONSENT_TEXT_VERSION };
+  const timestamp = value && typeof value.timestamp === "string" ? value.timestamp : undefined;
+  const version = value && typeof value.consentTextVersion === "string" ? value.consentTextVersion : CONSENT_TEXT_VERSION;
+  return {
+    agreed: true,
+    timestamp,
+    consentTextVersion: version,
+  };
 }
 
 function normalizePlayer(raw: any): PlayerProfile | null {
@@ -103,7 +93,6 @@ function normalizePlayer(raw: any): PlayerProfile | null {
 
   const age = sanitizeAge(raw.age);
   const school = typeof raw.school === "string" ? raw.school : undefined;
-  const gender = isGender(raw.gender) ? raw.gender : undefined;
   const priorExperience = typeof raw.priorExperience === "string" ? raw.priorExperience : undefined;
   const consent = normalizeConsent(raw.consent);
 
@@ -116,7 +105,6 @@ function normalizePlayer(raw: any): PlayerProfile | null {
     grade,
     age,
     school,
-    gender,
     priorExperience,
     consent,
     needsReview,
@@ -185,7 +173,7 @@ export function PlayersProvider({ children }: { children: React.ReactNode }){
   useEffect(() => { saveCurrentId(currentPlayerId); }, [currentPlayerId]);
 
   const currentPlayer = useMemo(() => players.find(p => p.id === currentPlayerId) || null, [players, currentPlayerId]);
-  const hasConsented = !!(currentPlayer && currentPlayer.consent?.agreed);
+  const hasConsented = currentPlayer != null;
 
   const setCurrentPlayer = useCallback((id: string | null) => {
     setCurrentPlayerId(id);

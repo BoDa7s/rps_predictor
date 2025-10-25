@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { motion, AnimatePresence } from "framer-motion";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, DecisionPolicy } from "./stats";
-import { PlayersProvider, usePlayers, Grade, Gender, PlayerProfile, CONSENT_TEXT_VERSION, GRADE_OPTIONS, GENDER_OPTIONS } from "./players";
+import { PlayersProvider, usePlayers, Grade, PlayerProfile, CONSENT_TEXT_VERSION, GRADE_OPTIONS } from "./players";
 import { DEV_MODE_ENABLED } from "./devMode";
 import { DeveloperConsole } from "./DeveloperConsole";
 import { devInstrumentation } from "./devInstrumentation";
@@ -2973,7 +2973,7 @@ function RPSDoodleAppInner(){
               onClick={() => setLeaderboardOpen(true)}
               className={"px-3 py-1.5 rounded-xl shadow text-sm " + (hasConsented ? "bg-white/70 hover:bg-white text-sky-900" : "bg-white/50 text-slate-400 cursor-not-allowed")}
               disabled={!hasConsented}
-              title={!hasConsented ? "Check consent to continue." : undefined}
+              title={!hasConsented ? "Select a player to continue." : undefined}
               data-dev-label="hdr.leaderboard"
             >
               Leaderboard
@@ -2997,7 +2997,7 @@ function RPSDoodleAppInner(){
                 }
                 goToMode();
               }}
-              title={!hasConsented ? "Check consent to continue." : undefined}
+              title={!hasConsented ? "Select a player to continue." : undefined}
               disabled={modesDisabled || !hasConsented}
               className={"px-3 py-1.5 rounded-xl shadow text-sm " + ((modesDisabled || !hasConsented) ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900")}
               data-dev-label="hdr.modes"
@@ -4260,29 +4260,46 @@ interface PlayerSetupFormProps {
 
 const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => 5 + index);
 
+function extractNameParts(fullName: string){
+  const trimmed = fullName.trim();
+  if (!trimmed) return { firstName: "", lastInitial: "" };
+  const segments = trimmed.split(/\s+/);
+  if (segments.length === 1) {
+    return { firstName: segments[0], lastInitial: "" };
+  }
+  const lastSegment = segments[segments.length - 1].replace(/[^A-Za-z]/g, "");
+  const first = segments.slice(0, -1).join(" ");
+  const initial = lastSegment ? lastSegment[0].toUpperCase() : "";
+  return { firstName: first, lastInitial: initial };
+}
+
+function formatLastInitial(value: string){
+  const match = value.trim().match(/[A-Za-z]/);
+  const upper = match ? match[0].toUpperCase() : "";
+  return upper ? `${upper}.` : "";
+}
+
 function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updatePlayer, origin, onBack }: PlayerSetupFormProps){
-  const [playerName, setPlayerName] = useState(player?.playerName ?? "");
+  const [firstName, setFirstName] = useState("");
+  const [lastInitial, setLastInitial] = useState("");
   const [grade, setGrade] = useState<Grade | "">(player?.grade ?? "");
   const [age, setAge] = useState<string>(player?.age != null ? String(player.age) : "");
   const [school, setSchool] = useState(player?.school ?? "");
-  const [gender, setGender] = useState<Gender>(player?.gender ?? "Prefer not to say");
   const [priorExperience, setPriorExperience] = useState(player?.priorExperience ?? "");
-  const [consentChecked, setConsentChecked] = useState<boolean>(player?.consent?.agreed ?? false);
 
   useEffect(() => {
-    setPlayerName(player?.playerName ?? "");
+    const parts = extractNameParts(player?.playerName ?? "");
+    setFirstName(parts.firstName);
+    setLastInitial(parts.lastInitial);
     setGrade(player?.grade ?? "");
     setAge(player?.age != null ? String(player.age) : "");
     setSchool(player?.school ?? "");
-    setGender(player?.gender ?? "Prefer not to say");
     setPriorExperience(player?.priorExperience ?? "");
-    setConsentChecked(player?.consent?.agreed ?? false);
   }, [player, mode]);
 
-  const saveDisabled = !playerName.trim() || !grade || !age || !consentChecked;
+  const saveDisabled = !firstName.trim() || !lastInitial.trim() || !grade || !age;
   const title = mode === "edit" ? "Edit player demographics" : "Create new player";
   const showReviewNotice = mode === "edit" && player?.needsReview;
-  const genderOptions = GENDER_OPTIONS;
   const showBackButton = origin === "welcome" && mode === "create";
   const handleBackClick = () => {
     if (onBack) {
@@ -4294,23 +4311,25 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
-    const trimmedName = playerName.trim();
-    if (!trimmedName || !grade || !age || !consentChecked) return;
+    const trimmedFirst = firstName.trim();
+    const trimmedLast = lastInitial.trim();
+    if (!trimmedFirst || !trimmedLast || !grade || !age) return;
     const parsedAge = Number.parseInt(age, 10);
     if (!Number.isFinite(parsedAge)) return;
     const schoolValue = school.trim();
     const priorValue = priorExperience.trim();
+    const formattedLastInitial = formatLastInitial(trimmedLast);
+    const combinedName = formattedLastInitial ? `${trimmedFirst} ${formattedLastInitial}` : trimmedFirst;
     const consent = {
-      agreed: consentChecked,
+      agreed: true,
       timestamp: new Date().toISOString(),
       consentTextVersion: CONSENT_TEXT_VERSION,
     };
     const payload = {
-      playerName: trimmedName,
+      playerName: combinedName,
       grade: grade as Grade,
       age: parsedAge,
       school: schoolValue ? schoolValue : undefined,
-      gender,
       priorExperience: priorValue ? priorValue : undefined,
       consent,
       needsReview: false,
@@ -4348,13 +4367,25 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
           </div>
         )}
         <label className="text-sm font-medium text-slate-700">
-          Player name
+          First name
           <input
             type="text"
-            value={playerName}
-            onChange={e => setPlayerName(e.target.value)}
+            value={firstName}
+            onChange={e => setFirstName(e.target.value)}
             className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
             placeholder="e.g. Alex"
+            required
+          />
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          Last name initial
+          <input
+            type="text"
+            value={lastInitial}
+            onChange={e => setLastInitial(e.target.value)}
+            className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
+            placeholder="e.g. W"
+            maxLength={3}
             required
           />
         </label>
@@ -4405,30 +4436,16 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
           />
         </label>
         <label className="text-sm font-medium text-slate-700">
-          Gender
-          <select value={gender} onChange={e => setGender(e.target.value as Gender)} className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner">
-            {genderOptions.map(option => (
-              <option key={option} value={option}>{option}</option>
-            ))}
-          </select>
-        </label>
-        <label className="text-sm font-medium text-slate-700">
           Prior experience (optional)
           <textarea
             value={priorExperience}
             onChange={e => setPriorExperience(e.target.value)}
             rows={3}
             className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
-            placeholder="Tell us about previous AI or RPS experience"
+            placeholder="Tell us, have you played Rock-Paper-Scissors before, or do you know some AI basics?"
           />
         </label>
       </div>
-      <label className="flex items-start gap-3 text-sm text-slate-700">
-        <input type="checkbox" checked={consentChecked} onChange={e => setConsentChecked(e.target.checked)} className="mt-1" />
-        <span>
-          I consent to participate in this activity and understand how my gameplay data will be used (consent text {CONSENT_TEXT_VERSION}).
-        </span>
-      </label>
       <div className="flex justify-end gap-2">
         {showBackButton ? (
           <>

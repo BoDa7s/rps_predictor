@@ -99,12 +99,11 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
   }, [open, onClose]);
 
   const playersById = useMemo(() => {
-    const map = new Map<string, { name: string; grade?: Grade; consented: boolean }>();
+    const map = new Map<string, { name: string; grade?: Grade }>();
     players.forEach(player => {
       map.set(player.id, {
         name: player.playerName,
         grade: player.grade,
-        consented: Boolean(player.consent?.agreed),
       });
     });
     return map;
@@ -129,7 +128,7 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
     adminMatches.forEach(match => {
       if (match.mode !== "challenge" && match.mode !== "practice") return;
       const player = playersById.get(match.playerId);
-      if (!player || !player.consented) return;
+      if (!player) return;
       const matchKey = match.clientId ?? match.id;
       const rounds = roundsByMatchId.get(matchKey) ?? [];
       if (!rounds.length) return;

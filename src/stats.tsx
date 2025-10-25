@@ -568,7 +568,6 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       "grade",
       "age",
       "school",
-      "gender",
       "priorExperience",
       "profileName",
       "timestamp",
@@ -589,7 +588,6 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     const grade = currentPlayer?.grade ?? "";
     const age = currentPlayer?.age != null ? currentPlayer.age : "";
     const school = currentPlayer?.school ?? "";
-    const gender = currentPlayer?.gender ?? "";
     const prior = currentPlayer?.priorExperience ?? "";
     const profileName = currentProfile?.name ?? "";
     rounds.forEach(r => {
@@ -599,7 +597,6 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         grade,
         age,
         JSON.stringify(school ?? ""),
-        JSON.stringify(gender ?? ""),
         JSON.stringify(prior ?? ""),
         JSON.stringify(profileName),
         r.t,
