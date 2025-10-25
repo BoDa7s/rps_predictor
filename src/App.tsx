@@ -3600,7 +3600,7 @@ function RPSDoodleAppInner(){
               </div>
             )}
             {/* HUD */}
-            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .05 }} className="w-[min(92vw,680px)] bg-white/70 rounded-2xl shadow px-4 py-3">
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .05 }} className="w-[min(92vw,820px)] bg-white/70 rounded-2xl shadow px-4 py-3">
               {(needsTraining || trainingActive) ? (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-sm text-slate-700">
@@ -3613,11 +3613,37 @@ function RPSDoodleAppInner(){
                 </div>
               ) : (
                 <>
-                  <div className="flex items-center justify-between">
-                    <div className="text-sm text-slate-700">Round <strong>{round}</strong> / Best of {bestOf}</div>
-                    <div className="flex items-center gap-6 text-xl">
-                      <div className="flex items-center gap-2"><span className="text-slate-500 text-sm">You</span><strong>{playerScore}</strong></div>
-                      <div className="flex items-center gap-2"><span className="text-slate-500 text-sm">AI</span><strong>{aiScore}</strong></div>
+                  <div className="flex flex-col items-center gap-3 text-center">
+                    <div className="text-sm text-slate-700">Round <strong>{round}</strong> • Best of {bestOf}</div>
+                    <span
+                      className={`inline-flex items-center justify-center rounded-full px-4 py-1 text-xs font-semibold uppercase tracking-wide ${
+                        (phase === "resolve" || phase === "feedback") && outcome
+                          ? outcome === "win"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : outcome === "lose"
+                              ? "bg-rose-100 text-rose-700"
+                              : "bg-amber-100 text-amber-700"
+                          : "bg-slate-200 text-slate-600"
+                      }`}
+                    >
+                      {(phase === "resolve" || phase === "feedback") && outcome
+                        ? outcome === "win"
+                          ? "WIN"
+                          : outcome === "lose"
+                            ? "LOSS"
+                            : "TIE"
+                        : "READY"}
+                    </span>
+                    <div className="flex items-center gap-8 text-2xl font-semibold text-slate-900">
+                      <div className="flex flex-col items-center gap-1 text-base font-normal text-slate-500">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">You</span>
+                        <span className="text-3xl font-semibold text-slate-900">{playerScore}</span>
+                      </div>
+                      <div className="h-10 w-px bg-slate-200" aria-hidden />
+                      <div className="flex flex-col items-center gap-1 text-base font-normal text-slate-500">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">AI</span>
+                        <span className="text-3xl font-semibold text-slate-900">{aiScore}</span>
+                      </div>
                     </div>
                   </div>
                   {showTrainingCompleteBadge && (
@@ -3630,50 +3656,77 @@ function RPSDoodleAppInner(){
             </motion.div>
 
             {trainingActive && (
-              <div className="mt-3 w-[min(92vw,680px)] flex items-center justify-between text-sm text-slate-600">
+              <div className="mt-3 w-[min(92vw,820px)] flex items-center justify-between text-sm text-slate-600">
                 <span>Keep playing to finish training.</span>
                 <span className="text-slate-500">Training completes after {TRAIN_ROUNDS} rounds.</span>
               </div>
             )}
 
             {/* Arena */}
-            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .1 }} className="mt-6 w-[min(92vw,680px)] grid grid-rows-[1fr_auto_1fr] gap-4">
-              <div className="grid place-items-center">
-                <motion.div layout className="text-5xl" aria-label="AI hand" role="img">
-                  <AnimatePresence mode="popLayout">
-                    {aiPick && (
-                      <motion.div key={aiPick} initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
-                        <span>{moveEmoji[aiPick]}</span>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: .1 }}
+              className="relative mt-6 grid w-[min(92vw,820px)] gap-4 sm:grid-cols-2"
+            >
+              <div className="flex">
+                <motion.div layout className="relative flex w-full flex-col rounded-3xl bg-white/80 p-5 shadow-lg">
+                  <div className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">You</div>
+                  <motion.div layout className="flex flex-1 items-center justify-center text-6xl" aria-label="Your hand" role="img">
+                    <AnimatePresence mode="popLayout">
+                      {playerPick ? (
+                        <motion.span key={playerPick} initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
+                          {moveEmoji[playerPick]}
+                        </motion.span>
+                      ) : (
+                        <motion.span key="you-placeholder" initial={{ opacity: 0 }} animate={{ opacity: 0.6 }} exit={{ opacity: 0 }} className="text-4xl text-slate-300">
+                          ?
+                        </motion.span>
+                      )}
+                    </AnimatePresence>
+                  </motion.div>
                 </motion.div>
               </div>
 
-              {/* Countdown */}
-              <div className="h-10 grid place-items-center">
+              <div className="flex">
+                <motion.div layout className="relative flex w-full flex-col rounded-3xl bg-white/80 p-5 shadow-lg">
+                  <div className="text-right text-xs font-semibold uppercase tracking-wide text-slate-500">AI</div>
+                  <motion.div layout className="flex flex-1 items-center justify-center text-6xl" aria-label="AI hand" role="img">
+                    <AnimatePresence mode="popLayout">
+                      {aiPick ? (
+                        <motion.span key={aiPick} initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
+                          {moveEmoji[aiPick]}
+                        </motion.span>
+                      ) : (
+                        <motion.span key="ai-placeholder" initial={{ opacity: 0 }} animate={{ opacity: 0.6 }} exit={{ opacity: 0 }} className="text-4xl text-slate-300">
+                          ?
+                        </motion.span>
+                      )}
+                    </AnimatePresence>
+                  </motion.div>
+                </motion.div>
+              </div>
+
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                 <AnimatePresence>
                   {phase === "countdown" && count>0 && (
-                    <motion.div key={count} initial={{ scale: .9, opacity: 0 }} animate={{ scale: 1.08, opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .3, ease: [0.22,0.61,0.36,1] }} className="text-2xl font-black text-slate-800">{count}</motion.div>
+                    <motion.div
+                      key={count}
+                      initial={{ scale: .9, opacity: 0 }}
+                      animate={{ scale: 1.08, opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: .3, ease: [0.22,0.61,0.36,1] }}
+                      className="rounded-full bg-white/80 px-6 py-3 text-2xl font-black text-slate-800 shadow"
+                    >
+                      {count}
+                    </motion.div>
                   )}
                 </AnimatePresence>
-              </div>
-
-              <div className="grid place-items-center">
-                <motion.div layout className="text-5xl" aria-label="Your hand" role="img">
-                  <AnimatePresence mode="popLayout">
-                    {playerPick && (
-                      <motion.div key={playerPick} initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
-                        <span>{moveEmoji[playerPick]}</span>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </motion.div>
               </div>
             </motion.div>
 
             {/* Outcome feedback */}
-            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .15 }} className="h-8 mt-2 text-lg font-semibold">
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .15 }} className="h-8 mt-2 text-center text-lg font-semibold">
               <AnimatePresence mode="wait">
                 {(phase === "resolve" || phase === "feedback") && outcome && (
                   <motion.div key={outcome} initial={{ y: 8, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: -8, opacity: 0 }} transition={{ duration: .22 }} className={ outcome === "win" ? "text-green-700" : outcome === "lose" ? "text-rose-700" : "text-amber-700" }>
@@ -3684,7 +3737,7 @@ function RPSDoodleAppInner(){
             </motion.div>
 
             {/* Controls */}
-            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .2 }} className="mt-6 grid grid-cols-3 gap-3 w-[min(92vw,680px)]">
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .2 }} className="mt-6 grid grid-cols-3 gap-3 w-[min(92vw,820px)]">
               {MOVES.map((m)=>{
                 const selected = playerPick === m && (phase === "selected" || phase === "countdown" || phase === "reveal" || phase === "resolve");
                 return (
