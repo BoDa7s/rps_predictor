@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, DecisionPolicy } from "./stats";
@@ -17,6 +17,18 @@ import {
 } from "./matchTimings";
 import LeaderboardModal from "./LeaderboardModal";
 import { computeMatchScore } from "./leaderboard";
+import botIdle48 from "./assets/mascot/bot-idle-48.svg";
+import botIdle64 from "./assets/mascot/bot-idle-64.svg";
+import botIdle96 from "./assets/mascot/bot-idle-96.svg";
+import botHappy48 from "./assets/mascot/bot-happy-48.svg";
+import botHappy64 from "./assets/mascot/bot-happy-64.svg";
+import botHappy96 from "./assets/mascot/bot-happy-96.svg";
+import botMeh48 from "./assets/mascot/bot-meh-48.svg";
+import botMeh64 from "./assets/mascot/bot-meh-64.svg";
+import botMeh96 from "./assets/mascot/bot-meh-96.svg";
+import botSad48 from "./assets/mascot/bot-sad-48.svg";
+import botSad64 from "./assets/mascot/bot-sad-64.svg";
+import botSad96 from "./assets/mascot/bot-sad-96.svg";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -58,100 +70,55 @@ const LEGACY_WELCOME_SEEN_KEY = "rps_welcome_seen_v1";
 const WELCOME_PREF_KEY = "rps_welcome_pref_v1";
 type WelcomePreference = "show" | "skip";
 
+type RobotVariant = "idle" | "happy" | "meh" | "sad";
+type RobotReaction = { emoji: string; body?: string; label: string; variant: RobotVariant };
+
+const ROBOT_ASSETS: Record<RobotVariant, { 48: string; 64: string; 96: string }> = {
+  idle: { 48: botIdle48, 64: botIdle64, 96: botIdle96 },
+  happy: { 48: botHappy48, 64: botHappy64, 96: botHappy96 },
+  meh: { 48: botMeh48, 64: botMeh64, 96: botMeh96 },
+  sad: { 48: botSad48, 64: botSad64, 96: botSad96 },
+};
+
 interface RobotMascotProps {
   className?: string;
+  variant?: RobotVariant;
+  sizeConfig?: string;
   "aria-label"?: string;
 }
 
-const RobotMascot: React.FC<RobotMascotProps> = ({ className = "", "aria-label": ariaLabel }) => {
-  const gradientId = useId();
-  const coreGradientId = `${gradientId}-core`;
-  const haloGradientId = `${gradientId}-halo`;
-  const scanGradientId = `${gradientId}-scan`;
-  const glowFilterId = `${gradientId}-glow`;
-  const clipId = `${gradientId}-clip`;
+const RobotMascot: React.FC<RobotMascotProps> = ({
+  className = "",
+  variant = "idle",
+  sizeConfig = "(min-width: 1024px) 96px, (min-width: 640px) 64px, 48px",
+  "aria-label": ariaLabel,
+}) => {
+  const assets = ROBOT_ASSETS[variant] ?? ROBOT_ASSETS.idle;
 
   return (
     <motion.div
       className={className}
-      role="img"
+      role={ariaLabel ? "img" : undefined}
       aria-label={ariaLabel}
-      initial={{ rotate: 0, x: 0, y: 0, scale: 1 }}
+      aria-hidden={ariaLabel ? undefined : true}
+      initial={{ rotate: 0, y: 0, scale: 1 }}
       animate={{
-        rotate: [0, -2, 1.5, -1, 0],
-        x: [0, 1.5, -1, 0.5, 0],
-        y: [0, -2, 1, -1.5, 0],
+        rotate: [0, -1.2, 0.8, -0.6, 0],
+        y: [0, -1.5, 0.5, -0.5, 0],
         scale: [1, 1.01, 0.995, 1.005, 1],
       }}
-      transition={{ duration: 5, ease: "easeInOut", repeat: Infinity }}
-      style={{ transformOrigin: "50% 50%" }}
+      transition={{ duration: 6, ease: "easeInOut", repeat: Infinity }}
+      style={{ transformOrigin: "50% 50%", filter: "drop-shadow(0 0 12px rgba(248, 113, 113, 0.45))" }}
     >
-      <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" className="h-full w-full">
-        <defs>
-          <radialGradient id={coreGradientId} cx="50%" cy="45%" r="55%">
-            <stop offset="0%" stopColor="#f8fafc" />
-            <stop offset="50%" stopColor="#dbeafe" />
-            <stop offset="100%" stopColor="#1d4ed8" />
-          </radialGradient>
-          <radialGradient id={haloGradientId} cx="50%" cy="50%" r="65%">
-            <stop offset="0%" stopColor="rgba(96, 165, 250, 0.35)" />
-            <stop offset="100%" stopColor="rgba(37, 99, 235, 0)" />
-          </radialGradient>
-          <linearGradient id={scanGradientId} x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor="rgba(59, 130, 246, 0)" />
-            <stop offset="40%" stopColor="rgba(96, 165, 250, 0.35)" />
-            <stop offset="60%" stopColor="rgba(125, 211, 252, 0.55)" />
-            <stop offset="100%" stopColor="rgba(59, 130, 246, 0)" />
-          </linearGradient>
-          <filter id={glowFilterId} x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur in="SourceGraphic" stdDeviation="2.5" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          <clipPath id={clipId}>
-            <circle cx="32" cy="32" r="14" />
-          </clipPath>
-        </defs>
-        <g filter={`url(#${glowFilterId})`}>
-          <circle cx="32" cy="32" r="22" fill={`url(#${haloGradientId})`} />
-          <circle
-            cx="32"
-            cy="32"
-            r="18"
-            fill="none"
-            stroke="#60a5fa"
-            strokeWidth="1.5"
-            strokeOpacity="0.75"
-          />
-        </g>
-        <circle cx="32" cy="32" r="14" fill={`url(#${coreGradientId})`} stroke="#0f172a" strokeWidth="1.25" />
-        <circle cx="32" cy="32" r="6" fill="#0f172a" opacity="0.85" />
-        <circle cx="34.5" cy="30" r="2" fill="#bfdbfe" opacity="0.9" />
-        <circle cx="29" cy="35" r="1.2" fill="#3b82f6" opacity="0.7" />
-        <g clipPath={`url(#${clipId})`}>
-          <motion.rect
-            x="18"
-            y="18"
-            width="28"
-            height="10"
-            fill={`url(#${scanGradientId})`}
-            animate={{ y: [18, 24, 18] }}
-            transition={{ duration: 4.5, ease: "easeInOut", repeat: Infinity }}
-          />
-        </g>
-        <circle
-          cx="32"
-          cy="32"
-          r="14"
-          fill="none"
-          stroke="#93c5fd"
-          strokeWidth="0.75"
-          strokeDasharray="2 4"
-          strokeOpacity="0.65"
-        />
-      </svg>
+      <img
+        src={assets[64]}
+        srcSet={`${assets[48]} 48w, ${assets[64]} 64w, ${assets[96]} 96w`}
+        sizes={sizeConfig}
+        alt=""
+        aria-hidden="true"
+        className="h-full w-full select-none object-contain"
+        draggable={false}
+      />
     </motion.div>
   );
 };
@@ -705,7 +672,7 @@ function RPSDoodleAppInner(){
   const [helpGuideOpen, setHelpGuideOpen] = useState(false);
   const [robotHovered, setRobotHovered] = useState(false);
   const [robotFocused, setRobotFocused] = useState(false);
-  const [robotResultReaction, setRobotResultReaction] = useState<{ emoji: string; body?: string; label: string } | null>(null);
+  const [robotResultReaction, setRobotResultReaction] = useState<RobotReaction | null>(null);
   const robotResultTimeoutRef = useRef<number | null>(null);
   const robotRestTimeoutRef = useRef<number | null>(null);
   const [trainingCelebrationActive, setTrainingCelebrationActive] = useState(false);
@@ -1040,17 +1007,19 @@ function RPSDoodleAppInner(){
         robotRestTimeoutRef.current = null;
         return;
       }
-      const restReaction =
+      const restReaction: RobotReaction =
         context === "round"
           ? {
               emoji: "😴",
               body: "Taking a breather before the next round.",
               label: "Robot resting after the round reaction.",
+              variant: "idle",
             }
           : {
               emoji: "😴",
               body: "Cooling down after that match.",
               label: "Robot resting after the match reaction.",
+              variant: "idle",
             };
       setRobotResultReaction(restReaction);
       if (robotRestTimeoutRef.current) {
@@ -1637,11 +1606,21 @@ function RPSDoodleAppInner(){
         ? {
             message: `Training round ${Math.min(trainingRoundDisplay, TRAIN_ROUNDS)}/${TRAIN_ROUNDS}—keep going!`,
           }
-        : shouldShowIdleBubble
-          ? {
-              message: "Ready! Choose a Mode to start.",
-            }
-          : null;
+            : shouldShowIdleBubble
+              ? {
+                  message: "Ready! Choose a Mode to start.",
+                }
+              : null;
+
+  const hudRobotVariant: RobotVariant = useMemo(() => {
+    if (robotResultReaction?.variant) return robotResultReaction.variant;
+    if ((phase === "resolve" || phase === "feedback") && outcome) {
+      if (outcome === "win") return "sad";
+      if (outcome === "lose") return "happy";
+      return "meh";
+    }
+    return "idle";
+  }, [robotResultReaction, phase, outcome]);
 
   const difficultySummary = useMemo(() => {
     const base = {
@@ -2397,43 +2376,46 @@ function RPSDoodleAppInner(){
     if (!outcome) return;
     if (trainingActive) return;
     const modeForReaction: Mode = selectedMode ?? "practice";
-    const reaction = modeForReaction === "challenge"
+    const reaction: RobotReaction = modeForReaction === "challenge"
       ? outcome === "win"
-        ?
-            {
-              emoji: "😏",
-              body: "Lucky hit! Don’t get cocky!",
-              label: "Robot teases after you winning the round: Lucky hit. Don’t get cocky.",
-            }
-
+        ? {
+            emoji: "😏",
+            body: "Lucky hit! Don’t get cocky!",
+            label: "Robot teases after you winning the round: Lucky hit. Don’t get cocky.",
+            variant: "sad",
+          }
         : outcome === "tie"
           ? {
               emoji: "🤨",
               body: "Not bad! But I’m still catching up!",
               label: "Robot comments on a tied round: Not bad, but still catching up.",
+              variant: "meh",
             }
-
           : {
-            emoji: "😎",
-            body: "Too easy! Try to keep up!",
-            label: "Robot boasts after you losing the round: Too easy. Try to keep up.",
-          }
+              emoji: "😎",
+              body: "Too easy! Try to keep up!",
+              label: "Robot boasts after you losing the round: Too easy. Try to keep up.",
+              variant: "happy",
+            }
       : outcome === "win"
         ? {
             emoji: "😊",
             body: "Nice counter!",
             label: "Robot congratulates your win: Nice counter.",
+            variant: "sad",
           }
         : outcome === "tie"
           ? {
               emoji: "🤝",
               body: "Even match! Try mixing it up!",
               label: "Robot suggests mixing it up after a tie.",
+              variant: "meh",
             }
           : {
               emoji: "🤍",
               body: "I saw a pattern! Can you break it?",
               label: "Robot encourages you after a loss to break the pattern.",
+              variant: "happy",
             };
     clearRobotReactionTimers();
     setRobotResultReaction(reaction);
@@ -2459,23 +2441,34 @@ function RPSDoodleAppInner(){
   useEffect(() => {
     if (scene !== "RESULTS" || !resultBanner) return;
     const modeForReaction: Mode = selectedMode ?? "practice";
-    const reaction = (() => {
+    const reaction: RobotReaction = (() => {
       if (modeForReaction === "practice") {
         return resultBanner === "Victory"
-          ? { emoji: "😊", body: "Nice counter!", label: "Robot encourages you: Nice counter." }
+          ? {
+              emoji: "😊",
+              body: "Nice counter!",
+              label: "Robot encourages you: Nice counter.",
+              variant: "sad",
+            }
           : resultBanner === "Defeat"
             ? {
                 emoji: "🤍",
                 body: "I saw a pattern—can you break it?",
                 label: "Robot reflects on the loss and encourages you to break the pattern.",
+                variant: "happy",
               }
-            : { emoji: "🤝", body: "Even match—try mixing it up.", label: "Robot suggests mixing it up after an even match." };
+            : {
+                emoji: "🤝",
+                body: "Even match—try mixing it up.",
+                label: "Robot suggests mixing it up after an even match.",
+                variant: "meh",
+              };
       }
       return resultBanner === "Victory"
-        ? { emoji: "😮", label: "Robot is surprised by the loss." }
+        ? { emoji: "😮", label: "Robot is surprised by the loss.", variant: "sad" }
         : resultBanner === "Defeat"
-          ? { emoji: "😄", label: "Robot celebrates the win." }
-          : { emoji: "🤔", label: "Robot is thinking about the tie." };
+          ? { emoji: "😄", label: "Robot celebrates the win.", variant: "happy" }
+          : { emoji: "🤔", label: "Robot is thinking about the tie.", variant: "meh" };
     })();
     clearRobotReactionTimers();
     setRobotResultReaction(reaction);
@@ -3744,7 +3737,12 @@ function RPSDoodleAppInner(){
                       </div>
                     </div>
                   </div>
-                  <RobotMascot className="mr-1 flex h-12 w-12 flex-shrink-0 items-center justify-center sm:h-16 sm:w-16" aria-label="Ready robot scoreboard mascot" />
+                  <RobotMascot
+                    className="mr-1 flex h-12 w-12 flex-shrink-0 items-center justify-center sm:h-16 sm:w-16"
+                    aria-label="Ready robot scoreboard mascot"
+                    variant={hudRobotVariant}
+                    sizeConfig="(min-width: 640px) 64px, 48px"
+                  />
                 </div>
               )}
             </motion.div>
@@ -4327,13 +4325,11 @@ function RPSDoodleAppInner(){
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.3 }}
           >
-            <motion.span
-              animate={{ y: [0, -4, 0], scaleY: [1, 0.88, 1], scaleX: [1, 1.04, 1] }}
-              transition={{ repeat: Infinity, duration: 3.2, ease: "easeInOut" }}
-              className="text-2xl"
-            >
-              🤖
-            </motion.span>
+            <RobotMascot
+              className="pointer-events-none h-12 w-12"
+              variant={hudRobotVariant}
+              sizeConfig="(min-width: 640px) 64px, 48px"
+            />
           </motion.button>
           <AnimatePresence>
             {helpGuideOpen && (

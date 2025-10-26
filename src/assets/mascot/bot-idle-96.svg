@@ -1,0 +1,36 @@
+<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="shellGradient" x1="48" y1="12" x2="48" y2="84" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFECEC" />
+      <stop offset="100%" stop-color="#F87171" />
+    </linearGradient>
+    <linearGradient id="shineGradient" x1="32" y1="18" x2="64" y2="54" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="rgba(255,255,255,0.75)" />
+      <stop offset="100%" stop-color="rgba(255,255,255,0)" />
+    </linearGradient>
+    <linearGradient id="shadeGradient" x1="48" y1="52" x2="48" y2="84" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="rgba(185,28,28,0.35)" />
+      <stop offset="100%" stop-color="rgba(185,28,28,0.65)" />
+    </linearGradient>
+    <radialGradient id="glareGradient" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(36 26) rotate(45) scale(20 16)">
+      <stop stop-color="rgba(255,255,255,0.6)" />
+      <stop offset="1" stop-color="rgba(255,255,255,0)" />
+    </radialGradient>
+    <clipPath id="headClip">
+      <rect x="20" y="12" width="56" height="72" rx="28" ry="30" />
+    </clipPath>
+  </defs>
+  <ellipse cx="48" cy="84" rx="22" ry="7" fill="rgba(0,0,0,0.25)" />
+  <g clip-path="url(#headClip)">
+    <rect x="20" y="12" width="56" height="72" rx="28" ry="30" fill="url(#shellGradient)" stroke="#F87171" stroke-width="1.6" />
+    <rect x="20" y="56" width="56" height="20" fill="url(#shadeGradient)" />
+    <path d="M24 24C24 20.134 27.134 17 31 17H65C68.866 17 72 20.134 72 24V50C72 53.866 68.866 57 65 57H31C27.134 57 24 53.866 24 50V24Z" fill="url(#shineGradient)" />
+    <path d="M24 20C24 16.134 27.134 13 31 13H65C68.866 13 72 16.134 72 20V34C72 37.866 68.866 41 65 41H31C27.134 41 24 37.866 24 34V20Z" fill="url(#glareGradient)" />
+  </g>
+  <rect x="30" y="32" width="36" height="28" rx="12" fill="#0B1220" />
+  <path d="M40 48C42.5 50.2 45.5 50.2 48 48" stroke="#6EFACC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="38" cy="41" r="4" fill="#6EFACC" />
+  <circle cx="58" cy="41" r="4" fill="#6EFACC" />
+  <path d="M56 48C58.5 50.2 61.5 50.2 64 48" stroke="#6EFACC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.4" />
+  <path d="M36 28C36 24.6863 38.6863 22 42 22H54C57.3137 22 60 24.6863 60 28" stroke="#F87171" stroke-width="1.6" stroke-linecap="round" />
+</svg>
