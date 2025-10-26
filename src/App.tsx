@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence, type Transition } from "framer-motion";
+import { motion, AnimatePresence, type Transition, useReducedMotion } from "framer-motion";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, DecisionPolicy } from "./stats";
 import { PlayersProvider, usePlayers, Grade, PlayerProfile, CONSENT_TEXT_VERSION, GRADE_OPTIONS } from "./players";
@@ -16,6 +16,7 @@ import {
   saveMatchTimings,
 } from "./matchTimings";
 import LeaderboardModal from "./LeaderboardModal";
+import InsightPanel, { type LiveInsightSnapshot } from "./InsightPanel";
 import { computeMatchScore } from "./leaderboard";
 import botIdle48 from "./assets/mascot/bot-idle-48.svg";
 import botIdle64 from "./assets/mascot/bot-idle-64.svg";
@@ -69,6 +70,7 @@ const DIFFICULTY_SEQUENCE: AIMode[] = ["fair", "normal", "ruthless"];
 const BEST_OF_OPTIONS: BestOf[] = [3, 5, 7];
 const LEGACY_WELCOME_SEEN_KEY = "rps_welcome_seen_v1";
 const WELCOME_PREF_KEY = "rps_welcome_pref_v1";
+const INSIGHT_PANEL_STATE_KEY = "rps_insight_panel_open_v1";
 type WelcomePreference = "show" | "skip";
 
 type RobotVariant = "idle" | "happy" | "meh" | "sad";
@@ -475,6 +477,23 @@ function confidenceBucket(value: number): "low" | "medium" | "high" {
   return "low";
 }
 
+function clamp01(value: number | null | undefined): number {
+  if (value == null || Number.isNaN(value)) return 0;
+  if (value < 0) return 0;
+  if (value > 1) return 1;
+  return value;
+}
+
+function expectedPlayerMoveFromAi(aiMove: Move | null | undefined): Move | null {
+  if (!aiMove) return null;
+  const mapping: Record<Move, Move> = {
+    rock: "scissors",
+    paper: "rock",
+    scissors: "paper",
+  };
+  return mapping[aiMove];
+}
+
 function expertReasonText(name: string, move: Move, percent: number){
   const pretty = prettyMove(move);
   const pct = Math.round(percent * 100);
@@ -838,6 +857,144 @@ function RPSDoodleAppInner(){
   const [robotHovered, setRobotHovered] = useState(false);
   const [robotFocused, setRobotFocused] = useState(false);
   const [robotResultReaction, setRobotResultReaction] = useState<RobotReaction | null>(null);
+  const reduceMotion = useReducedMotion();
+  const [live, setLive] = useState<string>("");
+  const [insightPanelOpen, setInsightPanelOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return sessionStorage.getItem(INSIGHT_PANEL_STATE_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [insightPreferred, setInsightPreferred] = useState<boolean>(insightPanelOpen);
+  const insightPanelRef = useRef<HTMLDivElement | null>(null);
+  const insightHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const insightReturnFocusRef = useRef<HTMLElement | null>(null);
+  const insightAutoClosedRef = useRef(false);
+  const insightShouldFocusRef = useRef(false);
+  const insightTouchStartXRef = useRef<number | null>(null);
+  const [liveDecisionSnapshot, setLiveDecisionSnapshot] = useState<LiveInsightSnapshot | null>(null);
+  const [liveInsightRounds, setLiveInsightRounds] = useState<RoundLog[]>([]);
+  const persistInsightPreference = useCallback((next: boolean) => {
+    setInsightPreferred(next);
+    if (typeof window === "undefined") return;
+    try {
+      sessionStorage.setItem(INSIGHT_PANEL_STATE_KEY, next ? "true" : "false");
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const buildLiveSnapshot = useCallback(
+    (trace: PendingDecision, aiMove: Move): LiveInsightSnapshot => {
+      let distribution: Record<Move, number> = { rock: 1 / 3, paper: 1 / 3, scissors: 1 / 3 };
+      let predicted: Move | null = null;
+      let counter: Move | null = aiMove;
+      let reason: string | null = trace.heuristic?.reason ?? null;
+      let topExperts: Array<{ name: string; weight: number; topMove: Move | null; probability: number }> = [];
+      if (trace.policy === "mixer" && trace.mixer) {
+        distribution = normalize(trace.mixer.dist);
+        predicted = MOVES.reduce((best, move) => (distribution[move] > distribution[best] ? move : best), MOVES[0]);
+        counter = trace.mixer.counter;
+        topExperts = [...trace.mixer.experts]
+          .map(expert => {
+            const expertDist = normalize(expert.dist ?? { rock: 1 / 3, paper: 1 / 3, scissors: 1 / 3 });
+            const expertTop = MOVES.reduce(
+              (best, move) => (expertDist[move] > expertDist[best] ? move : best),
+              MOVES[0],
+            );
+            return {
+              name: expert.name,
+              weight: clamp01(expert.weight),
+              topMove: expertTop,
+              probability: clamp01(expertDist[expertTop]),
+            };
+          })
+          .sort((a, b) => b.weight - a.weight)
+          .slice(0, 3);
+        if (topExperts[0] && predicted) {
+          reason = expertReasonText(topExperts[0].name, predicted, topExperts[0].probability);
+        } else if (predicted) {
+          reason = `Mixer consensus leans ${prettyMove(predicted)}.`;
+        } else {
+          reason = "Mixer blending experts for a balanced counter.";
+        }
+      } else {
+        predicted = trace.heuristic?.predicted ?? expectedPlayerMoveFromAi(aiMove);
+        const confidence = clamp01(trace.heuristic?.conf ?? trace.confidence ?? 0.34);
+        let base: Record<Move, number>;
+        if (predicted) {
+          const remainder = Math.max(0, 1 - confidence);
+          const others = MOVES.filter(move => move !== predicted);
+          const share = others.length ? remainder / others.length : 0;
+          base = { rock: share, paper: share, scissors: share };
+          base[predicted] = confidence;
+        } else {
+          base = { rock: 1 / 3, paper: 1 / 3, scissors: 1 / 3 };
+        }
+        distribution = normalize(base);
+        if (!reason) {
+          reason = predicted
+            ? `Heuristic leans toward ${prettyMove(predicted)} (${Math.round(confidence * 100)}%).`
+            : "Low confidence – exploring for new patterns.";
+        }
+      }
+      return {
+        policy: trace.policy,
+        confidence: trace.confidence,
+        predictedMove: predicted,
+        counterMove: counter,
+        distribution,
+        topExperts,
+        reason,
+      };
+    },
+    [],
+  );
+
+  const openInsightPanel = useCallback(
+    (trigger?: HTMLElement | null) => {
+      persistInsightPreference(true);
+      insightAutoClosedRef.current = false;
+      insightReturnFocusRef.current =
+        trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+      insightShouldFocusRef.current = true;
+      setInsightPanelOpen(true);
+      setLive("Live AI Insight panel opened. Overlays the game.");
+    },
+    [persistInsightPreference, setLive],
+  );
+
+  const closeInsightPanel = useCallback(
+    (options: { restoreFocus?: boolean; persist?: boolean; announce?: string | null } = {}) => {
+      const { restoreFocus = true, persist = true, announce = "Live AI Insight panel closed." } = options;
+      if (persist) {
+        persistInsightPreference(false);
+      }
+      setInsightPanelOpen(false);
+      insightAutoClosedRef.current = !persist;
+      insightShouldFocusRef.current = false;
+      if (announce) {
+        setLive(announce);
+      }
+      if (restoreFocus) {
+        const target = insightReturnFocusRef.current;
+        if (target) {
+          requestAnimationFrame(() => target.focus());
+        }
+      }
+      if (persist) {
+        insightReturnFocusRef.current = null;
+      }
+    },
+    [persistInsightPreference, setLive],
+  );
+  useEffect(() => {
+    if (insightPanelOpen) {
+      insightShouldFocusRef.current = true;
+    }
+  }, []);
   const robotResultTimeoutRef = useRef<number | null>(null);
   const robotRestTimeoutRef = useRef<number | null>(null);
   const [trainingCelebrationActive, setTrainingCelebrationActive] = useState(false);
@@ -886,6 +1043,68 @@ function RPSDoodleAppInner(){
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [toastReaderOpen]);
+  useEffect(() => {
+    if (!insightPanelOpen) {
+      return;
+    }
+    const node = insightPanelRef.current;
+    if (!node) return;
+    const focusableSelector =
+      "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
+    const getFocusable = () =>
+      Array.from(node.querySelectorAll<HTMLElement>(focusableSelector)).filter(
+        element => !element.hasAttribute("disabled"),
+      );
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeInsightPanel();
+        return;
+      }
+      if (event.key === "Tab") {
+        const focusable = getFocusable();
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey) {
+          if (document.activeElement === first || document.activeElement === node) {
+            event.preventDefault();
+            last.focus();
+          }
+        } else if (document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    const handleTouchStart = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      insightTouchStartXRef.current = touch ? touch.clientX : null;
+    };
+    const handleTouchEnd = (event: TouchEvent) => {
+      const startX = insightTouchStartXRef.current;
+      insightTouchStartXRef.current = null;
+      const touch = event.changedTouches[0];
+      if (startX == null || !touch) return;
+      if (touch.clientX - startX > 60) {
+        closeInsightPanel();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    node.addEventListener("touchstart", handleTouchStart);
+    node.addEventListener("touchend", handleTouchEnd);
+    if (insightShouldFocusRef.current) {
+      requestAnimationFrame(() => {
+        const focusTarget = insightHeadingRef.current ?? getFocusable()[0];
+        focusTarget?.focus();
+      });
+    }
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      node.removeEventListener("touchstart", handleTouchStart);
+      node.removeEventListener("touchend", handleTouchEnd);
+    };
+  }, [closeInsightPanel, insightPanelOpen]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -1092,6 +1311,31 @@ function RPSDoodleAppInner(){
   const trainingProgress = Math.min(trainingDisplayCount / TRAIN_ROUNDS, 1);
   const showTrainingCompleteBadge = !needsTraining && trainingCount >= TRAIN_ROUNDS;
 
+  useEffect(() => {
+    const blocked =
+      statsOpen ||
+      leaderboardOpen ||
+      isPlayerModalOpen ||
+      scene === "RESULTS" ||
+      shouldGateTraining;
+    if (blocked && insightPanelOpen) {
+      insightAutoClosedRef.current = true;
+      setInsightPanelOpen(false);
+    } else if (!blocked && !insightPanelOpen && insightAutoClosedRef.current && insightPreferred) {
+      insightAutoClosedRef.current = false;
+      insightShouldFocusRef.current = true;
+      setInsightPanelOpen(true);
+    }
+  }, [
+    insightPanelOpen,
+    insightPreferred,
+    isPlayerModalOpen,
+    leaderboardOpen,
+    scene,
+    statsOpen,
+    shouldGateTraining,
+  ]);
+
   const difficultyDisabled = !isTrained || !predictorMode;
   const bootPercent = Math.round(bootProgress);
   const bootBarWidth = Math.min(100, bootProgress > 0 ? bootProgress : 4);
@@ -1128,7 +1372,6 @@ function RPSDoodleAppInner(){
   const [count, setCount] = useState<number>(3);
   const [outcome, setOutcome] = useState<Outcome|undefined>();
   const [resultBanner, setResultBanner] = useState<"Victory"|"Defeat"|"Tie"|null>(null);
-  const [live, setLive] = useState("");
   useEffect(() => {
     if (!showMainUi) {
       setHelpCenterOpen(false);
@@ -1555,6 +1798,7 @@ function RPSDoodleAppInner(){
     });
     if (logged) {
       currentMatchRoundsRef.current = [...currentMatchRoundsRef.current, logged];
+      setLiveInsightRounds([...currentMatchRoundsRef.current]);
     }
     devInstrumentation.roundCompleted({
       matchId: currentMatchIdRef.current,
@@ -1609,8 +1853,9 @@ function RPSDoodleAppInner(){
     if (settingsOpen) parts.push("SETTINGS");
     if (helpGuideOpen) parts.push("HELP");
     if (welcomeActive) parts.push("WELCOME");
+    if (insightPanelOpen) parts.push("INSIGHT");
     devInstrumentation.setView(parts.join("+"));
-  }, [scene, statsOpen, leaderboardOpen, settingsOpen, helpGuideOpen, welcomeActive]);
+  }, [scene, statsOpen, leaderboardOpen, settingsOpen, helpGuideOpen, welcomeActive, insightPanelOpen]);
 
   useEffect(() => {
     devInstrumentation.trackPromptState("help-guide", helpGuideOpen);
@@ -1627,6 +1872,9 @@ function RPSDoodleAppInner(){
   useEffect(() => {
     devInstrumentation.trackPromptState("leaderboard-modal", leaderboardOpen);
   }, [leaderboardOpen]);
+  useEffect(() => {
+    devInstrumentation.trackPromptState("insight-panel", insightPanelOpen);
+  }, [insightPanelOpen]);
 
   const armedRef = useRef(false);
   const armAudio = () => { if (!armedRef.current){ audio.ensureCtx(); audio.setEnabled(audioOn); armedRef.current = true; } };
@@ -2251,16 +2499,17 @@ function RPSDoodleAppInner(){
       const heur = predictNext(lastMoves, rng);
       if (!heur.move || (heur.conf ?? 0) < 0.34) {
         const fallbackMove = MOVES[Math.floor(rng()*3)] as Move;
-        const trace: PendingDecision = {
-          policy: "heuristic",
-          heuristic: { predicted: heur.move, conf: heur.conf, reason: heur.reason || "Low confidence – random choice" },
-          confidence: heur.conf ?? 0.33,
-        };
-        decisionTraceRef.current = trace;
-        const confValue = typeof heur.conf === "number" ? heur.conf : 0;
-        fireAnalyticsEvent("ai_confidence_updated", { value: Math.round(confValue * 100) });
-        return fallbackMove;
-      }
+      const trace: PendingDecision = {
+        policy: "heuristic",
+        heuristic: { predicted: heur.move, conf: heur.conf, reason: heur.reason || "Low confidence – random choice" },
+        confidence: heur.conf ?? 0.33,
+      };
+      decisionTraceRef.current = trace;
+      setLiveDecisionSnapshot(buildLiveSnapshot(trace, fallbackMove));
+      const confValue = typeof heur.conf === "number" ? heur.conf : 0;
+      fireAnalyticsEvent("ai_confidence_updated", { value: Math.round(confValue * 100) });
+      return fallbackMove;
+    }
       const predicted = heur.move as Move;
       const heuristicDist: Dist = { rock:0, paper:0, scissors:0 };
       heuristicDist[predicted] = 1;
@@ -2272,6 +2521,7 @@ function RPSDoodleAppInner(){
         confidence: heurConf,
       };
       decisionTraceRef.current = trace;
+      setLiveDecisionSnapshot(buildLiveSnapshot(trace, move));
       fireAnalyticsEvent("ai_confidence_updated", { value: Math.round(heurConf * 100) });
       return move;
     }
@@ -2291,6 +2541,7 @@ function RPSDoodleAppInner(){
       confidence,
     };
     decisionTraceRef.current = trace;
+    setLiveDecisionSnapshot(buildLiveSnapshot(trace, move));
     fireAnalyticsEvent("ai_confidence_updated", { value: Math.round(confidence * 100) });
     return move;
   }
@@ -2311,6 +2562,8 @@ function RPSDoodleAppInner(){
     currentMatchRoundsRef.current = [];
     lastDecisionMsRef.current = null;
     roundStartRef.current = performance.now();
+    setLiveDecisionSnapshot(null);
+    setLiveInsightRounds([]);
   }
 
   function startMatch(mode?: Mode, opts: { silent?: boolean } = {}){
@@ -3495,29 +3748,49 @@ function RPSDoodleAppInner(){
                 <section className="space-y-3">
                   <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Gameplay</h2>
                   <div className="space-y-4 rounded-lg border border-slate-200/80 bg-white/80 p-3">
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-slate-800">AI Predictor</span>
-                          <span className="text-xs text-slate-400" title="AI predicts your next move from recent patterns.">ⓘ</span>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-slate-800">AI Predictor</span>
+                            <span className="text-xs text-slate-400" title="AI predicts your next move from recent patterns.">ⓘ</span>
+                          </div>
+                          <OnOffToggle
+                            value={predictorMode}
+                            onChange={handlePredictorToggle}
+                            disabled={!isTrained}
+                            onLabel="set.aiPredictor.on"
+                            offLabel="set.aiPredictor.off"
+                          />
+                        </div>
+                        {!isTrained && (
+                          <p className="text-xs text-amber-600">Complete {TRAIN_ROUNDS} training rounds to unlock predictions.</p>
+                        )}
+                      </div>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-800">Show Live AI Insight</div>
+                          <p className="text-xs text-slate-500">Slide the analytics panel in alongside the match.</p>
                         </div>
                         <OnOffToggle
-                          value={predictorMode}
-                          onChange={handlePredictorToggle}
-                          disabled={!isTrained}
-                          onLabel="set.aiPredictor.on"
-                          offLabel="set.aiPredictor.off"
+                          value={insightPreferred}
+                          onChange={next => {
+                            const trigger =
+                              document.activeElement instanceof HTMLElement ? document.activeElement : null;
+                            if (next) {
+                              openInsightPanel(trigger ?? null);
+                            } else {
+                              closeInsightPanel();
+                            }
+                          }}
+                          onLabel="set.insight.on"
+                          offLabel="set.insight.off"
                         />
                       </div>
-                      {!isTrained && (
-                        <p className="text-xs text-amber-600">Complete {TRAIN_ROUNDS} training rounds to unlock predictions.</p>
-                      )}
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-slate-800">AI Difficulty</span>
-                        <span className="text-xs text-slate-400" title="Fine-tune how boldly the AI counters your moves.">ⓘ</span>
-                      </div>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-slate-800">AI Difficulty</span>
+                          <span className="text-xs text-slate-400" title="Fine-tune how boldly the AI counters your moves.">ⓘ</span>
+                        </div>
                       <div
                         className="flex flex-wrap gap-2"
                         role="radiogroup"
@@ -3928,6 +4201,23 @@ function RPSDoodleAppInner(){
                 </div>
               ) : (
                 <div className="flex w-full flex-col items-center gap-4">
+                  <button
+                    type="button"
+                    className="absolute right-4 top-3 rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-700 shadow hover:bg-sky-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+                    onClick={event => {
+                      if (insightPanelOpen) {
+                        closeInsightPanel();
+                      } else {
+                        openInsightPanel(event.currentTarget);
+                      }
+                    }}
+                    aria-pressed={insightPreferred}
+                    aria-expanded={insightPanelOpen}
+                    aria-controls="live-insight-panel"
+                    data-dev-label="hud.insight"
+                  >
+                    Insight
+                  </button>
                   <div className="flex w-full flex-col items-center gap-3 text-center">
                     <div className="text-sm text-slate-700">Round <strong>{round}</strong> • Best of {bestOf}</div>
                     <span
@@ -4133,11 +4423,53 @@ function RPSDoodleAppInner(){
               </div>
             </motion.div>
           </motion.div>
-        )}
+      )}
       </AnimatePresence>
 
       {/* Wipe overlay */}
       <div className={"wipe " + (wipeRun ? 'run' : '')} aria-hidden={true} />
+
+      <AnimatePresence>
+        {insightPanelOpen && (
+          <motion.div
+            key="insight-panel"
+            className="fixed inset-0 z-[70] flex justify-end"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              className="absolute inset-0 bg-slate-900/20 backdrop-blur-[1px]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: reduceMotion ? 0 : 0.2, ease: [0.22, 0.61, 0.36, 1] }}
+              onClick={() => closeInsightPanel()}
+              aria-hidden="true"
+            />
+            <motion.aside
+              id="live-insight-panel"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Live AI Insight panel. Overlays the game."
+              ref={insightPanelRef}
+              initial={{ x: reduceMotion ? 0 : 48, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: reduceMotion ? 0 : 48, opacity: 0 }}
+              transition={{ duration: reduceMotion ? 0 : 0.25, ease: [0.22, 0.61, 0.36, 1] }}
+              className="relative z-10 flex h-full w-full flex-col bg-white shadow-2xl ring-1 ring-slate-200 sm:w-[min(440px,60vw)] lg:w-[min(520px,40vw)]"
+            >
+              <InsightPanel
+                snapshot={liveDecisionSnapshot}
+                liveRounds={liveInsightRounds}
+                historicalRounds={rounds}
+                titleRef={insightHeadingRef}
+                onClose={() => closeInsightPanel()}
+              />
+            </motion.aside>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Calibration modal */}
       {/* Calibration modal removed */}

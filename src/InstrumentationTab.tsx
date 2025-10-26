@@ -39,6 +39,7 @@ const CORE_CONTROL_GROUPS = [
       { id: "hand.rock", label: "Rock" },
       { id: "hand.paper", label: "Paper" },
       { id: "hand.scissors", label: "Scissors" },
+      { id: "hud.insight", label: "Insight panel" },
     ],
   },
   {
