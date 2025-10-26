@@ -3738,10 +3738,10 @@ function RPSDoodleAppInner(){
                     </div>
                   </div>
                   <RobotMascot
-                    className="mr-1 flex h-12 w-12 flex-shrink-0 items-center justify-center sm:h-16 sm:w-16"
+                    className="mr-1 flex h-12 w-12 flex-shrink-0 items-center justify-center md:h-16 md:w-16 lg:h-20 lg:w-20"
                     aria-label="Ready robot scoreboard mascot"
                     variant={hudRobotVariant}
-                    sizeConfig="(min-width: 640px) 64px, 48px"
+                    sizeConfig="(min-width: 1024px) 80px, (min-width: 768px) 64px, 48px"
                   />
                 </div>
               )}
