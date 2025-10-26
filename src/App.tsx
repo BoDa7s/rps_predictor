@@ -1257,6 +1257,20 @@ function RPSDoodleAppInner(){
     }
   }, [currentProfile, updateStatsProfile]);
 
+  const handleInsightPreferenceToggle = useCallback(
+    (next: boolean, trigger?: HTMLElement | null) => {
+      if (next) {
+        const source =
+          trigger ??
+          (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+        openInsightPanel(source, { persistPreference: true });
+      } else {
+        closeInsightPanel({ persistPreference: true, suppressForMatch: true });
+      }
+    },
+    [closeInsightPanel, openInsightPanel],
+  );
+
   const style = `
   :root{ --challenge:#FF77AA; --practice:#88AA66; }
   .mode-grid{ display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:12px; width:min(92vw,640px); }
@@ -1550,6 +1564,7 @@ function RPSDoodleAppInner(){
   };
 
   const [selectedMode, setSelectedMode] = useState<Mode|null>(null);
+  const hideUiDuringModeTransition = scene === "MODE" && selectedMode !== null;
   const [wipeRun, setWipeRun] = useState(false);
   const modeLabel = (m:Mode)=> m.charAt(0).toUpperCase()+m.slice(1);
 
@@ -3546,7 +3561,7 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
 
       {/* Header / Settings */}
-      {showMainUi && (
+      {showMainUi && !hideUiDuringModeTransition && (
         <motion.div
           layout
           className="absolute top-0 left-0 right-0 z-[75] flex items-center justify-between p-3"
@@ -3852,20 +3867,34 @@ function RPSDoodleAppInner(){
                             the match HUD.
                           </p>
                         </div>
-                        <OnOffToggle
-                          value={insightPreferred}
-                          onChange={next => {
-                            const trigger =
-                              document.activeElement instanceof HTMLElement ? document.activeElement : null;
-                            if (next) {
-                              openInsightPanel(trigger ?? null, { persistPreference: true });
-                            } else {
-                              closeInsightPanel({ persistPreference: true, suppressForMatch: true });
+                        <div className="inline-flex items-center overflow-hidden rounded-full border border-slate-300 bg-white shadow-sm">
+                          <button
+                            type="button"
+                            className={`px-3 py-1 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                              insightPreferred ? "bg-sky-600 text-white" : "text-slate-500 hover:bg-slate-100"
+                            }`}
+                            aria-pressed={insightPreferred}
+                            onClick={event =>
+                              handleInsightPreferenceToggle(true, event.currentTarget)
                             }
-                          }}
-                          onLabel="set.insight.on"
-                          offLabel="set.insight.off"
-                        />
+                            data-dev-label="set.insight.on"
+                          >
+                            On
+                          </button>
+                          <button
+                            type="button"
+                            className={`px-3 py-1 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                              !insightPreferred
+                                ? "bg-slate-200 text-slate-700 shadow-inner"
+                                : "text-slate-500 hover:bg-slate-100"
+                            }`}
+                            aria-pressed={!insightPreferred}
+                            onClick={() => handleInsightPreferenceToggle(false)}
+                            data-dev-label="set.insight.off"
+                          >
+                            Off
+                          </button>
+                        </div>
                       </div>
                       <div className="space-y-2">
                         <div className="flex items-center gap-2">
@@ -4898,7 +4927,7 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
 
       {/* Footer robot idle (personality beat) */}
-      {showMainUi && !settingsOpen && (
+      {showMainUi && !settingsOpen && !hideUiDuringModeTransition && (
         <div className="pointer-events-none fixed bottom-3 right-3 z-[90] flex flex-col items-end gap-3">
           <AnimatePresence>
             {robotBubbleContent && (
