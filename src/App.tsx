@@ -729,7 +729,8 @@ function ModeCard({ mode, onSelect, isDimmed, disabled = false }: { mode: Mode, 
 }
 
 function OnOffToggle({ value, onChange, disabled = false, onLabel, offLabel }: { value: boolean; onChange: (next: boolean) => void; disabled?: boolean; onLabel?: string; offLabel?: string }) {
-  const baseButton = "px-3 py-1 text-xs font-semibold transition-colors";
+  const baseButton =
+    "px-3 py-1 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500";
   return (
     <div className="inline-flex items-center overflow-hidden rounded-full border border-slate-300 bg-white shadow-sm">
       <button
@@ -744,7 +745,7 @@ function OnOffToggle({ value, onChange, disabled = false, onLabel, offLabel }: {
       </button>
       <button
         type="button"
-        className={`${baseButton} ${!value ? "bg-slate-200 text-slate-700" : "text-slate-500 hover:bg-slate-100"}`}
+        className={`${baseButton} ${!value ? "bg-slate-200 text-slate-700 shadow-inner" : "text-slate-500 hover:bg-slate-100"}`}
         aria-pressed={!value}
         onClick={() => !disabled && onChange(false)}
         disabled={disabled}
@@ -851,6 +852,8 @@ function RPSDoodleAppInner(){
   const [helpGuideOpen, setHelpGuideOpen] = useState(false);
   const helpButtonRef = useRef<HTMLButtonElement | null>(null);
   const [helpCenterOpen, setHelpCenterOpen] = useState(false);
+  const headerOverlayActive = statsOpen || leaderboardOpen || settingsOpen || helpCenterOpen;
+  const previousHeaderOverlayActiveRef = useRef(headerOverlayActive);
   const [helpActiveQuestionId, setHelpActiveQuestionId] = useState<string | null>(
     AI_FAQ_QUESTIONS[0]?.id ?? null,
   );
@@ -884,6 +887,7 @@ function RPSDoodleAppInner(){
   const insightReturnFocusRef = useRef<HTMLElement | null>(null);
   const insightShouldFocusRef = useRef(false);
   const insightDismissedForMatchRef = useRef(false);
+  const [insightPanelWidth, setInsightPanelWidth] = useState(0);
   const [liveDecisionSnapshot, setLiveDecisionSnapshot] = useState<LiveInsightSnapshot | null>(null);
   const [liveInsightRounds, setLiveInsightRounds] = useState<RoundLog[]>([]);
   const persistInsightPreference = useCallback((next: boolean) => {
@@ -1021,6 +1025,84 @@ function RPSDoodleAppInner(){
     },
     [persistInsightPreference, setLive],
   );
+
+  const suspendInsightPanelForHeader = useCallback(() => {
+    if (scene !== "MATCH") {
+      return;
+    }
+    if (insightPanelOpen) {
+      closeInsightPanel({
+        persistPreference: false,
+        suppressForMatch: true,
+        restoreFocus: false,
+        announce: null,
+      });
+    }
+    insightDismissedForMatchRef.current = true;
+  }, [closeInsightPanel, insightPanelOpen, scene]);
+
+  const resumeInsightPanelAfterHeader = useCallback(() => {
+    if (scene !== "MATCH") {
+      return;
+    }
+    if (!insightPreferred) {
+      return;
+    }
+    if (insightPanelOpen) {
+      return;
+    }
+    if (!insightDismissedForMatchRef.current) {
+      return;
+    }
+    insightDismissedForMatchRef.current = false;
+    openInsightPanel(null, { focus: false, persistPreference: false });
+  }, [insightPanelOpen, insightPreferred, openInsightPanel, scene]);
+
+  useEffect(() => {
+    const wasActive = previousHeaderOverlayActiveRef.current;
+    if (headerOverlayActive && !wasActive) {
+      suspendInsightPanelForHeader();
+    } else if (!headerOverlayActive && wasActive) {
+      resumeInsightPanelAfterHeader();
+    }
+    previousHeaderOverlayActiveRef.current = headerOverlayActive;
+  }, [headerOverlayActive, resumeInsightPanelAfterHeader, suspendInsightPanelForHeader]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (!insightPanelOpen) {
+      setInsightPanelWidth(0);
+      return;
+    }
+    const node = insightPanelRef.current;
+    if (!node) {
+      return;
+    }
+    const updateWidth = () => {
+      const { innerWidth } = window;
+      const measuredWidth = Math.max(0, node.getBoundingClientRect().width);
+      if (!Number.isFinite(measuredWidth)) {
+        return;
+      }
+      const maxAllowed = Math.max(0, innerWidth - 64);
+      setInsightPanelWidth(Math.min(measuredWidth, maxAllowed));
+    };
+    updateWidth();
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => updateWidth());
+      resizeObserver.observe(node);
+    }
+    window.addEventListener("resize", updateWidth);
+    return () => {
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+      window.removeEventListener("resize", updateWidth);
+    };
+  }, [insightPanelOpen]);
   const robotResultTimeoutRef = useRef<number | null>(null);
   const robotRestTimeoutRef = useRef<number | null>(null);
   const [trainingCelebrationActive, setTrainingCelebrationActive] = useState(false);
@@ -3465,7 +3547,12 @@ function RPSDoodleAppInner(){
 
       {/* Header / Settings */}
       {showMainUi && (
-        <div className="absolute top-0 left-0 right-0 p-3 flex items-center justify-between">
+        <motion.div
+          layout
+          className="absolute top-0 left-0 right-0 z-[75] flex items-center justify-between p-3"
+          animate={{ marginRight: insightPanelOpen ? insightPanelWidth : 0 }}
+          transition={{ duration: 0.2, ease: [0.22, 0.61, 0.36, 1] }}
+        >
           <motion.h1 layout className="text-2xl font-extrabold tracking-tight text-sky-700 drop-shadow-sm">RPS Lab</motion.h1>
           <div className="flex items-center gap-2">
             {trainingActive && (
@@ -3485,14 +3572,20 @@ function RPSDoodleAppInner(){
               </span>
             )}
             <button
-              onClick={() => setStatsOpen(true)}
+              onClick={() => {
+                suspendInsightPanelForHeader();
+                setStatsOpen(true);
+              }}
               className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900"
               data-dev-label="hdr.stats"
             >
               Statistics
             </button>
             <button
-              onClick={() => setLeaderboardOpen(true)}
+              onClick={() => {
+                suspendInsightPanelForHeader();
+                setLeaderboardOpen(true);
+              }}
               className={"px-3 py-1.5 rounded-xl shadow text-sm " + (hasConsented ? "bg-white/70 hover:bg-white text-sky-900" : "bg-white/50 text-slate-400 cursor-not-allowed")}
               disabled={!hasConsented}
               title={!hasConsented ? "Select a player to continue." : undefined}
@@ -3517,6 +3610,7 @@ function RPSDoodleAppInner(){
                   setPlayerModalMode(currentPlayer ? "edit" : "create");
                   return;
                 }
+                suspendInsightPanelForHeader();
                 goToMode();
               }}
               title={!hasConsented ? "Select a player to continue." : undefined}
@@ -3530,6 +3624,9 @@ function RPSDoodleAppInner(){
               ref={helpButtonRef}
               type="button"
               onClick={() => {
+                if (!helpCenterOpen) {
+                  suspendInsightPanelForHeader();
+                }
                 setHelpCenterOpen(prev => {
                   const next = !prev;
                   setLive(next ? "Help opened. Press Escape to close." : "Help closed.");
@@ -3550,7 +3647,10 @@ function RPSDoodleAppInner(){
             <button
               ref={settingsButtonRef}
               type="button"
-              onClick={handleOpenSettings}
+              onClick={() => {
+                suspendInsightPanelForHeader();
+                handleOpenSettings();
+              }}
               className={`px-3 py-1.5 rounded-xl shadow text-sm transition ${settingsOpen ? "bg-sky-600 text-white" : "bg-white/70 hover:bg-white text-sky-900"}`}
               aria-haspopup="dialog"
               aria-expanded={settingsOpen}
@@ -3559,7 +3659,7 @@ function RPSDoodleAppInner(){
             Settings ⚙️
           </button>
           </div>
-        </div>
+        </motion.div>
       )}
 
       <AnimatePresence>
