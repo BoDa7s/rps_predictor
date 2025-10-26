@@ -883,6 +883,7 @@ function RPSDoodleAppInner(){
   const insightHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const insightReturnFocusRef = useRef<HTMLElement | null>(null);
   const insightShouldFocusRef = useRef(false);
+  const insightDismissedForMatchRef = useRef(false);
   const [liveDecisionSnapshot, setLiveDecisionSnapshot] = useState<LiveInsightSnapshot | null>(null);
   const [liveInsightRounds, setLiveInsightRounds] = useState<RoundLog[]>([]);
   const persistInsightPreference = useCallback((next: boolean) => {
@@ -972,6 +973,7 @@ function RPSDoodleAppInner(){
       if (shouldPersist) {
         persistInsightPreference(true);
       }
+      insightDismissedForMatchRef.current = false;
       insightReturnFocusRef.current =
         trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
       insightShouldFocusRef.current = shouldFocus;
@@ -987,15 +989,20 @@ function RPSDoodleAppInner(){
         restoreFocus?: boolean;
         persistPreference?: boolean;
         announce?: string | null;
+        suppressForMatch?: boolean;
       } = {},
     ) => {
       const {
         restoreFocus = true,
-        persistPreference = true,
+        persistPreference = false,
         announce = "Live AI Insight panel closed.",
+        suppressForMatch = false,
       } = options;
       if (persistPreference) {
         persistInsightPreference(false);
+      }
+      if (suppressForMatch) {
+        insightDismissedForMatchRef.current = true;
       }
       setInsightPanelOpen(false);
       insightShouldFocusRef.current = false;
@@ -1288,9 +1295,10 @@ function RPSDoodleAppInner(){
 
   useEffect(() => {
     if (scene !== "MATCH") {
+      insightDismissedForMatchRef.current = false;
       return;
     }
-    if (!insightPanelOpen && insightPreferred) {
+    if (!insightPanelOpen && insightPreferred && !insightDismissedForMatchRef.current) {
       openInsightPanel(null, { focus: false, persistPreference: false });
     }
   }, [insightPanelOpen, insightPreferred, openInsightPanel, scene]);
@@ -2541,6 +2549,10 @@ function RPSDoodleAppInner(){
     clearRobotReactionTimers();
     setRobotResultReaction(null);
     resetMatch();
+    insightDismissedForMatchRef.current = false;
+    if (insightPreferred) {
+      openInsightPanel(null, { focus: false, persistPreference: false });
+    }
     aiStreakRef.current = 0;
     youStreakRef.current = 0;
     matchStartRef.current = new Date().toISOString();
@@ -3748,7 +3760,7 @@ function RPSDoodleAppInner(){
                             if (next) {
                               openInsightPanel(trigger ?? null, { persistPreference: true });
                             } else {
-                              closeInsightPanel({ persistPreference: true });
+                              closeInsightPanel({ persistPreference: true, suppressForMatch: true });
                             }
                           }}
                           onLabel="set.insight.on"
@@ -4175,7 +4187,10 @@ function RPSDoodleAppInner(){
                     className="absolute right-4 top-3 rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-700 shadow hover:bg-sky-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
                     onClick={event => {
                       if (insightPanelOpen) {
-                        closeInsightPanel({ persistPreference: insightPreferred });
+                        closeInsightPanel({
+                          persistPreference: false,
+                          suppressForMatch: true,
+                        });
                       } else {
                         openInsightPanel(event.currentTarget, { persistPreference: insightPreferred });
                       }
@@ -4423,7 +4438,9 @@ function RPSDoodleAppInner(){
                 liveRounds={liveInsightRounds}
                 historicalRounds={rounds}
                 titleRef={insightHeadingRef}
-                onClose={() => closeInsightPanel()}
+                onClose={() =>
+                  closeInsightPanel({ persistPreference: false, suppressForMatch: true })
+                }
               />
             </motion.aside>
           </motion.div>
