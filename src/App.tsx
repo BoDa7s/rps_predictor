@@ -4048,8 +4048,8 @@ function RPSDoodleAppInner(){
                   </div>
                 </div>
               ) : (
-                <div className="flex w-full items-center justify-between gap-3 sm:gap-6">
-                  <div className="flex flex-1 flex-col items-center gap-3 text-center">
+                <div className="flex w-full flex-col items-center gap-4">
+                  <div className="flex w-full flex-col items-center gap-3 text-center">
                     <div className="text-sm text-slate-700">Round <strong>{round}</strong> • Best of {bestOf}</div>
                     <span
                       className={`inline-flex items-center justify-center rounded-full px-4 py-1 text-xs font-semibold uppercase tracking-wide ${
@@ -4083,7 +4083,7 @@ function RPSDoodleAppInner(){
                     </div>
                   </div>
                   <RobotMascot
-                    className="mr-1 flex h-12 w-12 flex-shrink-0 items-center justify-center md:h-16 md:w-16 lg:h-20 lg:w-20"
+                    className="flex h-12 w-12 items-center justify-center md:h-16 md:w-16 lg:h-20 lg:w-20"
                     aria-label="Ready robot scoreboard mascot"
                     variant={hudRobotVariant}
                     sizeConfig="(min-width: 1024px) 80px, (min-width: 768px) 64px, 48px"
