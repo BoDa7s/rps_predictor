@@ -7,12 +7,23 @@ export type AiInsightChip = {
   detail: string;
 };
 
+export type AiFaqQuestion = {
+  id: string;
+  question: string;
+  answer: string;
+  more: string;
+};
+
 interface AIConfidencePanelProps {
   confidence: number | null;
   chips: AiInsightChip[];
+  questions: AiFaqQuestion[];
+  onAnalyticsEvent?: (name: string, payload?: Record<string, unknown>) => void;
   mobileOpen: boolean;
   onMobileClose: () => void;
 }
+
+const TOAST_DURATION_MS = 6000;
 
 function clampPercent(value: number | null): number {
   if (value == null || Number.isNaN(value)) return 0;
@@ -59,6 +70,12 @@ const chipInitial = { opacity: 0, y: 6 };
 const chipAnimate = { opacity: 1, y: 0 };
 const chipExit = { opacity: 0, y: -6 };
 
+const toastVariants = {
+  initial: { opacity: 0, y: 12 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: 12 },
+};
+
 const modalVariants = {
   initial: { opacity: 0 },
   animate: { opacity: 1 },
@@ -74,19 +91,47 @@ const modalCardVariants = {
 export const AIConfidencePanel: React.FC<AIConfidencePanelProps> = ({
   confidence,
   chips,
+  questions,
+  onAnalyticsEvent,
   mobileOpen,
   onMobileClose,
 }) => {
   const shouldReduceMotion = useReducedMotion();
+  const isLarge = useMediaQuery("(min-width: 1024px)");
   const isMediumUp = useMediaQuery("(min-width: 768px)");
 
+  const [accordionOpen, setAccordionOpen] = useState(true);
   const [activeChipId, setActiveChipId] = useState<string | null>(null);
+  const [activeToast, setActiveToast] = useState<AiFaqQuestion | null>(null);
+  const [moreQuestion, setMoreQuestion] = useState<AiFaqQuestion | null>(null);
+
+  useEffect(() => {
+    if (isLarge) {
+      setAccordionOpen(true);
+    } else if (isMediumUp) {
+      setAccordionOpen(false);
+    } else {
+      setAccordionOpen(true);
+    }
+  }, [isLarge, isMediumUp]);
 
   useEffect(() => {
     if (!mobileOpen && !isMediumUp) {
+      setActiveToast(null);
       setActiveChipId(null);
     }
   }, [isMediumUp, mobileOpen]);
+
+  useEffect(() => {
+    if (!activeToast) return;
+    const timer = window.setTimeout(() => setActiveToast(null), TOAST_DURATION_MS);
+    return () => window.clearTimeout(timer);
+  }, [activeToast]);
+
+  useEffect(() => {
+    if (!activeToast || !onAnalyticsEvent) return;
+    onAnalyticsEvent("toast_shown", { question_id: activeToast.id });
+  }, [activeToast, onAnalyticsEvent]);
 
   const percent = useMemo(() => clampPercent(confidence), [confidence]);
   const progressTransition = shouldReduceMotion
@@ -98,6 +143,16 @@ export const AIConfidencePanel: React.FC<AIConfidencePanelProps> = ({
       setActiveChipId(prev => (prev === id ? null : id));
     },
     [setActiveChipId],
+  );
+
+  const handleQuestionClick = useCallback(
+    (question: AiFaqQuestion) => {
+      setActiveToast(question);
+      if (onAnalyticsEvent) {
+        onAnalyticsEvent("faq_question_clicked", { question_id: question.id });
+      }
+    },
+    [onAnalyticsEvent],
   );
 
   const inlineContent = (
@@ -162,6 +217,37 @@ export const AIConfidencePanel: React.FC<AIConfidencePanelProps> = ({
           </AnimatePresence>
         </div>
       </div>
+
+      <div className="space-y-3 border-t border-slate-200 pt-4">
+        <div className="flex items-center justify-between">
+          <h4 className="text-sm font-semibold text-slate-900">Questions</h4>
+          {!isLarge && isMediumUp && (
+            <button
+              type="button"
+              className="text-xs font-semibold text-sky-600 hover:text-sky-700"
+              onClick={() => setAccordionOpen(prev => !prev)}
+              aria-expanded={accordionOpen}
+            >
+              {accordionOpen ? "Hide" : "Show"}
+            </button>
+          )}
+        </div>
+        {(accordionOpen || isLarge || !isMediumUp) && (
+          <div className="flex flex-col gap-2">
+            {questions.map(question => (
+              <button
+                key={question.id}
+                type="button"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-sm font-medium text-slate-700 shadow-sm transition hover:border-sky-300 hover:bg-sky-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                onClick={() => handleQuestionClick(question)}
+                data-analytics-id={`faq.${question.id}`}
+              >
+                {question.question}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 
@@ -171,6 +257,48 @@ export const AIConfidencePanel: React.FC<AIConfidencePanelProps> = ({
         {inlineContent}
       </div>
     </div>
+  );
+
+  const toastClass = isMediumUp
+    ? "fixed bottom-6 left-1/2 z-[90] w-[min(90vw,360px)] -translate-x-1/2"
+    : "absolute bottom-24 left-1/2 z-[90] w-[min(90vw,340px)] -translate-x-1/2";
+
+  const toastContent = (
+    <AnimatePresence>
+      {activeToast && (
+        <motion.div
+          key={activeToast.id}
+          className={toastClass}
+          variants={toastVariants}
+          initial="initial"
+          animate="animate"
+          exit="exit"
+          transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.2 }}
+        >
+          <div className="pointer-events-auto flex items-start gap-3 rounded-2xl bg-slate-900/95 p-4 text-slate-100 shadow-2xl">
+            <div className="flex-1 space-y-2">
+              <div className="text-sm font-semibold text-white">{activeToast.question}</div>
+              <p className="text-sm leading-snug text-slate-100/90">{activeToast.answer}</p>
+              <button
+                type="button"
+                className="text-xs font-semibold text-sky-200 underline-offset-2 hover:text-sky-100"
+                onClick={() => setMoreQuestion(activeToast)}
+              >
+                More
+              </button>
+            </div>
+            <button
+              type="button"
+              className="mt-0.5 text-sm font-semibold text-slate-300 transition hover:text-white"
+              onClick={() => setActiveToast(null)}
+              aria-label="Close toast"
+            >
+              ×
+            </button>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 
   return (
@@ -207,11 +335,54 @@ export const AIConfidencePanel: React.FC<AIConfidencePanelProps> = ({
               >
                 Close
               </button>
+              {toastContent}
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
 
+      {isMediumUp && toastContent}
+
+      <AnimatePresence>
+        {moreQuestion && (
+          <motion.div
+            className="fixed inset-0 z-[96] grid place-items-center bg-slate-900/50 px-4"
+            variants={modalVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.2 }}
+            onClick={() => setMoreQuestion(null)}
+          >
+            <motion.div
+              className="w-full max-w-md space-y-3 rounded-2xl bg-white p-5 text-slate-700 shadow-2xl"
+              variants={modalCardVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              transition={shouldReduceMotion ? { duration: 0 } : { duration: 0.25, ease: [0.2, 0.7, 0.3, 1] }}
+              onClick={event => event.stopPropagation()}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="ai-question-more-title"
+            >
+              <h3 id="ai-question-more-title" className="text-base font-semibold text-slate-900">
+                {moreQuestion.question}
+              </h3>
+              <p className="text-sm leading-relaxed text-slate-600">{moreQuestion.more}</p>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  className="rounded-full bg-sky-600 px-4 py-1.5 text-sm font-semibold text-white shadow hover:bg-sky-700"
+                  onClick={() => setMoreQuestion(null)}
+                >
+                  Close
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   );
 };

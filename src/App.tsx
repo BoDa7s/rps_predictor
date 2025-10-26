@@ -29,8 +29,7 @@ import botMeh96 from "./assets/mascot/bot-meh-96.svg";
 import botSad48 from "./assets/mascot/bot-sad-48.svg";
 import botSad64 from "./assets/mascot/bot-sad-64.svg";
 import botSad96 from "./assets/mascot/bot-sad-96.svg";
-import AIConfidencePanel, { AiInsightChip } from "./AIConfidencePanel";
-import HelpCenter, { type HelpQuestion } from "./HelpCenter";
+import AIConfidencePanel, { AiFaqQuestion, AiInsightChip } from "./AIConfidencePanel";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -527,41 +526,48 @@ function describeDecision(policy: DecisionPolicy, mixer: MixerTrace | undefined,
   return "AI played " + aiPretty + " against " + playerPretty + ".";
 }
 
-const AI_FAQ_QUESTIONS: HelpQuestion[] = [
+const AI_FAQ_QUESTIONS: AiFaqQuestion[] = [
   {
     id: "what-is-confidence",
     question: "What is AI confidence?",
     answer: "How sure the computer feels about its prediction—the higher the %, the more certain it is.",
+    more: "Confidence comes from how peaked the AI's probability curve is for your next move. When one move dominates the distribution, the percentage climbs; when predictions spread evenly, it drops.",
   },
   {
     id: "why-up-down",
     question: "Why does confidence go up or down?",
     answer: "It rises when your play has patterns and drops when your choices look random.",
+    more: "If you repeat sequences, the experts align and the bar rises. Mix up your plays and the experts disagree, flattening the distribution and shrinking the confidence score.",
   },
   {
     id: "what-does-50",
     question: "What does 50% mean?",
     answer: "The AI isn’t very sure—two choices look almost equally likely.",
+    more: "Around fifty percent, the AI usually sees two moves with similar odds, so it cannot commit to a strong counter yet. More rounds are needed before the pattern becomes clear.",
   },
   {
     id: "what-does-90",
     question: "What does 90%+ mean?",
     answer: "The AI sees a strong pattern and is very confident about the next move.",
+    more: "High-90 readings mean several predictors agree on the same outcome, so the AI expects the pattern to continue and will lean heavily into the counter move.",
   },
   {
     id: "training-effect",
     question: "How does Training Mode affect confidence?",
     answer: "Confidence starts low and grows as the AI gathers data about your habits.",
+    more: "Training begins with little history, so confidence is flat at first. Each round feeds the mixer new examples, gradually raising the bar as it recognizes your tendencies.",
   },
   {
     id: "challenge-use",
     question: "How does Challenge Mode use confidence?",
     answer: "The AI uses what it learned to predict and counter your next move; the % shows certainty.",
+    more: "Challenge Mode reuses your training data and weighs every expert before choosing a counter. The confidence number summarizes how closely those experts agree on your next play.",
   },
   {
     id: "example-85",
     question: "Example: What does “Confidence 85%” mean?",
     answer: "The AI thinks one move is very likely, so it chooses the counter to try to beat you.",
+    more: "An 85% reading signals that one move dominates its forecast. Expect the AI to play the counter immediately unless you break the pattern right away.",
   },
 ];
 
@@ -929,11 +935,6 @@ function RPSDoodleAppInner(){
   >(null);
   const [helpToast, setHelpToast] = useState<{ title: string; message: string } | null>(null);
   const [helpGuideOpen, setHelpGuideOpen] = useState(false);
-  const helpButtonRef = useRef<HTMLButtonElement | null>(null);
-  const [helpCenterOpen, setHelpCenterOpen] = useState(false);
-  const [helpActiveQuestionId, setHelpActiveQuestionId] = useState<string | null>(
-    AI_FAQ_QUESTIONS[0]?.id ?? null,
-  );
   const [robotHovered, setRobotHovered] = useState(false);
   const [robotFocused, setRobotFocused] = useState(false);
   const [robotResultReaction, setRobotResultReaction] = useState<RobotReaction | null>(null);
@@ -1183,6 +1184,7 @@ function RPSDoodleAppInner(){
   const welcomeProgress = welcomeSlideCount ? ((welcomeSlide + 1) / welcomeSlideCount) * 100 : 100;
   const isWelcomeLastSlide = welcomeSlide >= welcomeSlideCount - 1;
   const showMainUi = !welcomeActive && scene !== "WELCOME" && scene !== "BOOT";
+
   const trainingComplete = trainingCount >= TRAIN_ROUNDS;
   const needsTraining = !isTrained && !trainingComplete;
   const shouldGateTraining = needsTraining && !trainingActive;
@@ -1228,33 +1230,6 @@ function RPSDoodleAppInner(){
   const [outcome, setOutcome] = useState<Outcome|undefined>();
   const [resultBanner, setResultBanner] = useState<"Victory"|"Defeat"|"Tie"|null>(null);
   const [live, setLive] = useState("");
-  useEffect(() => {
-    if (!showMainUi) {
-      setHelpCenterOpen(false);
-      return;
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) {
-        return;
-      }
-      if (target?.isContentEditable) {
-        return;
-      }
-      const key = event.key.toLowerCase();
-      const altH = event.altKey && key === "h";
-      const questionKey = !event.altKey && event.key === "?";
-      if (!altH && !questionKey) return;
-      event.preventDefault();
-      setHelpCenterOpen(prev => {
-        const next = !prev;
-        setLive(next ? "Help opened. Press Escape to close." : "Help closed.");
-        return next;
-      });
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [setLive, showMainUi]);
   useEffect(() => {
     if (welcomeActive) {
       if (!welcomeToastShownRef.current) {
@@ -2998,18 +2973,6 @@ function RPSDoodleAppInner(){
         </div>
       )}
 
-      <HelpCenter
-        open={helpCenterOpen}
-        onClose={() => {
-          setHelpCenterOpen(false);
-          setLive("Help closed.");
-          requestAnimationFrame(() => helpButtonRef.current?.focus());
-        }}
-        questions={AI_FAQ_QUESTIONS}
-        activeQuestionId={helpActiveQuestionId}
-        onChangeActiveQuestion={setHelpActiveQuestionId}
-      />
-
       <AnimatePresence>
         {toastReaderOpen && toastMessage && (
           <motion.div
@@ -3415,27 +3378,6 @@ function RPSDoodleAppInner(){
               data-dev-label="hdr.modes"
             >
               Modes
-            </button>
-            <button
-              ref={helpButtonRef}
-              type="button"
-              onClick={() => {
-                setHelpCenterOpen(prev => {
-                  const next = !prev;
-                  setLive(next ? "Help opened. Press Escape to close." : "Help closed.");
-                  return next;
-                });
-              }}
-              className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl shadow text-sm transition ${
-                helpCenterOpen ? "bg-sky-600 text-white" : "bg-white/70 hover:bg-white text-sky-900"
-              }`}
-              aria-haspopup="dialog"
-              aria-expanded={helpCenterOpen}
-              aria-keyshortcuts="Alt+H"
-              data-dev-label="hdr.help"
-            >
-              <span aria-hidden className="text-base leading-none">ℹ️</span>
-              Help
             </button>
             <button
               ref={settingsButtonRef}
@@ -4192,6 +4134,8 @@ function RPSDoodleAppInner(){
           <AIConfidencePanel
             confidence={liveAiConfidence}
             chips={liveAiInsights}
+            questions={AI_FAQ_QUESTIONS}
+            onAnalyticsEvent={fireAnalyticsEvent}
             mobileOpen={aiPanelMobileOpen}
             onMobileClose={() => setAiPanelMobileOpen(false)}
           />
