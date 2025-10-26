@@ -58,6 +58,44 @@ const LEGACY_WELCOME_SEEN_KEY = "rps_welcome_seen_v1";
 const WELCOME_PREF_KEY = "rps_welcome_pref_v1";
 type WelcomePreference = "show" | "skip";
 
+interface RobotMascotProps {
+  className?: string;
+  "aria-label"?: string;
+}
+
+const RobotMascot: React.FC<RobotMascotProps> = ({ className = "", "aria-label": ariaLabel }) => {
+  return (
+    <motion.div
+      className={className}
+      role="img"
+      aria-label={ariaLabel}
+      initial={{ rotate: 0, y: 0 }}
+      animate={{ rotate: [0, -3, 2, 0], y: [0, -4, 2, 0] }}
+      transition={{ duration: 2.1, ease: "easeInOut", repeat: Infinity }}
+      style={{ transformOrigin: "50% 100%" }}
+    >
+      <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" className="h-full w-full">
+        <defs>
+          <linearGradient id="robot-body" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor="#e0f2fe" />
+            <stop offset="100%" stopColor="#bae6fd" />
+          </linearGradient>
+        </defs>
+        <rect x="18" y="8" width="28" height="24" rx="8" fill="url(#robot-body)" stroke="#0f172a" strokeWidth="2" />
+        <circle cx="32" cy="4" r="3" fill="#38bdf8" stroke="#0f172a" strokeWidth="2" />
+        <line x1="32" y1="4" x2="32" y2="8" stroke="#0f172a" strokeWidth="2" strokeLinecap="round" />
+        <rect x="10" y="28" width="44" height="28" rx="10" fill="#e2e8f0" stroke="#0f172a" strokeWidth="2" />
+        <rect x="20" y="16" width="8" height="6" rx="2" fill="#0f172a" />
+        <rect x="36" y="16" width="8" height="6" rx="2" fill="#0f172a" />
+        <path d="M24 40c2.2 3 6 5 8 5s5.8-2 8-5" fill="none" stroke="#0f172a" strokeWidth="2" strokeLinecap="round" />
+        <rect x="18" y="48" width="28" height="8" rx="3" fill="#38bdf8" stroke="#0f172a" strokeWidth="2" />
+        <rect x="6" y="36" width="6" height="12" rx="2" fill="#38bdf8" stroke="#0f172a" strokeWidth="2" />
+        <rect x="52" y="36" width="6" height="12" rx="2" fill="#38bdf8" stroke="#0f172a" strokeWidth="2" />
+      </svg>
+    </motion.div>
+  );
+};
+
 function getInitialWelcomePreference(): WelcomePreference {
   if (typeof window === "undefined") return "show";
   try {
@@ -3612,8 +3650,8 @@ function RPSDoodleAppInner(){
                   </div>
                 </div>
               ) : (
-                <>
-                  <div className="flex flex-col items-center gap-3 text-center">
+                <div className="flex w-full items-center justify-between gap-3 sm:gap-6">
+                  <div className="flex flex-1 flex-col items-center gap-3 text-center">
                     <div className="text-sm text-slate-700">Round <strong>{round}</strong> • Best of {bestOf}</div>
                     <span
                       className={`inline-flex items-center justify-center rounded-full px-4 py-1 text-xs font-semibold uppercase tracking-wide ${
@@ -3634,7 +3672,7 @@ function RPSDoodleAppInner(){
                             : "TIE"
                         : "READY"}
                     </span>
-                    <div className="flex items-center gap-8 text-2xl font-semibold text-slate-900">
+                    <div className="flex items-center gap-6 text-2xl font-semibold text-slate-900 sm:gap-8">
                       <div className="flex flex-col items-center gap-1 text-base font-normal text-slate-500">
                         <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">You</span>
                         <span className="text-3xl font-semibold text-slate-900">{playerScore}</span>
@@ -3646,7 +3684,8 @@ function RPSDoodleAppInner(){
                       </div>
                     </div>
                   </div>
-                </>
+                  <RobotMascot className="mr-1 flex h-12 w-12 flex-shrink-0 items-center justify-center sm:h-16 sm:w-16" aria-label="Ready robot scoreboard mascot" />
+                </div>
               )}
             </motion.div>
 
