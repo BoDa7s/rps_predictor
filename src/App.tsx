@@ -862,18 +862,27 @@ function RPSDoodleAppInner(){
   const [insightPanelOpen, setInsightPanelOpen] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     try {
-      return sessionStorage.getItem(INSIGHT_PANEL_STATE_KEY) === "true";
+      const stored = sessionStorage.getItem(INSIGHT_PANEL_STATE_KEY);
+      if (stored === "false") {
+        return false;
+      }
+      return scene === "MATCH";
     } catch {
       return false;
     }
   });
-  const [insightPreferred, setInsightPreferred] = useState<boolean>(insightPanelOpen);
+  const [insightPreferred, setInsightPreferred] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    try {
+      return sessionStorage.getItem(INSIGHT_PANEL_STATE_KEY) !== "false";
+    } catch {
+      return true;
+    }
+  });
   const insightPanelRef = useRef<HTMLDivElement | null>(null);
   const insightHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const insightReturnFocusRef = useRef<HTMLElement | null>(null);
-  const insightAutoClosedRef = useRef(false);
   const insightShouldFocusRef = useRef(false);
-  const insightTouchStartXRef = useRef<number | null>(null);
   const [liveDecisionSnapshot, setLiveDecisionSnapshot] = useState<LiveInsightSnapshot | null>(null);
   const [liveInsightRounds, setLiveInsightRounds] = useState<RoundLog[]>([]);
   const persistInsightPreference = useCallback((next: boolean) => {
@@ -954,12 +963,12 @@ function RPSDoodleAppInner(){
   );
 
   const openInsightPanel = useCallback(
-    (trigger?: HTMLElement | null) => {
+    (trigger?: HTMLElement | null, options?: { focus?: boolean }) => {
+      const shouldFocus = options?.focus ?? true;
       persistInsightPreference(true);
-      insightAutoClosedRef.current = false;
       insightReturnFocusRef.current =
         trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
-      insightShouldFocusRef.current = true;
+      insightShouldFocusRef.current = shouldFocus;
       setInsightPanelOpen(true);
       setLive("Live AI Insight panel opened. Overlays the game.");
     },
@@ -973,7 +982,6 @@ function RPSDoodleAppInner(){
         persistInsightPreference(false);
       }
       setInsightPanelOpen(false);
-      insightAutoClosedRef.current = !persist;
       insightShouldFocusRef.current = false;
       if (announce) {
         setLive(announce);
@@ -990,11 +998,6 @@ function RPSDoodleAppInner(){
     },
     [persistInsightPreference, setLive],
   );
-  useEffect(() => {
-    if (insightPanelOpen) {
-      insightShouldFocusRef.current = true;
-    }
-  }, []);
   const robotResultTimeoutRef = useRef<number | null>(null);
   const robotRestTimeoutRef = useRef<number | null>(null);
   const [trainingCelebrationActive, setTrainingCelebrationActive] = useState(false);
@@ -1044,67 +1047,23 @@ function RPSDoodleAppInner(){
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [toastReaderOpen]);
   useEffect(() => {
-    if (!insightPanelOpen) {
+    if (!insightPanelOpen || !insightShouldFocusRef.current) {
       return;
     }
+    insightShouldFocusRef.current = false;
     const node = insightPanelRef.current;
-    if (!node) return;
     const focusableSelector =
       "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
-    const getFocusable = () =>
-      Array.from(node.querySelectorAll<HTMLElement>(focusableSelector)).filter(
-        element => !element.hasAttribute("disabled"),
-      );
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeInsightPanel();
-        return;
-      }
-      if (event.key === "Tab") {
-        const focusable = getFocusable();
-        if (!focusable.length) return;
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (event.shiftKey) {
-          if (document.activeElement === first || document.activeElement === node) {
-            event.preventDefault();
-            last.focus();
-          }
-        } else if (document.activeElement === last) {
-          event.preventDefault();
-          first.focus();
-        }
-      }
-    };
-    const handleTouchStart = (event: TouchEvent) => {
-      const touch = event.touches[0];
-      insightTouchStartXRef.current = touch ? touch.clientX : null;
-    };
-    const handleTouchEnd = (event: TouchEvent) => {
-      const startX = insightTouchStartXRef.current;
-      insightTouchStartXRef.current = null;
-      const touch = event.changedTouches[0];
-      if (startX == null || !touch) return;
-      if (touch.clientX - startX > 60) {
-        closeInsightPanel();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    node.addEventListener("touchstart", handleTouchStart);
-    node.addEventListener("touchend", handleTouchEnd);
-    if (insightShouldFocusRef.current) {
-      requestAnimationFrame(() => {
-        const focusTarget = insightHeadingRef.current ?? getFocusable()[0];
-        focusTarget?.focus();
-      });
-    }
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      node.removeEventListener("touchstart", handleTouchStart);
-      node.removeEventListener("touchend", handleTouchEnd);
-    };
-  }, [closeInsightPanel, insightPanelOpen]);
+    requestAnimationFrame(() => {
+      const focusable = node
+        ? Array.from(node.querySelectorAll<HTMLElement>(focusableSelector)).filter(
+            element => !element.hasAttribute("disabled"),
+          )
+        : [];
+      const focusTarget = insightHeadingRef.current ?? focusable[0];
+      focusTarget?.focus();
+    });
+  }, [insightPanelOpen]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -1312,29 +1271,13 @@ function RPSDoodleAppInner(){
   const showTrainingCompleteBadge = !needsTraining && trainingCount >= TRAIN_ROUNDS;
 
   useEffect(() => {
-    const blocked =
-      statsOpen ||
-      leaderboardOpen ||
-      isPlayerModalOpen ||
-      scene === "RESULTS" ||
-      shouldGateTraining;
-    if (blocked && insightPanelOpen) {
-      insightAutoClosedRef.current = true;
-      setInsightPanelOpen(false);
-    } else if (!blocked && !insightPanelOpen && insightAutoClosedRef.current && insightPreferred) {
-      insightAutoClosedRef.current = false;
-      insightShouldFocusRef.current = true;
-      setInsightPanelOpen(true);
+    if (scene !== "MATCH") {
+      return;
     }
-  }, [
-    insightPanelOpen,
-    insightPreferred,
-    isPlayerModalOpen,
-    leaderboardOpen,
-    scene,
-    statsOpen,
-    shouldGateTraining,
-  ]);
+    if (!insightPanelOpen && insightPreferred) {
+      openInsightPanel(null, { focus: false });
+    }
+  }, [insightPanelOpen, insightPreferred, openInsightPanel, scene]);
 
   const difficultyDisabled = !isTrained || !predictorMode;
   const bootPercent = Math.round(bootProgress);
@@ -4433,31 +4376,21 @@ function RPSDoodleAppInner(){
         {insightPanelOpen && (
           <motion.div
             key="insight-panel"
-            className="fixed inset-0 z-[70] flex justify-end"
+            className="pointer-events-none fixed inset-0 z-[70] flex justify-end"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            <motion.div
-              className="absolute inset-0 bg-slate-900/20 backdrop-blur-[1px]"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: reduceMotion ? 0 : 0.2, ease: [0.22, 0.61, 0.36, 1] }}
-              onClick={() => closeInsightPanel()}
-              aria-hidden="true"
-            />
             <motion.aside
               id="live-insight-panel"
               role="dialog"
-              aria-modal="true"
               aria-label="Live AI Insight panel. Overlays the game."
               ref={insightPanelRef}
               initial={{ x: reduceMotion ? 0 : 48, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               exit={{ x: reduceMotion ? 0 : 48, opacity: 0 }}
               transition={{ duration: reduceMotion ? 0 : 0.25, ease: [0.22, 0.61, 0.36, 1] }}
-              className="relative z-10 flex h-full w-full flex-col bg-white shadow-2xl ring-1 ring-slate-200 sm:w-[min(440px,60vw)] lg:w-[min(520px,40vw)]"
+              className="pointer-events-auto relative z-10 flex h-full w-full flex-col bg-white shadow-2xl ring-1 ring-slate-200 sm:w-[min(440px,60vw)] lg:w-[min(520px,40vw)]"
             >
               <InsightPanel
                 snapshot={liveDecisionSnapshot}
