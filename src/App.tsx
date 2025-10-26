@@ -728,16 +728,49 @@ function ModeCard({ mode, onSelect, isDimmed, disabled = false }: { mode: Mode, 
   );
 }
 
-function OnOffToggle({ value, onChange, disabled = false, onLabel, offLabel }: { value: boolean; onChange: (next: boolean) => void; disabled?: boolean; onLabel?: string; offLabel?: string }) {
+type OnOffToggleProps = {
+  value: boolean;
+  onChange: (next: boolean, event?: React.MouseEvent<HTMLButtonElement>) => void;
+  disabled?: boolean;
+  onLabel?: string;
+  offLabel?: string;
+  ariaLabel?: string;
+  ariaLabelledby?: string;
+  ariaDescribedby?: string;
+  className?: string;
+};
+
+function OnOffToggle({
+  value,
+  onChange,
+  disabled = false,
+  onLabel,
+  offLabel,
+  ariaLabel,
+  ariaLabelledby,
+  ariaDescribedby,
+  className,
+}: OnOffToggleProps) {
   const baseButton =
     "px-3 py-1 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500";
   return (
-    <div className="inline-flex items-center overflow-hidden rounded-full border border-slate-300 bg-white shadow-sm">
+    <div
+      className={`inline-flex items-center overflow-hidden rounded-full border border-slate-300 bg-white shadow-sm ${
+        className ?? ""
+      }`}
+    >
       <button
         type="button"
         className={`${baseButton} ${value ? "bg-sky-600 text-white" : "text-slate-500 hover:bg-slate-100"}`}
         aria-pressed={value}
-        onClick={() => !disabled && onChange(true)}
+        aria-label={ariaLabel}
+        aria-labelledby={ariaLabelledby}
+        aria-describedby={ariaDescribedby}
+        onClick={event => {
+          if (!disabled) {
+            onChange(true, event);
+          }
+        }}
         disabled={disabled}
         data-dev-label={onLabel}
       >
@@ -747,7 +780,14 @@ function OnOffToggle({ value, onChange, disabled = false, onLabel, offLabel }: {
         type="button"
         className={`${baseButton} ${!value ? "bg-slate-200 text-slate-700 shadow-inner" : "text-slate-500 hover:bg-slate-100"}`}
         aria-pressed={!value}
-        onClick={() => !disabled && onChange(false)}
+        aria-label={ariaLabel}
+        aria-labelledby={ariaLabelledby}
+        aria-describedby={ariaDescribedby}
+        onClick={event => {
+          if (!disabled) {
+            onChange(false, event);
+          }
+        }}
         disabled={disabled}
         data-dev-label={offLabel}
       >
@@ -3859,10 +3899,12 @@ function RPSDoodleAppInner(){
                           <p className="text-xs text-amber-600">Complete {TRAIN_ROUNDS} training rounds to unlock predictions.</p>
                         )}
                       </div>
-                      <div className="flex flex-col gap-2 sm:grid sm:grid-cols-[minmax(0,1fr)_max-content] sm:items-center sm:gap-x-8">
-                        <div className="flex items-center justify-between gap-3 sm:justify-start">
+                      <div className="space-y-2">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex items-center gap-2">
-                            <span className="text-sm font-semibold text-slate-800" id="live-ai-insight-label">Show Live AI Insight</span>
+                            <span className="text-sm font-semibold text-slate-800" id="live-ai-insight-label">
+                              Show Live AI Insight
+                            </span>
                             <span
                               className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 text-[10px] font-semibold text-slate-500"
                               title="When on, the panel opens automatically at the start of each match. When off, open it manually from the match HUD."
@@ -3871,48 +3913,21 @@ function RPSDoodleAppInner(){
                               i
                             </span>
                           </div>
+                          <OnOffToggle
+                            value={insightPreferred}
+                            onChange={(next, event) =>
+                              handleInsightPreferenceToggle(next, event?.currentTarget ?? undefined)
+                            }
+                            ariaLabelledby="live-ai-insight-label"
+                            ariaDescribedby="live-ai-insight-helper"
+                            className="self-start sm:self-auto"
+                            onLabel="set.insight.on"
+                            offLabel="set.insight.off"
+                          />
                         </div>
-                        <p
-                          className="settings-helper-clamp text-xs text-slate-500 sm:col-start-1"
-                          id="live-ai-insight-helper"
-                        >
-                          When on, the panel opens automatically at the start of each match. When off, open it manually from the
-                          match HUD.
+                        <p className="settings-helper-clamp text-xs text-slate-500" id="live-ai-insight-helper">
+                          When on, the panel opens automatically at the start of each match. When off, open it manually from the match HUD.
                         </p>
-                        <div className="flex flex-shrink-0 justify-end self-end sm:col-start-2 sm:row-span-2 sm:self-center sm:justify-self-end">
-                          <div className="inline-flex min-h-[44px] min-w-[132px] items-center justify-center overflow-hidden rounded-full border border-slate-300 bg-white shadow-sm">
-                            <button
-                              type="button"
-                              className={`min-h-[44px] min-w-[66px] px-4 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
-                                insightPreferred ? "bg-sky-600 text-white" : "text-slate-500 hover:bg-slate-100"
-                              }`}
-                              aria-pressed={insightPreferred}
-                              aria-labelledby="live-ai-insight-label"
-                              aria-describedby="live-ai-insight-helper"
-                              onClick={event =>
-                                handleInsightPreferenceToggle(true, event.currentTarget)
-                              }
-                              data-dev-label="set.insight.on"
-                            >
-                              On
-                            </button>
-                            <button
-                              type="button"
-                              className={`min-h-[44px] min-w-[66px] px-4 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
-                                !insightPreferred
-                                  ? "bg-slate-200 text-slate-700 shadow-inner"
-                                  : "text-slate-500 hover:bg-slate-100"
-                              }`}
-                              aria-pressed={!insightPreferred}
-                              aria-labelledby="live-ai-insight-label"
-                              aria-describedby="live-ai-insight-helper"
-                              onClick={() => handleInsightPreferenceToggle(false)}
-                              data-dev-label="set.insight.off"
-                            >
-                              Off
-                            </button>
-                          </div>
-                        </div>
                       </div>
                       <div className="space-y-2">
                         <div className="flex items-center gap-2">
