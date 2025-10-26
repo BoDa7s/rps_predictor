@@ -101,14 +101,24 @@ const RobotMascot: React.FC<RobotMascotProps> = ({
       role={ariaLabel ? "img" : undefined}
       aria-label={ariaLabel}
       aria-hidden={ariaLabel ? undefined : true}
-      initial={{ rotate: 0, y: 0, scale: 1 }}
+      initial={{ rotate: -3, y: 3, scale: 0.98 }}
       animate={{
-        rotate: [0, -1.2, 0.8, -0.6, 0],
-        y: [0, -1.5, 0.5, -0.5, 0],
-        scale: [1, 1.01, 0.995, 1.005, 1],
+        rotate: [-3, 5, -4, 4, -2, 3, 0],
+        y: [3, -12, 6, -10, 4, -7, 3],
+        scale: [0.98, 1.12, 0.99, 1.07, 0.97, 1.05, 1],
       }}
-      transition={{ duration: 6, ease: "easeInOut", repeat: Infinity }}
-      style={{ transformOrigin: "50% 50%", filter: "drop-shadow(0 0 12px rgba(248, 113, 113, 0.45))" }}
+      transition={{
+        duration: 5.5,
+        ease: "easeInOut",
+        repeat: Infinity,
+        repeatType: "loop",
+        repeatDelay: 0.4,
+        times: [0, 0.18, 0.35, 0.55, 0.72, 0.88, 1],
+      }}
+      style={{
+        transformOrigin: "50% 55%",
+        filter: "drop-shadow(0 14px 22px rgba(59, 130, 246, 0.4))",
+      }}
     >
       <img
         src={assets[64]}
