@@ -3859,41 +3859,59 @@ function RPSDoodleAppInner(){
                           <p className="text-xs text-amber-600">Complete {TRAIN_ROUNDS} training rounds to unlock predictions.</p>
                         )}
                       </div>
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-semibold text-slate-800">Show Live AI Insight</div>
-                          <p className="text-xs text-slate-500">
-                            When on, the panel opens automatically at the start of each match. When off, open it manually from
-                            the match HUD.
-                          </p>
+                      <div className="flex flex-col gap-2 sm:grid sm:grid-cols-[minmax(0,1fr)_max-content] sm:items-center sm:gap-x-8">
+                        <div className="flex items-center justify-between gap-3 sm:justify-start">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-semibold text-slate-800" id="live-ai-insight-label">Show Live AI Insight</span>
+                            <span
+                              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 text-[10px] font-semibold text-slate-500"
+                              title="When on, the panel opens automatically at the start of each match. When off, open it manually from the match HUD."
+                              aria-hidden="true"
+                            >
+                              i
+                            </span>
+                          </div>
                         </div>
-                        <div className="inline-flex items-center overflow-hidden rounded-full border border-slate-300 bg-white shadow-sm">
-                          <button
-                            type="button"
-                            className={`px-3 py-1 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
-                              insightPreferred ? "bg-sky-600 text-white" : "text-slate-500 hover:bg-slate-100"
-                            }`}
-                            aria-pressed={insightPreferred}
-                            onClick={event =>
-                              handleInsightPreferenceToggle(true, event.currentTarget)
-                            }
-                            data-dev-label="set.insight.on"
-                          >
-                            On
-                          </button>
-                          <button
-                            type="button"
-                            className={`px-3 py-1 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
-                              !insightPreferred
-                                ? "bg-slate-200 text-slate-700 shadow-inner"
-                                : "text-slate-500 hover:bg-slate-100"
-                            }`}
-                            aria-pressed={!insightPreferred}
-                            onClick={() => handleInsightPreferenceToggle(false)}
-                            data-dev-label="set.insight.off"
-                          >
-                            Off
-                          </button>
+                        <p
+                          className="settings-helper-clamp text-xs text-slate-500 sm:col-start-1"
+                          id="live-ai-insight-helper"
+                        >
+                          When on, the panel opens automatically at the start of each match. When off, open it manually from the
+                          match HUD.
+                        </p>
+                        <div className="flex flex-shrink-0 justify-end self-end sm:col-start-2 sm:row-span-2 sm:self-center sm:justify-self-end">
+                          <div className="inline-flex min-h-[44px] min-w-[132px] items-center justify-center overflow-hidden rounded-full border border-slate-300 bg-white shadow-sm">
+                            <button
+                              type="button"
+                              className={`min-h-[44px] min-w-[66px] px-4 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                                insightPreferred ? "bg-sky-600 text-white" : "text-slate-500 hover:bg-slate-100"
+                              }`}
+                              aria-pressed={insightPreferred}
+                              aria-labelledby="live-ai-insight-label"
+                              aria-describedby="live-ai-insight-helper"
+                              onClick={event =>
+                                handleInsightPreferenceToggle(true, event.currentTarget)
+                              }
+                              data-dev-label="set.insight.on"
+                            >
+                              On
+                            </button>
+                            <button
+                              type="button"
+                              className={`min-h-[44px] min-w-[66px] px-4 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                                !insightPreferred
+                                  ? "bg-slate-200 text-slate-700 shadow-inner"
+                                  : "text-slate-500 hover:bg-slate-100"
+                              }`}
+                              aria-pressed={!insightPreferred}
+                              aria-labelledby="live-ai-insight-label"
+                              aria-describedby="live-ai-insight-helper"
+                              onClick={() => handleInsightPreferenceToggle(false)}
+                              data-dev-label="set.insight.off"
+                            >
+                              Off
+                            </button>
+                          </div>
                         </div>
                       </div>
                       <div className="space-y-2">
