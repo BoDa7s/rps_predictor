@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, DecisionPolicy } from "./stats";
@@ -64,33 +64,93 @@ interface RobotMascotProps {
 }
 
 const RobotMascot: React.FC<RobotMascotProps> = ({ className = "", "aria-label": ariaLabel }) => {
+  const gradientId = useId();
+  const coreGradientId = `${gradientId}-core`;
+  const haloGradientId = `${gradientId}-halo`;
+  const scanGradientId = `${gradientId}-scan`;
+  const glowFilterId = `${gradientId}-glow`;
+  const clipId = `${gradientId}-clip`;
+
   return (
     <motion.div
       className={className}
       role="img"
       aria-label={ariaLabel}
-      initial={{ rotate: 0, y: 0 }}
-      animate={{ rotate: [0, -3, 2, 0], y: [0, -4, 2, 0] }}
-      transition={{ duration: 2.1, ease: "easeInOut", repeat: Infinity }}
-      style={{ transformOrigin: "50% 100%" }}
+      initial={{ rotate: 0, x: 0, y: 0, scale: 1 }}
+      animate={{
+        rotate: [0, -2, 1.5, -1, 0],
+        x: [0, 1.5, -1, 0.5, 0],
+        y: [0, -2, 1, -1.5, 0],
+        scale: [1, 1.01, 0.995, 1.005, 1],
+      }}
+      transition={{ duration: 5, ease: "easeInOut", repeat: Infinity }}
+      style={{ transformOrigin: "50% 50%" }}
     >
       <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" className="h-full w-full">
         <defs>
-          <linearGradient id="robot-body" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor="#e0f2fe" />
-            <stop offset="100%" stopColor="#bae6fd" />
+          <radialGradient id={coreGradientId} cx="50%" cy="45%" r="55%">
+            <stop offset="0%" stopColor="#f8fafc" />
+            <stop offset="50%" stopColor="#dbeafe" />
+            <stop offset="100%" stopColor="#1d4ed8" />
+          </radialGradient>
+          <radialGradient id={haloGradientId} cx="50%" cy="50%" r="65%">
+            <stop offset="0%" stopColor="rgba(96, 165, 250, 0.35)" />
+            <stop offset="100%" stopColor="rgba(37, 99, 235, 0)" />
+          </radialGradient>
+          <linearGradient id={scanGradientId} x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor="rgba(59, 130, 246, 0)" />
+            <stop offset="40%" stopColor="rgba(96, 165, 250, 0.35)" />
+            <stop offset="60%" stopColor="rgba(125, 211, 252, 0.55)" />
+            <stop offset="100%" stopColor="rgba(59, 130, 246, 0)" />
           </linearGradient>
+          <filter id={glowFilterId} x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="2.5" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+          <clipPath id={clipId}>
+            <circle cx="32" cy="32" r="14" />
+          </clipPath>
         </defs>
-        <rect x="18" y="8" width="28" height="24" rx="8" fill="url(#robot-body)" stroke="#0f172a" strokeWidth="2" />
-        <circle cx="32" cy="4" r="3" fill="#38bdf8" stroke="#0f172a" strokeWidth="2" />
-        <line x1="32" y1="4" x2="32" y2="8" stroke="#0f172a" strokeWidth="2" strokeLinecap="round" />
-        <rect x="10" y="28" width="44" height="28" rx="10" fill="#e2e8f0" stroke="#0f172a" strokeWidth="2" />
-        <rect x="20" y="16" width="8" height="6" rx="2" fill="#0f172a" />
-        <rect x="36" y="16" width="8" height="6" rx="2" fill="#0f172a" />
-        <path d="M24 40c2.2 3 6 5 8 5s5.8-2 8-5" fill="none" stroke="#0f172a" strokeWidth="2" strokeLinecap="round" />
-        <rect x="18" y="48" width="28" height="8" rx="3" fill="#38bdf8" stroke="#0f172a" strokeWidth="2" />
-        <rect x="6" y="36" width="6" height="12" rx="2" fill="#38bdf8" stroke="#0f172a" strokeWidth="2" />
-        <rect x="52" y="36" width="6" height="12" rx="2" fill="#38bdf8" stroke="#0f172a" strokeWidth="2" />
+        <g filter={`url(#${glowFilterId})`}>
+          <circle cx="32" cy="32" r="22" fill={`url(#${haloGradientId})`} />
+          <circle
+            cx="32"
+            cy="32"
+            r="18"
+            fill="none"
+            stroke="#60a5fa"
+            strokeWidth="1.5"
+            strokeOpacity="0.75"
+          />
+        </g>
+        <circle cx="32" cy="32" r="14" fill={`url(#${coreGradientId})`} stroke="#0f172a" strokeWidth="1.25" />
+        <circle cx="32" cy="32" r="6" fill="#0f172a" opacity="0.85" />
+        <circle cx="34.5" cy="30" r="2" fill="#bfdbfe" opacity="0.9" />
+        <circle cx="29" cy="35" r="1.2" fill="#3b82f6" opacity="0.7" />
+        <g clipPath={`url(#${clipId})`}>
+          <motion.rect
+            x="18"
+            y="18"
+            width="28"
+            height="10"
+            fill={`url(#${scanGradientId})`}
+            animate={{ y: [18, 24, 18] }}
+            transition={{ duration: 4.5, ease: "easeInOut", repeat: Infinity }}
+          />
+        </g>
+        <circle
+          cx="32"
+          cy="32"
+          r="14"
+          fill="none"
+          stroke="#93c5fd"
+          strokeWidth="0.75"
+          strokeDasharray="2 4"
+          strokeOpacity="0.65"
+        />
       </svg>
     </motion.div>
   );
