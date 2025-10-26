@@ -29,6 +29,7 @@ import botMeh96 from "./assets/mascot/bot-meh-96.svg";
 import botSad48 from "./assets/mascot/bot-sad-48.svg";
 import botSad64 from "./assets/mascot/bot-sad-64.svg";
 import botSad96 from "./assets/mascot/bot-sad-96.svg";
+import AIConfidencePanel, { AiFaqQuestion, AiInsightChip } from "./AIConfidencePanel";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -525,6 +526,156 @@ function describeDecision(policy: DecisionPolicy, mixer: MixerTrace | undefined,
   return "AI played " + aiPretty + " against " + playerPretty + ".";
 }
 
+const AI_FAQ_QUESTIONS: AiFaqQuestion[] = [
+  {
+    id: "what-is-confidence",
+    question: "What is AI confidence?",
+    answer: "How sure the computer feels about its prediction—the higher the %, the more certain it is.",
+    more: "Confidence comes from how peaked the AI's probability curve is for your next move. When one move dominates the distribution, the percentage climbs; when predictions spread evenly, it drops.",
+  },
+  {
+    id: "why-up-down",
+    question: "Why does confidence go up or down?",
+    answer: "It rises when your play has patterns and drops when your choices look random.",
+    more: "If you repeat sequences, the experts align and the bar rises. Mix up your plays and the experts disagree, flattening the distribution and shrinking the confidence score.",
+  },
+  {
+    id: "what-does-50",
+    question: "What does 50% mean?",
+    answer: "The AI isn’t very sure—two choices look almost equally likely.",
+    more: "Around fifty percent, the AI usually sees two moves with similar odds, so it cannot commit to a strong counter yet. More rounds are needed before the pattern becomes clear.",
+  },
+  {
+    id: "what-does-90",
+    question: "What does 90%+ mean?",
+    answer: "The AI sees a strong pattern and is very confident about the next move.",
+    more: "High-90 readings mean several predictors agree on the same outcome, so the AI expects the pattern to continue and will lean heavily into the counter move.",
+  },
+  {
+    id: "training-effect",
+    question: "How does Training Mode affect confidence?",
+    answer: "Confidence starts low and grows as the AI gathers data about your habits.",
+    more: "Training begins with little history, so confidence is flat at first. Each round feeds the mixer new examples, gradually raising the bar as it recognizes your tendencies.",
+  },
+  {
+    id: "challenge-use",
+    question: "How does Challenge Mode use confidence?",
+    answer: "The AI uses what it learned to predict and counter your next move; the % shows certainty.",
+    more: "Challenge Mode reuses your training data and weighs every expert before choosing a counter. The confidence number summarizes how closely those experts agree on your next play.",
+  },
+  {
+    id: "example-85",
+    question: "Example: What does “Confidence 85%” mean?",
+    answer: "The AI thinks one move is very likely, so it chooses the counter to try to beat you.",
+    more: "An 85% reading signals that one move dominates its forecast. Expect the AI to play the counter immediately unless you break the pattern right away.",
+  },
+];
+
+function fireAnalyticsEvent(name: string, payload: Record<string, unknown> = {}) {
+  if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+    window.dispatchEvent(new CustomEvent(name, { detail: payload }));
+  }
+  if (DEV_MODE_ENABLED) {
+    // eslint-disable-next-line no-console
+    console.debug(`[analytics] ${name}`, payload);
+  }
+}
+
+function chipLabelForExpert(name: string, move: Move): string {
+  const pretty = prettyMove(move);
+  switch (name) {
+    case "FrequencyExpert":
+      return `Frequent ${pretty}`;
+    case "RecencyExpert":
+      return `Recent bias: ${pretty}`;
+    case "MarkovExpert(k=1)":
+      return `Sequence hints ${pretty}`;
+    case "MarkovExpert(k=2)":
+      return `Longer pattern → ${pretty}`;
+    case "OutcomeExpert":
+      return `After last result: ${pretty}`;
+    case "WinStayLoseShiftExpert":
+      return `Win/Lose habit: ${pretty}`;
+    case "PeriodicExpert":
+      return `Alternating pattern: ${pretty}`;
+    case "BaitResponseExpert":
+      return `Reacting to us: ${pretty}`;
+    default:
+      return `Expert hint: ${pretty}`;
+  }
+}
+
+function chipDetailForExpert(name: string, move: Move, weight: number, probability: number): string {
+  const pretty = prettyMove(move);
+  const weightPct = Math.round(weight * 100);
+  const probPct = Math.round(probability * 100);
+  const friendlyName = name
+    .replace("MarkovExpert", "Markov expert")
+    .replace("WinStayLoseShiftExpert", "Win/Stay-Lose/Switch expert")
+    .replace("PeriodicExpert", "Periodic expert")
+    .replace("FrequencyExpert", "Frequency expert")
+    .replace("RecencyExpert", "Recency expert")
+    .replace("OutcomeExpert", "Outcome expert")
+    .replace("BaitResponseExpert", "Bait response expert");
+  return `${friendlyName} leaned ${probPct}% toward ${pretty}, contributing ${weightPct}% of the mix.`;
+}
+
+function makeInsightChips(trace: PendingDecision | null): AiInsightChip[] {
+  if (!trace) return [];
+  const chips: AiInsightChip[] = [];
+
+  const pushChip = (chip: AiInsightChip) => {
+    if (!chip.detail) return;
+    if (chips.some(existing => existing.id === chip.id)) return;
+    chips.push(chip);
+  };
+
+  if (trace.heuristic?.reason) {
+    const reason = trace.heuristic.reason;
+    pushChip({
+      id: "heuristic-reason",
+      label: reason.length > 52 ? reason.slice(0, 49) + "…" : reason,
+      detail: reason,
+    });
+  }
+
+  if (trace.heuristic?.predicted) {
+    const predicted = trace.heuristic.predicted;
+    const pct = trace.heuristic.conf != null ? Math.round((trace.heuristic.conf ?? 0) * 100) : null;
+    const pretty = prettyMove(predicted);
+    const detailParts = [`Heuristic expected ${pretty}`];
+    if (pct != null) detailParts.push(`about ${pct}% of the time`);
+    detailParts.push("and picked the counter move.");
+    pushChip({
+      id: "heuristic-prediction",
+      label: `Expecting ${pretty}`,
+      detail: detailParts.join(" "),
+    });
+  }
+
+  if (trace.mixer?.experts?.length) {
+    const sorted = [...trace.mixer.experts].sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0));
+    sorted.slice(0, 2).forEach((expert, index) => {
+      let topMove: Move = "rock";
+      let topScore = -Infinity;
+      (Object.keys(expert.dist) as Move[]).forEach(move => {
+        const score = expert.dist[move] ?? 0;
+        if (score > topScore) {
+          topScore = score;
+          topMove = move;
+        }
+      });
+      pushChip({
+        id: `expert-${index}-${expert.name}`,
+        label: chipLabelForExpert(expert.name, topMove),
+        detail: chipDetailForExpert(expert.name, topMove, expert.weight ?? 0, topScore > 0 ? topScore : 0),
+      });
+    });
+  }
+
+  return chips.slice(0, 2);
+}
+
 function computeSwitchRate(moves: Move[]): number{
   if (moves.length <= 1) return 0;
   let switches = 0;
@@ -727,6 +878,8 @@ function RPSDoodleAppInner(){
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
   const [roundPage, setRoundPage] = useState(0);
   const [liveAiConfidence, setLiveAiConfidence] = useState<number | null>(null);
+  const [liveAiInsights, setLiveAiInsights] = useState<AiInsightChip[]>([]);
+  const [aiPanelMobileOpen, setAiPanelMobileOpen] = useState(false);
   const decisionTraceRef = useRef<PendingDecision | null>(null);
   const aiStreakRef = useRef(0);
   const youStreakRef = useRef(0);
@@ -1504,6 +1657,12 @@ function RPSDoodleAppInner(){
   }, [currentProfile?.id, currentProfile?.predictorDefault, needsTraining, trainingActive, predictorMode]);
 
   useEffect(() => {
+    if (scene !== "MATCH") {
+      setAiPanelMobileOpen(false);
+    }
+  }, [scene]);
+
+  useEffect(() => {
     if (scene !== "MATCH") return;
     if (phase !== "idle") return;
     const readyAt = typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -2172,12 +2331,16 @@ function RPSDoodleAppInner(){
       const heur = predictNext(lastMoves, rng);
       if (!heur.move || (heur.conf ?? 0) < 0.34) {
         const fallbackMove = MOVES[Math.floor(rng()*3)] as Move;
-        decisionTraceRef.current = {
+        const trace: PendingDecision = {
           policy: "heuristic",
           heuristic: { predicted: heur.move, conf: heur.conf, reason: heur.reason || "Low confidence – random choice" },
           confidence: heur.conf ?? 0.33,
         };
+        decisionTraceRef.current = trace;
+        const confValue = typeof heur.conf === "number" ? heur.conf : 0;
         setLiveAiConfidence(heur.conf ?? null);
+        setLiveAiInsights(makeInsightChips(trace));
+        fireAnalyticsEvent("ai_confidence_updated", { value: Math.round(confValue * 100) });
         return fallbackMove;
       }
       const predicted = heur.move as Move;
@@ -2185,12 +2348,15 @@ function RPSDoodleAppInner(){
       heuristicDist[predicted] = 1;
       const move = policyCounterFromDist(heuristicDist, aiMode);
       const heurConf = heur.conf ?? 0.5;
-      decisionTraceRef.current = {
+      const trace: PendingDecision = {
         policy: "heuristic",
         heuristic: { predicted: heur.move, conf: heur.conf, reason: heur.reason },
         confidence: heurConf,
       };
+      decisionTraceRef.current = trace;
       setLiveAiConfidence(heurConf);
+      setLiveAiInsights(makeInsightChips(trace));
+      fireAnalyticsEvent("ai_confidence_updated", { value: Math.round(heurConf * 100) });
       return move;
     }
     const ctx: Ctx = { playerMoves: lastMoves, aiMoves: aiHistory, outcomes: outcomesHist, rng };
@@ -2198,7 +2364,7 @@ function RPSDoodleAppInner(){
     const snapshot = getMixer().snapshot();
     const move = policyCounterFromDist(dist, aiMode);
     const confidence = Math.max(dist.rock, dist.paper, dist.scissors);
-    decisionTraceRef.current = {
+    const trace: PendingDecision = {
       policy: "mixer",
       mixer: {
         dist,
@@ -2208,7 +2374,10 @@ function RPSDoodleAppInner(){
       },
       confidence,
     };
+    decisionTraceRef.current = trace;
     setLiveAiConfidence(confidence);
+    setLiveAiInsights(makeInsightChips(trace));
+    fireAnalyticsEvent("ai_confidence_updated", { value: Math.round(confidence * 100) });
     return move;
   }
 
@@ -2224,6 +2393,9 @@ function RPSDoodleAppInner(){
     setPlayerPick(undefined);
     setPhase("idle");
     setResultBanner(null);
+    setLiveAiConfidence(null);
+    setLiveAiInsights([]);
+    decisionTraceRef.current = null;
     currentMatchRoundsRef.current = [];
     lastDecisionMsRef.current = null;
     roundStartRef.current = performance.now();
@@ -3802,8 +3974,11 @@ function RPSDoodleAppInner(){
                 </div>
               </div>
             )}
+            <div className="w-full px-4">
+              <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-6 lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
+                <div className="flex flex-col items-center gap-4 lg:gap-6">
             {/* HUD */}
-            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .05 }} className="w-[min(92vw,820px)] bg-white/70 rounded-2xl shadow px-4 py-3">
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .05 }} className="relative w-full max-w-[820px] bg-white/70 rounded-2xl shadow px-4 py-3">
               {(needsTraining || trainingActive) ? (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-sm text-slate-700">
@@ -3857,10 +4032,18 @@ function RPSDoodleAppInner(){
                   />
                 </div>
               )}
+              <button
+                type="button"
+                className="md:hidden absolute right-4 top-4 rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm"
+                onClick={() => setAiPanelMobileOpen(true)}
+                aria-label="Open AI insight panel"
+              >
+                ℹ️
+              </button>
             </motion.div>
 
             {trainingActive && (
-              <div className="mt-3 w-[min(92vw,820px)] flex items-center justify-between text-sm text-slate-600">
+              <div className="flex w-full max-w-[820px] items-center justify-between text-sm text-slate-600">
                 <span>Keep playing to finish training.</span>
                 <span className="text-slate-500">Training completes after {TRAIN_ROUNDS} rounds.</span>
               </div>
@@ -3871,7 +4054,7 @@ function RPSDoodleAppInner(){
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: .1 }}
-              className="relative mt-6 grid w-[min(92vw,820px)] gap-4 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]"
+              className="relative mt-6 grid w-full max-w-[820px] gap-4 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]"
             >
               <div className="flex">
                 <motion.div layout className="relative flex w-full flex-col rounded-3xl bg-white/80 p-5 shadow-lg">
@@ -3931,7 +4114,7 @@ function RPSDoodleAppInner(){
             </motion.div>
 
             {/* Controls */}
-            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .2 }} className="mt-6 grid grid-cols-3 gap-3 w-[min(92vw,820px)]">
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .2 }} className="mt-6 grid w-full max-w-[820px] grid-cols-3 gap-3">
               {MOVES.map((m)=>{
                 const selected = playerPick === m && (phase === "selected" || phase === "countdown" || phase === "reveal" || phase === "resolve");
                 return (
@@ -3946,6 +4129,18 @@ function RPSDoodleAppInner(){
                 )
               })}
             </motion.div>
+          </div>
+
+          <AIConfidencePanel
+            confidence={liveAiConfidence}
+            chips={liveAiInsights}
+            questions={AI_FAQ_QUESTIONS}
+            onAnalyticsEvent={fireAnalyticsEvent}
+            mobileOpen={aiPanelMobileOpen}
+            onMobileClose={() => setAiPanelMobileOpen(false)}
+          />
+        </div>
+      </div>
           </motion.section>
         )}
 
