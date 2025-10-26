@@ -963,9 +963,15 @@ function RPSDoodleAppInner(){
   );
 
   const openInsightPanel = useCallback(
-    (trigger?: HTMLElement | null, options?: { focus?: boolean }) => {
+    (
+      trigger?: HTMLElement | null,
+      options?: { focus?: boolean; persistPreference?: boolean },
+    ) => {
       const shouldFocus = options?.focus ?? true;
-      persistInsightPreference(true);
+      const shouldPersist = options?.persistPreference ?? true;
+      if (shouldPersist) {
+        persistInsightPreference(true);
+      }
       insightReturnFocusRef.current =
         trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
       insightShouldFocusRef.current = shouldFocus;
@@ -976,9 +982,19 @@ function RPSDoodleAppInner(){
   );
 
   const closeInsightPanel = useCallback(
-    (options: { restoreFocus?: boolean; persist?: boolean; announce?: string | null } = {}) => {
-      const { restoreFocus = true, persist = true, announce = "Live AI Insight panel closed." } = options;
-      if (persist) {
+    (
+      options: {
+        restoreFocus?: boolean;
+        persistPreference?: boolean;
+        announce?: string | null;
+      } = {},
+    ) => {
+      const {
+        restoreFocus = true,
+        persistPreference = true,
+        announce = "Live AI Insight panel closed.",
+      } = options;
+      if (persistPreference) {
         persistInsightPreference(false);
       }
       setInsightPanelOpen(false);
@@ -992,7 +1008,7 @@ function RPSDoodleAppInner(){
           requestAnimationFrame(() => target.focus());
         }
       }
-      if (persist) {
+      if (persistPreference) {
         insightReturnFocusRef.current = null;
       }
     },
@@ -1275,9 +1291,16 @@ function RPSDoodleAppInner(){
       return;
     }
     if (!insightPanelOpen && insightPreferred) {
-      openInsightPanel(null, { focus: false });
+      openInsightPanel(null, { focus: false, persistPreference: false });
     }
   }, [insightPanelOpen, insightPreferred, openInsightPanel, scene]);
+
+  useEffect(() => {
+    if (scene === "MATCH" || !insightPanelOpen) {
+      return;
+    }
+    closeInsightPanel({ restoreFocus: false, persistPreference: false });
+  }, [closeInsightPanel, insightPanelOpen, scene]);
 
   const difficultyDisabled = !isTrained || !predictorMode;
   const bootPercent = Math.round(bootProgress);
@@ -3712,7 +3735,10 @@ function RPSDoodleAppInner(){
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <div className="text-sm font-semibold text-slate-800">Show Live AI Insight</div>
-                          <p className="text-xs text-slate-500">Slide the analytics panel in alongside the match.</p>
+                          <p className="text-xs text-slate-500">
+                            When on, the panel opens automatically at the start of each match. When off, open it manually from
+                            the match HUD.
+                          </p>
                         </div>
                         <OnOffToggle
                           value={insightPreferred}
@@ -3720,9 +3746,9 @@ function RPSDoodleAppInner(){
                             const trigger =
                               document.activeElement instanceof HTMLElement ? document.activeElement : null;
                             if (next) {
-                              openInsightPanel(trigger ?? null);
+                              openInsightPanel(trigger ?? null, { persistPreference: true });
                             } else {
-                              closeInsightPanel();
+                              closeInsightPanel({ persistPreference: true });
                             }
                           }}
                           onLabel="set.insight.on"
@@ -4149,12 +4175,12 @@ function RPSDoodleAppInner(){
                     className="absolute right-4 top-3 rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-700 shadow hover:bg-sky-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
                     onClick={event => {
                       if (insightPanelOpen) {
-                        closeInsightPanel();
+                        closeInsightPanel({ persistPreference: insightPreferred });
                       } else {
-                        openInsightPanel(event.currentTarget);
+                        openInsightPanel(event.currentTarget, { persistPreference: insightPreferred });
                       }
                     }}
-                    aria-pressed={insightPreferred}
+                    aria-pressed={insightPanelOpen}
                     aria-expanded={insightPanelOpen}
                     aria-controls="live-insight-panel"
                     data-dev-label="hud.insight"
