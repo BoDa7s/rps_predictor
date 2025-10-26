@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, type Transition } from "framer-motion";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, DecisionPolicy } from "./stats";
 import { PlayersProvider, usePlayers, Grade, PlayerProfile, CONSENT_TEXT_VERSION, GRADE_OPTIONS } from "./players";
@@ -80,6 +80,106 @@ const ROBOT_ASSETS: Record<RobotVariant, { 48: string; 64: string; 96: string }>
   sad: { 48: botSad48, 64: botSad64, 96: botSad96 },
 };
 
+const ROBOT_BASE_GLOW = "drop-shadow(0 0 8px rgba(14, 165, 233, 0.35))";
+
+type MascotPattern = {
+  keyframes: {
+    rotate: number[];
+    y: number[];
+    x: number[];
+    scale: number[];
+    filter: string[];
+  };
+  transition: Transition;
+};
+
+const ROBOT_MOTION_PATTERNS: MascotPattern[] = [
+  {
+    keyframes: {
+      rotate: [0, -2.4, 1.6, -1.2, 0.5, 0],
+      y: [0, -3.4, 1.6, -2.6, 0.9, 0],
+      x: [0, 1.6, 0.3, -1.1, 0.4, 0],
+      scale: [1, 1.024, 1.008, 0.992, 1.012, 1],
+      filter: [
+        ROBOT_BASE_GLOW,
+        "drop-shadow(0 0 14px rgba(56, 189, 248, 0.55))",
+        "drop-shadow(0 0 11px rgba(59, 130, 246, 0.48))",
+        "drop-shadow(0 0 16px rgba(147, 197, 253, 0.6))",
+        "drop-shadow(0 0 10px rgba(14, 165, 233, 0.5))",
+        ROBOT_BASE_GLOW,
+      ],
+    },
+    transition: {
+      duration: 7.6,
+      ease: "easeInOut",
+      times: [0, 0.18, 0.37, 0.63, 0.84, 1],
+    },
+  },
+  {
+    keyframes: {
+      rotate: [0, 1.4, -1.8, 1.1, -0.6, 0],
+      y: [0, 2.3, -3.6, 1.8, -1.2, 0],
+      x: [0, -1.1, 0.9, -0.4, 0.2, 0],
+      scale: [1, 0.992, 1.022, 1.006, 0.994, 1],
+      filter: [
+        ROBOT_BASE_GLOW,
+        "drop-shadow(0 0 9px rgba(59, 130, 246, 0.45))",
+        "drop-shadow(0 0 14px rgba(96, 165, 250, 0.58))",
+        "drop-shadow(0 0 12px rgba(14, 165, 233, 0.52))",
+        "drop-shadow(0 0 10px rgba(56, 189, 248, 0.46))",
+        ROBOT_BASE_GLOW,
+      ],
+    },
+    transition: {
+      duration: 6.9,
+      ease: "easeInOut",
+      times: [0, 0.22, 0.44, 0.68, 0.85, 1],
+    },
+  },
+  {
+    keyframes: {
+      rotate: [0, -1.1, 0.8, -0.9, 1.2, 0],
+      y: [0, -1.5, 2.4, -1.8, 1.1, 0],
+      x: [0, 0.5, -1.3, 0.8, -0.4, 0],
+      scale: [1, 1.012, 0.99, 1.018, 1.004, 1],
+      filter: [
+        ROBOT_BASE_GLOW,
+        "drop-shadow(0 0 11px rgba(37, 99, 235, 0.48))",
+        "drop-shadow(0 0 13px rgba(14, 165, 233, 0.55))",
+        "drop-shadow(0 0 12px rgba(129, 140, 248, 0.58))",
+        "drop-shadow(0 0 9px rgba(56, 189, 248, 0.5))",
+        ROBOT_BASE_GLOW,
+      ],
+    },
+    transition: {
+      duration: 7.8,
+      ease: "easeInOut",
+      times: [0, 0.17, 0.39, 0.61, 0.83, 1],
+    },
+  },
+  {
+    keyframes: {
+      rotate: [0, 0.9, -0.6, 1.4, -1.5, 0],
+      y: [0, 1.8, -1.2, 2.6, -2.1, 0],
+      x: [0, -0.8, 1.4, -1.2, 0.6, 0],
+      scale: [1, 0.996, 1.018, 0.988, 1.02, 1],
+      filter: [
+        ROBOT_BASE_GLOW,
+        "drop-shadow(0 0 10px rgba(56, 189, 248, 0.5))",
+        "drop-shadow(0 0 15px rgba(59, 130, 246, 0.56))",
+        "drop-shadow(0 0 11px rgba(14, 165, 233, 0.52))",
+        "drop-shadow(0 0 13px rgba(96, 165, 250, 0.55))",
+        ROBOT_BASE_GLOW,
+      ],
+    },
+    transition: {
+      duration: 7.4,
+      ease: "easeInOut",
+      times: [0, 0.2, 0.42, 0.66, 0.86, 1],
+    },
+  },
+];
+
 interface RobotMascotProps {
   className?: string;
   variant?: RobotVariant;
@@ -94,6 +194,21 @@ const RobotMascot: React.FC<RobotMascotProps> = ({
   "aria-label": ariaLabel,
 }) => {
   const assets = ROBOT_ASSETS[variant] ?? ROBOT_ASSETS.idle;
+  const [patternIndex, setPatternIndex] = useState(() =>
+    Math.floor(Math.random() * ROBOT_MOTION_PATTERNS.length),
+  );
+  const currentPattern = ROBOT_MOTION_PATTERNS[patternIndex] ?? ROBOT_MOTION_PATTERNS[0];
+
+  const handlePatternComplete = useCallback(() => {
+    if (ROBOT_MOTION_PATTERNS.length <= 1) return;
+    setPatternIndex(prev => {
+      let next = Math.floor(Math.random() * ROBOT_MOTION_PATTERNS.length);
+      if (next === prev) {
+        next = (next + 1) % ROBOT_MOTION_PATTERNS.length;
+      }
+      return next;
+    });
+  }, []);
 
   return (
     <motion.div
@@ -101,24 +216,11 @@ const RobotMascot: React.FC<RobotMascotProps> = ({
       role={ariaLabel ? "img" : undefined}
       aria-label={ariaLabel}
       aria-hidden={ariaLabel ? undefined : true}
-      initial={{ rotate: -3, y: 3, scale: 0.98 }}
-      animate={{
-        rotate: [-3, 5, -4, 4, -2, 3, 0],
-        y: [3, -12, 6, -10, 4, -7, 3],
-        scale: [0.98, 1.12, 0.99, 1.07, 0.97, 1.05, 1],
-      }}
-      transition={{
-        duration: 5.5,
-        ease: "easeInOut",
-        repeat: Infinity,
-        repeatType: "loop",
-        repeatDelay: 0.4,
-        times: [0, 0.18, 0.35, 0.55, 0.72, 0.88, 1],
-      }}
-      style={{
-        transformOrigin: "50% 55%",
-        filter: "drop-shadow(0 14px 22px rgba(59, 130, 246, 0.4))",
-      }}
+      initial={{ rotate: 0, y: 0, x: 0, scale: 1, filter: ROBOT_BASE_GLOW }}
+      animate={currentPattern.keyframes}
+      transition={currentPattern.transition}
+      onAnimationComplete={handlePatternComplete}
+      style={{ transformOrigin: "50% 50%" }}
     >
       <img
         src={assets[64]}
