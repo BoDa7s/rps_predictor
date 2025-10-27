@@ -2624,8 +2624,15 @@ function RPSDoodleAppInner(){
   useEffect(() => {
     if (!pendingWelcomeExit) return;
     const { reason } = pendingWelcomeExit;
+    if (reason === "setup" && (!hasConsented || !currentProfile)) {
+      return;
+    }
     if (reason !== "dismiss" && needsTraining && currentProfile && hasConsented) {
-      if (!trainingActive) {
+      if (reason === "setup") {
+        if (trainingActive) {
+          setTrainingActive(false);
+        }
+      } else if (!trainingActive) {
         setTrainingActive(true);
       }
       startMatch("practice", { silent: true });
