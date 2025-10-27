@@ -74,6 +74,7 @@ const INSIGHT_PANEL_STATE_KEY = "rps_insight_panel_open_v1";
 type WelcomePreference = "show" | "skip";
 
 const HUD_PANEL_GUTTER = 8;
+const HUD_PANEL_RIGHT_GAP_EXTRA = 12;
 
 type RobotVariant = "idle" | "happy" | "meh" | "sad";
 type RobotReaction = { emoji: string; body?: string; label: string; variant: RobotVariant };
@@ -1162,7 +1163,11 @@ function RPSDoodleAppInner(){
     }
     const rect = node.getBoundingClientRect();
     const rightGap = Math.max(0, window.innerWidth - rect.right);
-    const desiredOffset = Math.max(0, insightPanelWidth + HUD_PANEL_GUTTER - rightGap);
+    const adjustedRightGap = Math.max(0, rightGap - HUD_PANEL_RIGHT_GAP_EXTRA);
+    const desiredOffset = Math.max(
+      0,
+      insightPanelWidth + HUD_PANEL_GUTTER - adjustedRightGap,
+    );
     commitOffset(desiredOffset);
   }, [insightPanelOpen, insightPanelWidth, scene]);
 
