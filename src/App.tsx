@@ -76,10 +76,38 @@ type WelcomePreference = "show" | "skip";
 type RobotVariant = "idle" | "happy" | "meh" | "sad";
 type RobotReaction = { emoji: string; body?: string; label: string; variant: RobotVariant };
 
+type ModernToastVariant = "danger" | "warning";
+
 type ModernToast = {
-  variant: "danger";
+  variant: ModernToastVariant;
   title: string;
   message: string;
+};
+
+const MODERN_TOAST_BASE_CLASSES =
+  "pointer-events-auto flex w-[min(22rem,calc(100vw-2rem))] items-start gap-3 rounded-2xl px-4 py-3 text-sm text-slate-700 shadow-2xl";
+
+const MODERN_TOAST_STYLES: Record<ModernToastVariant, {
+  container: string;
+  icon: string;
+  iconWrapper: string;
+  title: string;
+  dismiss: string;
+}> = {
+  danger: {
+    container: "border border-rose-200/80 bg-white/95 ring-1 ring-rose-200/70",
+    icon: "🚫",
+    iconWrapper: "bg-rose-100 text-rose-600",
+    title: "text-sm font-semibold text-rose-600",
+    dismiss: "rounded-full bg-rose-100 px-2 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-200",
+  },
+  warning: {
+    container: "border border-amber-200/80 bg-white/95 ring-1 ring-amber-200/70",
+    icon: "⚠️",
+    iconWrapper: "bg-amber-100 text-amber-600",
+    title: "text-sm font-semibold text-amber-700",
+    dismiss: "rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-200",
+  },
 };
 
 const ROBOT_ASSETS: Record<RobotVariant, { 48: string; 64: string; 96: string }> = {
@@ -2826,7 +2854,7 @@ function RPSDoodleAppInner(){
 
   const handleDisabledInsightClick = useCallback(() => {
     showModernToast({
-      variant: "danger",
+      variant: "warning",
       title: "Enable AI predictor for Live Insight",
       message: "Turn on the AI predictor in Settings to view Live AI Insight during Practice matches.",
     });
@@ -3679,34 +3707,37 @@ function RPSDoodleAppInner(){
         )}
       </AnimatePresence>
 
-      {modernToast && (
-        <div className="pointer-events-none fixed inset-0 z-[96] flex items-center justify-center p-4">
-          <div
-            role="alert"
-            aria-live="assertive"
-            className="pointer-events-auto flex w-[min(22rem,calc(100vw-2rem))] items-start gap-3 rounded-2xl border border-rose-200/80 bg-white/95 px-4 py-3 text-sm text-slate-700 shadow-2xl ring-1 ring-rose-200/70"
-          >
+      {modernToast && (() => {
+        const variantStyles = MODERN_TOAST_STYLES[modernToast.variant];
+        return (
+          <div className="pointer-events-none fixed inset-0 z-[96] flex items-center justify-center p-4">
             <div
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-600"
-              aria-hidden="true"
+              role="alert"
+              aria-live="assertive"
+              className={`${MODERN_TOAST_BASE_CLASSES} ${variantStyles.container}`}
             >
-              ⚠️
+              <div
+                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${variantStyles.iconWrapper}`}
+                aria-hidden="true"
+              >
+                {variantStyles.icon}
+              </div>
+              <div className="flex-1 space-y-1">
+                <p className={variantStyles.title}>{modernToast.title}</p>
+                <p className="text-sm leading-relaxed text-slate-600">{modernToast.message}</p>
+              </div>
+              <button
+                type="button"
+                onClick={dismissModernToast}
+                className={variantStyles.dismiss}
+                aria-label="Dismiss alert"
+              >
+                Dismiss
+              </button>
             </div>
-            <div className="flex-1 space-y-1">
-              <p className="text-sm font-semibold text-rose-600">{modernToast.title}</p>
-              <p className="text-sm leading-relaxed text-slate-600">{modernToast.message}</p>
-            </div>
-            <button
-              type="button"
-              onClick={dismissModernToast}
-              className="rounded-full bg-rose-100 px-2 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-200"
-              aria-label="Dismiss alert"
-            >
-              Dismiss
-            </button>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {toastMessage && toastConfirm ? (
         <div className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/50 px-4">
@@ -4956,7 +4987,6 @@ function RPSDoodleAppInner(){
                               openInsightPanel(event.currentTarget, { persistPreference: insightPreferred });
                             }
                           }}
-                          disabled={hudInsightDisabled}
                           aria-pressed={hudInsightDisabled ? undefined : insightPanelOpen}
                           aria-expanded={hudInsightDisabled ? undefined : insightPanelOpen}
                           aria-controls="live-insight-panel"
