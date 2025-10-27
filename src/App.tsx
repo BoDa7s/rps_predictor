@@ -4579,14 +4579,7 @@ function RPSDoodleAppInner(){
         {insightPanelOpen && (
           <motion.div
             key="insight-panel"
-            className={`pointer-events-none fixed inset-0 z-[70] flex justify-end${
-              scene === "MATCH" ? " pt-24" : ""
-            }`}
-            style={
-              scene === "MATCH"
-                ? { paddingTop: "calc(6rem + env(safe-area-inset-top))" }
-                : undefined
-            }
+            className="pointer-events-none fixed inset-0 z-[70] flex justify-end"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
