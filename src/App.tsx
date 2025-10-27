@@ -4626,7 +4626,7 @@ function RPSDoodleAppInner(){
                               : { opacity: 0, width: 0 }
                           }
                           transition={insightRailTransition}
-                          className="pointer-events-auto absolute inset-0 z-20 flex h-full w-full flex-col overflow-hidden bg-white shadow-2xl ring-1 ring-slate-200 md:static md:h-full md:min-h-0 md:max-h-[calc(100vh-6rem)] md:self-stretch md:rounded-3xl md:bg-white/85 md:shadow-lg"
+                          className="pointer-events-auto absolute inset-0 z-20 flex h-full w-full flex-col overflow-hidden bg-white shadow-2xl ring-1 ring-slate-200 md:static md:h-full md:min-h-0 md:max-h-[calc(100vh-11rem)] md:self-stretch md:rounded-3xl md:bg-white/85 md:shadow-lg"
                         >
                           <InsightPanel
                             snapshot={liveDecisionSnapshot}
