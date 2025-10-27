@@ -73,6 +73,8 @@ const WELCOME_PREF_KEY = "rps_welcome_pref_v1";
 const INSIGHT_PANEL_STATE_KEY = "rps_insight_panel_open_v1";
 type WelcomePreference = "show" | "skip";
 
+const HUD_PANEL_GUTTER = 8;
+
 type RobotVariant = "idle" | "happy" | "meh" | "sad";
 type RobotReaction = { emoji: string; body?: string; label: string; variant: RobotVariant };
 
@@ -928,6 +930,8 @@ function RPSDoodleAppInner(){
   const insightShouldFocusRef = useRef(false);
   const insightDismissedForMatchRef = useRef(false);
   const [insightPanelWidth, setInsightPanelWidth] = useState(0);
+  const hudColumnRef = useRef<HTMLDivElement | null>(null);
+  const [hudColumnOffset, setHudColumnOffset] = useState(0);
   const [liveDecisionSnapshot, setLiveDecisionSnapshot] = useState<LiveInsightSnapshot | null>(null);
   const [liveInsightRounds, setLiveInsightRounds] = useState<RoundLog[]>([]);
   const persistInsightPreference = useCallback((next: boolean) => {
@@ -1143,6 +1147,52 @@ function RPSDoodleAppInner(){
       window.removeEventListener("resize", updateWidth);
     };
   }, [insightPanelOpen]);
+
+  const updateHudColumnOffset = useCallback(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const node = hudColumnRef.current;
+    const commitOffset = (value: number) => {
+      setHudColumnOffset(prev => (Math.abs(prev - value) < 0.5 ? prev : value));
+    };
+    if (!node || scene !== "MATCH" || !insightPanelOpen || insightPanelWidth <= 0) {
+      commitOffset(0);
+      return;
+    }
+    const rect = node.getBoundingClientRect();
+    const rightGap = Math.max(0, window.innerWidth - rect.right);
+    const desiredOffset = Math.max(0, insightPanelWidth + HUD_PANEL_GUTTER - rightGap);
+    commitOffset(desiredOffset);
+  }, [insightPanelOpen, insightPanelWidth, scene]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const node = hudColumnRef.current;
+    if (!node) {
+      setHudColumnOffset(0);
+      return;
+    }
+    updateHudColumnOffset();
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => updateHudColumnOffset());
+      resizeObserver.observe(node);
+    }
+    window.addEventListener("resize", updateHudColumnOffset);
+    return () => {
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+      window.removeEventListener("resize", updateHudColumnOffset);
+    };
+  }, [updateHudColumnOffset]);
+
+  useEffect(() => {
+    updateHudColumnOffset();
+  }, [insightPanelOpen, insightPanelWidth, updateHudColumnOffset]);
   const robotResultTimeoutRef = useRef<number | null>(null);
   const robotRestTimeoutRef = useRef<number | null>(null);
   const [trainingCelebrationActive, setTrainingCelebrationActive] = useState(false);
@@ -4328,175 +4378,180 @@ function RPSDoodleAppInner(){
               </div>
             )}
             <div className="w-full px-4">
-              <div className="mx-auto flex w-full max-w-[820px] flex-col items-center gap-6">
+              <motion.div
+                ref={hudColumnRef}
+                className="mx-auto flex w-full max-w-[820px] flex-col items-center gap-6"
+                animate={{ marginRight: hudColumnOffset }}
+                transition={{ duration: 0.2, ease: [0.22, 0.61, 0.36, 1] }}
+              >
                 <div className="flex w-full flex-col items-center gap-4 lg:gap-6">
-            {/* HUD */}
-            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .05 }} className="relative w-full max-w-[820px] bg-white/70 rounded-2xl shadow px-4 py-3">
-              {(needsTraining || trainingActive) ? (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm text-slate-700">
-                    <span>Training the AI on your moves…</span>
-                    <span>{trainingDisplayCount} / {TRAIN_ROUNDS}</span>
-                  </div>
-                  <div className="h-2 bg-slate-200 rounded">
-                    <div className="h-full bg-sky-500 rounded" style={{ width: `${Math.min(100, trainingProgress * 100)}%` }} />
-                  </div>
-                </div>
-              ) : (
-                <div className="flex w-full flex-col items-center gap-4">
-                  <button
-                    type="button"
-                    className="absolute right-4 top-3 rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-700 shadow hover:bg-sky-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
-                    onClick={event => {
-                      if (insightPanelOpen) {
-                        closeInsightPanel({
-                          persistPreference: false,
-                          suppressForMatch: true,
-                        });
-                      } else {
-                        openInsightPanel(event.currentTarget, { persistPreference: insightPreferred });
-                      }
-                    }}
-                    aria-pressed={insightPanelOpen}
-                    aria-expanded={insightPanelOpen}
-                    aria-controls="live-insight-panel"
-                    data-dev-label="hud.insight"
-                  >
-                    Insight
-                  </button>
-                  <div className="flex w-full flex-col items-center gap-3 text-center">
-                    <div className="text-sm text-slate-700">Round <strong>{round}</strong> • Best of {bestOf}</div>
-                    <span
-                      className={`inline-flex items-center justify-center rounded-full px-4 py-1 text-xs font-semibold uppercase tracking-wide ${
-                        (phase === "resolve" || phase === "feedback") && outcome
-                          ? outcome === "win"
-                            ? "bg-emerald-100 text-emerald-700"
-                            : outcome === "lose"
-                              ? "bg-rose-100 text-rose-700"
-                              : "bg-amber-100 text-amber-700"
-                          : "bg-slate-200 text-slate-600"
-                      }`}
-                    >
-                      {(phase === "resolve" || phase === "feedback") && outcome
-                        ? outcome === "win"
-                          ? "WIN"
-                          : outcome === "lose"
-                            ? "LOSS"
-                            : "TIE"
-                        : "READY"}
-                    </span>
-                    <div className="flex items-center gap-6 text-2xl font-semibold text-slate-900 sm:gap-8">
-                      <div className="flex flex-col items-center gap-1 text-base font-normal text-slate-500">
-                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">You</span>
-                        <span className="text-3xl font-semibold text-slate-900">{playerScore}</span>
+                  {/* HUD */}
+                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .05 }} className="relative w-full max-w-[820px] bg-white/70 rounded-2xl shadow px-4 py-3">
+                    {(needsTraining || trainingActive) ? (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-sm text-slate-700">
+                          <span>Training the AI on your moves…</span>
+                          <span>{trainingDisplayCount} / {TRAIN_ROUNDS}</span>
+                        </div>
+                        <div className="h-2 bg-slate-200 rounded">
+                          <div className="h-full bg-sky-500 rounded" style={{ width: `${Math.min(100, trainingProgress * 100)}%` }} />
+                        </div>
                       </div>
-                      <div className="h-10 w-px bg-slate-200" aria-hidden />
-                      <div className="flex flex-col items-center gap-1 text-base font-normal text-slate-500">
-                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">AI</span>
-                        <span className="text-3xl font-semibold text-slate-900">{aiScore}</span>
+                    ) : (
+                      <div className="flex w-full flex-col items-center gap-4">
+                        <button
+                          type="button"
+                          className="absolute right-4 top-3 rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-700 shadow hover:bg-sky-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+                          onClick={event => {
+                            if (insightPanelOpen) {
+                              closeInsightPanel({
+                                persistPreference: false,
+                                suppressForMatch: true,
+                              });
+                            } else {
+                              openInsightPanel(event.currentTarget, { persistPreference: insightPreferred });
+                            }
+                          }}
+                          aria-pressed={insightPanelOpen}
+                          aria-expanded={insightPanelOpen}
+                          aria-controls="live-insight-panel"
+                          data-dev-label="hud.insight"
+                        >
+                          Insight
+                        </button>
+                        <div className="flex w-full flex-col items-center gap-3 text-center">
+                          <div className="text-sm text-slate-700">Round <strong>{round}</strong> • Best of {bestOf}</div>
+                          <span
+                            className={`inline-flex items-center justify-center rounded-full px-4 py-1 text-xs font-semibold uppercase tracking-wide ${
+                              (phase === "resolve" || phase === "feedback") && outcome
+                                ? outcome === "win"
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : outcome === "lose"
+                                    ? "bg-rose-100 text-rose-700"
+                                    : "bg-amber-100 text-amber-700"
+                                : "bg-slate-200 text-slate-600"
+                            }`}
+                          >
+                            {(phase === "resolve" || phase === "feedback") && outcome
+                              ? outcome === "win"
+                                ? "WIN"
+                                : outcome === "lose"
+                                  ? "LOSS"
+                                  : "TIE"
+                              : "READY"}
+                          </span>
+                          <div className="flex items-center gap-6 text-2xl font-semibold text-slate-900 sm:gap-8">
+                            <div className="flex flex-col items-center gap-1 text-base font-normal text-slate-500">
+                              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">You</span>
+                              <span className="text-3xl font-semibold text-slate-900">{playerScore}</span>
+                            </div>
+                            <div className="h-10 w-px bg-slate-200" aria-hidden />
+                            <div className="flex flex-col items-center gap-1 text-base font-normal text-slate-500">
+                              <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">AI</span>
+                              <span className="text-3xl font-semibold text-slate-900">{aiScore}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <RobotMascot
+                          className="flex h-12 w-12 items-center justify-center md:h-16 md:w-16 lg:h-20 lg:w-20"
+                          aria-label="Ready robot scoreboard mascot"
+                          variant={hudRobotVariant}
+                          sizeConfig="(min-width: 1024px) 80px, (min-width: 768px) 64px, 48px"
+                        />
                       </div>
+                    )}
+                  </motion.div>
+
+                  {trainingActive && (
+                    <div className="flex w-full max-w-[820px] items-center justify-between text-sm text-slate-600">
+                      <span>Keep playing to finish training.</span>
+                      <span className="text-slate-500">Training completes after {TRAIN_ROUNDS} rounds.</span>
                     </div>
-                  </div>
-                  <RobotMascot
-                    className="flex h-12 w-12 items-center justify-center md:h-16 md:w-16 lg:h-20 lg:w-20"
-                    aria-label="Ready robot scoreboard mascot"
-                    variant={hudRobotVariant}
-                    sizeConfig="(min-width: 1024px) 80px, (min-width: 768px) 64px, 48px"
-                  />
-                </div>
-              )}
-            </motion.div>
-
-            {trainingActive && (
-              <div className="flex w-full max-w-[820px] items-center justify-between text-sm text-slate-600">
-                <span>Keep playing to finish training.</span>
-                <span className="text-slate-500">Training completes after {TRAIN_ROUNDS} rounds.</span>
-              </div>
-            )}
-
-            {/* Arena */}
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: .1 }}
-              className="relative mt-6 grid w-full max-w-[820px] gap-4 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]"
-            >
-              <div className="flex">
-                <motion.div layout className="relative flex w-full flex-col rounded-3xl bg-white/80 p-5 shadow-lg">
-                  <div className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">You</div>
-                  <motion.div layout className="flex flex-1 items-center justify-center text-6xl" aria-label="Your hand" role="img">
-                    <AnimatePresence mode="popLayout">
-                      {playerPick ? (
-                        <motion.span key={playerPick} initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
-                          {moveEmoji[playerPick]}
-                        </motion.span>
-                      ) : (
-                        <motion.span key="you-placeholder" initial={{ opacity: 0 }} animate={{ opacity: 0.6 }} exit={{ opacity: 0 }} className="text-4xl text-slate-300">
-                          ?
-                        </motion.span>
-                      )}
-                    </AnimatePresence>
-                  </motion.div>
-                </motion.div>
-              </div>
-
-              <div className="pointer-events-none flex items-center justify-center py-6 sm:py-0 sm:min-w-[112px]">
-                <AnimatePresence mode="wait">
-                  {phase === "countdown" && count>0 && (
-                    <motion.div
-                      key={count}
-                      initial={{ y: -48, opacity: 0, scale: 0.9, filter: "blur(4px)" }}
-                      animate={{ y: 0, opacity: 1, scale: 1, filter: "blur(0px)" }}
-                      exit={{ y: 48, opacity: 0, scale: 0.9, filter: "blur(4px)" }}
-                      transition={{ duration: .35, ease: [0.22, 0.61, 0.36, 1] }}
-                      className="rounded-full bg-white/90 px-7 py-3 text-2xl font-black text-slate-800 shadow-lg"
-                    >
-                      {count}
-                    </motion.div>
                   )}
-                </AnimatePresence>
-              </div>
 
-              <div className="flex">
-                <motion.div layout className="relative flex w-full flex-col rounded-3xl bg-white/80 p-5 shadow-lg">
-                  <div className="text-right text-xs font-semibold uppercase tracking-wide text-slate-500">AI</div>
-                  <motion.div layout className="flex flex-1 items-center justify-center text-6xl" aria-label="AI hand" role="img">
-                    <AnimatePresence mode="popLayout">
-                      {aiPick ? (
-                        <motion.span key={aiPick} initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
-                          {moveEmoji[aiPick]}
-                        </motion.span>
-                      ) : (
-                        <motion.span key="ai-placeholder" initial={{ opacity: 0 }} animate={{ opacity: 0.6 }} exit={{ opacity: 0 }} className="text-4xl text-slate-300">
-                          ?
-                        </motion.span>
-                      )}
-                    </AnimatePresence>
+                  {/* Arena */}
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: .1 }}
+                    className="relative mt-6 grid w-full max-w-[820px] gap-4 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]"
+                  >
+                    <div className="flex">
+                      <motion.div layout className="relative flex w-full flex-col rounded-3xl bg-white/80 p-5 shadow-lg">
+                        <div className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">You</div>
+                        <motion.div layout className="flex flex-1 items-center justify-center text-6xl" aria-label="Your hand" role="img">
+                          <AnimatePresence mode="popLayout">
+                            {playerPick ? (
+                              <motion.span key={playerPick} initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
+                                {moveEmoji[playerPick]}
+                              </motion.span>
+                            ) : (
+                              <motion.span key="you-placeholder" initial={{ opacity: 0 }} animate={{ opacity: 0.6 }} exit={{ opacity: 0 }} className="text-4xl text-slate-300">
+                                ?
+                              </motion.span>
+                            )}
+                          </AnimatePresence>
+                        </motion.div>
+                      </motion.div>
+                    </div>
+
+                    <div className="pointer-events-none flex items-center justify-center py-6 sm:py-0 sm:min-w-[112px]">
+                      <AnimatePresence mode="wait">
+                        {phase === "countdown" && count>0 && (
+                          <motion.div
+                            key={count}
+                            initial={{ y: -48, opacity: 0, scale: 0.9, filter: "blur(4px)" }}
+                            animate={{ y: 0, opacity: 1, scale: 1, filter: "blur(0px)" }}
+                            exit={{ y: 48, opacity: 0, scale: 0.9, filter: "blur(4px)" }}
+                            transition={{ duration: .35, ease: [0.22, 0.61, 0.36, 1] }}
+                            className="rounded-full bg-white/90 px-7 py-3 text-2xl font-black text-slate-800 shadow-lg"
+                          >
+                            {count}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+
+                    <div className="flex">
+                      <motion.div layout className="relative flex w-full flex-col rounded-3xl bg-white/80 p-5 shadow-lg">
+                        <div className="text-right text-xs font-semibold uppercase tracking-wide text-slate-500">AI</div>
+                        <motion.div layout className="flex flex-1 items-center justify-center text-6xl" aria-label="AI hand" role="img">
+                          <AnimatePresence mode="popLayout">
+                            {aiPick ? (
+                              <motion.span key={aiPick} initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
+                                {moveEmoji[aiPick]}
+                              </motion.span>
+                            ) : (
+                              <motion.span key="ai-placeholder" initial={{ opacity: 0 }} animate={{ opacity: 0.6 }} exit={{ opacity: 0 }} className="text-4xl text-slate-300">
+                                ?
+                              </motion.span>
+                            )}
+                          </AnimatePresence>
+                        </motion.div>
+                      </motion.div>
+                    </div>
+
                   </motion.div>
-                </motion.div>
-              </div>
 
-            </motion.div>
-
-            {/* Controls */}
-            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .2 }} className="mt-6 grid w-full max-w-[820px] grid-cols-3 gap-3">
-              {MOVES.map((m)=>{
-                const selected = playerPick === m && (phase === "selected" || phase === "countdown" || phase === "reveal" || phase === "resolve");
-                return (
-                  <button key={m} onClick={()=> onSelect(m)} disabled={phase!=="idle"}
-                    className={["group relative px-4 py-4 bg-white rounded-2xl shadow hover:shadow-md transition active:scale-95", phase!=="idle"?"opacity-60 cursor-default":"", selected?"ring-4 ring-sky-300":""].join(" ")}
-                    data-dev-label={`hand.${m}`}
-                    aria-pressed={selected} aria-label={`Choose ${m}`}>
-                    <div className="text-4xl">{moveEmoji[m]}</div>
-                    <div className="mt-1 text-sm text-slate-600 capitalize">{m}</div>
-                    <span className="pointer-events-none absolute inset-0 rounded-2xl opacity-0 group-active:opacity-100 group-active:scale-105 transition bg-sky-100"/>
-                  </button>
-                )
-              })}
-            </motion.div>
-          </div>
-        </div>
-      </div>
+                  {/* Controls */}
+                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .2 }} className="mt-6 grid w-full max-w-[820px] grid-cols-3 gap-3">
+                    {MOVES.map((m)=>{
+                      const selected = playerPick === m && (phase === "selected" || phase === "countdown" || phase === "reveal" || phase === "resolve");
+                      return (
+                        <button key={m} onClick={()=> onSelect(m)} disabled={phase!=="idle"}
+                          className={["group relative px-4 py-4 bg-white rounded-2xl shadow hover:shadow-md transition active:scale-95", phase!=="idle"?"opacity-60 cursor-default":"", selected?"ring-4 ring-sky-300":""].join(" ")}
+                          data-dev-label={`hand.${m}`}
+                          aria-pressed={selected} aria-label={`Choose ${m}`}>
+                          <div className="text-4xl">{moveEmoji[m]}</div>
+                          <div className="mt-1 text-sm text-slate-600 capitalize">{m}</div>
+                          <span className="pointer-events-none absolute inset-0 rounded-2xl opacity-0 group-active:opacity-100 group-active:scale-105 transition bg-sky-100"/>
+                        </button>
+                      )
+                    })}
+                  </motion.div>
+                </div>
+              </motion.div>
+            </div>
           </motion.section>
         )}
 
