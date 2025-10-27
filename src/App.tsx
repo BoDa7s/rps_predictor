@@ -923,18 +923,60 @@ function Confetti({count=18}:{count?:number}){
 function LiveRegion({message}:{message:string}){ return <div aria-live="polite" className="sr-only" role="status">{message}</div> }
 
 // Mode card component
-function ModeCard({ mode, onSelect, isDimmed, disabled = false }: { mode: Mode, onSelect: (m:Mode)=>void, isDimmed:boolean, disabled?: boolean }){
+function ModeCard({
+  mode,
+  onSelect,
+  isDimmed,
+  disabled = false,
+  disabledReason,
+  onDisabledClick,
+}: {
+  mode: Mode;
+  onSelect: (m: Mode) => void;
+  isDimmed: boolean;
+  disabled?: boolean;
+  disabledReason?: string | null;
+  onDisabledClick?: (mode: Mode) => void;
+}) {
   const label = mode.charAt(0).toUpperCase()+mode.slice(1);
+  const isUnavailable = disabled || Boolean(disabledReason);
+  const descriptionId = disabledReason ? `${mode}-mode-disabled-reason` : undefined;
   return (
-    <motion.button className={`mode-card ${mode} ${isDimmed ? "dim" : ""} ${disabled ? "opacity-60 cursor-not-allowed" : ""} bg-white/80 rounded-2xl shadow relative overflow-hidden px-5 py-6 text-left`}
+    <motion.button
+      className={`mode-card ${mode} ${isDimmed ? "dim" : ""} ${
+        isUnavailable ? "opacity-60 cursor-not-allowed" : ""
+      } bg-white/80 rounded-2xl shadow relative overflow-hidden px-5 py-6 text-left`}
       data-dev-label={`mode.${mode}.card`}
-      layoutId={`card-${mode}`} onClick={() => { if (!disabled) onSelect(mode); }} disabled={disabled} whileTap={{ scale: disabled ? 1 : 0.98 }} whileHover={{ y: disabled ? 0 : -4 }} aria-label={`${label} mode`}>
+      layoutId={`card-${mode}`}
+      onClick={event => {
+        if (disabled) return;
+        if (disabledReason) {
+          event.preventDefault();
+          event.stopPropagation();
+          onDisabledClick?.(mode);
+          return;
+        }
+        onSelect(mode);
+      }}
+      disabled={disabled}
+      whileTap={{ scale: isUnavailable ? 1 : 0.98 }}
+      whileHover={{ y: isUnavailable ? 0 : -4 }}
+      aria-label={`${label} mode`}
+      aria-disabled={isUnavailable ? true : undefined}
+      aria-describedby={descriptionId}
+      title={disabledReason ?? undefined}
+    >
       <div className="text-lg font-bold text-slate-800">{label}</div>
       <div className="text-sm text-slate-600 mt-1">
         {mode === "challenge" && "Timed rounds, high stakes—can you outsmart the AI?"}
         {mode === "practice" && "No score; experiment and learn."}
       </div>
       <span className="ink-pop" />
+      {disabledReason && (
+        <span id={descriptionId} className="sr-only">
+          {disabledReason}
+        </span>
+      )}
     </motion.button>
   );
 }
@@ -967,8 +1009,9 @@ function OnOffToggle({
   return (
     <div
       className={`inline-flex items-center overflow-hidden rounded-full border border-slate-300 bg-white shadow-sm ${
-        className ?? ""
-      }`}
+        disabled ? "opacity-60" : ""
+      } ${className ?? ""}`}
+      aria-disabled={disabled || undefined}
     >
       <button
         type="button"
@@ -1791,6 +1834,22 @@ function RPSDoodleAppInner(){
   }, [aiMode, difficultyDisabled]);
 
   useEffect(() => {
+    if (predictorMode) return;
+    if (insightPanelOpen) {
+      closeInsightPanel({ persistPreference: false, suppressForMatch: true });
+    }
+    if (insightPreferred) {
+      persistInsightPreference(false);
+    }
+  }, [
+    predictorMode,
+    insightPanelOpen,
+    insightPreferred,
+    closeInsightPanel,
+    persistInsightPreference,
+  ]);
+
+  useEffect(() => {
     if (!needsTraining && trainingActive) {
       setTrainingActive(false);
       trainingAnnouncementsRef.current.clear();
@@ -1950,6 +2009,7 @@ function RPSDoodleAppInner(){
 
   const [selectedMode, setSelectedMode] = useState<Mode|null>(null);
   const showMatchScoreBadge = !trainingActive && (selectedMode ?? "practice") === "challenge";
+  const hudInsightDisabled = (selectedMode ?? "practice") === "practice" && !predictorMode;
   const showResultsScoreBadge = showMatchScoreBadge && matchScoreTotal !== null;
   const resultMascot = useMemo((): { variant: RobotVariant; alt: string } => {
     if (resultBanner === "Victory") {
@@ -2715,6 +2775,20 @@ function RPSDoodleAppInner(){
     setLive("Settings opened. Press Escape to close.");
   }, [setLive]);
 
+  const showChallengeNeedsPredictorPrompt = useCallback(() => {
+    setToastMessage("Challenge needs the AI predictor. Turn it on from settings");
+    setToastConfirm({
+      confirmLabel: "Go to Settings",
+      cancelLabel: "Cancel",
+      onConfirm: () => {
+        setToastConfirm(null);
+        setToastMessage(null);
+        handleOpenSettings();
+      },
+    });
+    setLive("Challenge needs the AI predictor. Prompt opened.");
+  }, [handleOpenSettings, setLive, setToastConfirm, setToastMessage]);
+
   const handleCloseSettings = useCallback(
     (announce: boolean = true) => {
       setSettingsOpen(false);
@@ -3464,6 +3538,10 @@ function RPSDoodleAppInner(){
   // ---- Mode selection flow ----
   function handleModeSelect(mode: Mode){
     if (needsTraining && mode !== "practice") return;
+    if (mode === "challenge" && !predictorMode) {
+      showChallengeNeedsPredictorPrompt();
+      return;
+    }
     armAudio(); audio.cardSelect(); setSelectedMode(mode); setLive(`${modeLabel(mode)} mode selected. Loading match.`);
     addT(()=>{ audio.whooshShort(); }, 140); // morph start cue
     const graphicBudget = 1400; addT(()=>{ startSceneWipe(mode); }, graphicBudget);
@@ -4314,33 +4392,39 @@ function RPSDoodleAppInner(){
                       </div>
                       <div className="space-y-2">
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-semibold text-slate-800" id="live-ai-insight-label">
-                              Show Live AI Insight
-                            </span>
-                            <span
-                              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 text-[10px] font-semibold text-slate-500"
-                              title="When on, the panel opens automatically at the start of each match. When off, open it manually from the match HUD."
-                              aria-hidden="true"
-                            >
-                              i
-                            </span>
-                          </div>
-                          <OnOffToggle
-                            value={insightPreferred}
-                            onChange={(next, event) =>
-                              handleInsightPreferenceToggle(next, event?.currentTarget ?? undefined)
-                            }
-                            ariaLabelledby="live-ai-insight-label"
-                            ariaDescribedby="live-ai-insight-helper"
-                            className="self-start sm:self-auto"
-                            onLabel="set.insight.on"
-                            offLabel="set.insight.off"
-                          />
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-slate-800" id="live-ai-insight-label">
+                            Show Live AI Insight
+                          </span>
+                          <span
+                            className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 text-[10px] font-semibold text-slate-500"
+                            title="When on, the panel opens automatically at the start of each match. When off, open it manually from the match HUD."
+                            aria-hidden="true"
+                          >
+                            i
+                          </span>
                         </div>
-                        <p className="settings-helper-clamp text-xs text-slate-500" id="live-ai-insight-helper">
-                          When on, the panel opens automatically at the start of each match. When off, open it manually from the match HUD.
+                        <OnOffToggle
+                          value={predictorMode ? insightPreferred : false}
+                          onChange={(next, event) =>
+                            handleInsightPreferenceToggle(next, event?.currentTarget ?? undefined)
+                          }
+                          disabled={!predictorMode}
+                          ariaLabelledby="live-ai-insight-label"
+                          ariaDescribedby={!predictorMode ? "live-ai-insight-helper disabled-insight-helper" : "live-ai-insight-helper"}
+                          className="self-start sm:self-auto"
+                          onLabel="set.insight.on"
+                          offLabel="set.insight.off"
+                        />
+                      </div>
+                      <p className="settings-helper-clamp text-xs text-slate-500" id="live-ai-insight-helper">
+                        When on, the panel opens automatically at the start of each match. When off, open it manually from the match HUD.
+                      </p>
+                      {!predictorMode && (
+                        <p className="text-xs text-slate-500" id="disabled-insight-helper">
+                          Enable the AI predictor to view Live Insight tools.
                         </p>
+                      )}
                       </div>
                       <div className="space-y-2">
                         <div className="flex items-center gap-2">
@@ -4700,9 +4784,38 @@ function RPSDoodleAppInner(){
           <motion.main key="mode" initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -20, opacity: 0 }} transition={{ duration: .36, ease: [0.22,0.61,0.36,1] }} className="min-h-screen pt-28 flex flex-col items-center gap-6">
             <motion.div layout className="text-4xl font-black text-sky-700">Choose Your Mode</motion.div>
             <div className="mode-grid">
-              {MODES.map(m => (
-                <ModeCard key={m} mode={m} onSelect={handleModeSelect} isDimmed={!!selectedMode && selectedMode!==m} disabled={(m === "challenge" && needsTraining) || !hasConsented} />
-              ))}
+              {MODES.map(m => {
+                const isChallenge = m === "challenge";
+                const disabledBase = (isChallenge && needsTraining) || !hasConsented;
+                const challengeNeedsPredictor =
+                  isChallenge && !needsTraining && hasConsented && !predictorMode;
+                const disabledReason = isChallenge
+                  ? needsTraining
+                    ? "Complete training to unlock Challenge."
+                    : !hasConsented
+                      ? "Consent is required before starting a match."
+                      : challengeNeedsPredictor
+                        ? "Enable AI to play Challenge."
+                        : null
+                  : null;
+                return (
+                  <ModeCard
+                    key={m}
+                    mode={m}
+                    onSelect={handleModeSelect}
+                    isDimmed={!!selectedMode && selectedMode !== m}
+                    disabled={disabledBase}
+                    disabledReason={disabledReason}
+                    onDisabledClick={
+                      challengeNeedsPredictor
+                        ? (_mode: Mode) => {
+                            showChallengeNeedsPredictorPrompt();
+                          }
+                        : undefined
+                    }
+                  />
+                );
+              })}
             </div>
 
             {/* Fullscreen morph container */}
@@ -4781,8 +4894,15 @@ function RPSDoodleAppInner(){
                       <div className="flex w-full flex-col items-center gap-4">
                         <button
                           type="button"
-                          className="absolute right-4 top-3 rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-700 shadow hover:bg-sky-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+                          className={`absolute right-4 top-3 rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-700 shadow focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                            hudInsightDisabled ? "cursor-not-allowed opacity-60" : "hover:bg-sky-200"
+                          }`}
                           onClick={event => {
+                            if (hudInsightDisabled) {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              return;
+                            }
                             if (insightPanelOpen) {
                               closeInsightPanel({
                                 persistPreference: false,
@@ -4792,12 +4912,18 @@ function RPSDoodleAppInner(){
                               openInsightPanel(event.currentTarget, { persistPreference: insightPreferred });
                             }
                           }}
-                          aria-pressed={insightPanelOpen}
-                          aria-expanded={insightPanelOpen}
+                          disabled={hudInsightDisabled}
+                          aria-pressed={hudInsightDisabled ? undefined : insightPanelOpen}
+                          aria-expanded={hudInsightDisabled ? undefined : insightPanelOpen}
                           aria-controls="live-insight-panel"
+                          aria-disabled={hudInsightDisabled || undefined}
                           data-dev-label="hud.insight"
+                          title={hudInsightDisabled ? "Enable AI to view insights" : undefined}
                         >
                           Insight
+                          {hudInsightDisabled && (
+                            <span className="sr-only">Enable AI to view insights</span>
+                          )}
                         </button>
                         <div className="flex w-full flex-col items-center gap-3 text-center">
                           <div className="flex flex-wrap items-center justify-center gap-2 text-sm text-slate-700">
