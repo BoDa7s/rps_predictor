@@ -511,6 +511,43 @@ function prettyMove(move: Move){
   return move.charAt(0).toUpperCase() + move.slice(1);
 }
 
+function moveEmojiLabel(move: Move){
+  return `${moveEmoji[move]} ${prettyMove(move)}`;
+}
+
+function makeReasonChips(reason?: string | null): string[] {
+  if (!reason) return [];
+  const sanitized = reason
+    .replace(/\u2022|•|–|—/g, "|")
+    .replace(/[,;]+/g, "|");
+  const segments = sanitized
+    .split("|")
+    .map(segment => segment.trim())
+    .filter(Boolean);
+  const cleaned = (segments.length ? segments : [reason])
+    .map(segment => segment.split(/\s+/).slice(0, 4).join(" "))
+    .filter(Boolean);
+  return cleaned.slice(0, 2);
+}
+
+const CONFIDENCE_BADGE_INFO: Record<
+  "low" | "medium" | "high",
+  { label: string; face: string; className: string }
+> = {
+  low: { label: "Low", face: "😮‍💨", className: "bg-rose-100 text-rose-700" },
+  medium: { label: "Med", face: "😐", className: "bg-amber-100 text-amber-700" },
+  high: { label: "High", face: "🙂", className: "bg-emerald-100 text-emerald-700" },
+};
+
+const OUTCOME_CARD_STYLES: Record<
+  Outcome,
+  { border: string; badge: string; label: string }
+> = {
+  win: { border: "border-emerald-200", badge: "bg-emerald-100 text-emerald-700", label: "Win" },
+  lose: { border: "border-rose-200", badge: "bg-rose-100 text-rose-700", label: "Loss" },
+  tie: { border: "border-amber-200", badge: "bg-amber-100 text-amber-700", label: "Tie" },
+};
+
 function confidenceBucket(value: number): "low" | "medium" | "high" {
   if (value >= 0.7) return "high";
   if (value >= 0.45) return "medium";
@@ -1129,13 +1166,20 @@ function RPSDoodleAppInner(){
   const [statsOpen, setStatsOpen] = useState(false);
   const [leaderboardOpen, setLeaderboardOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [statsTab, setStatsTab] = useState<"overview" | "matches" | "rounds" | "insights">("overview");
+  const [statsTab, setStatsTab] = useState<"overview" | "rounds" | "insights">("overview");
+  const [roundsViewMode, setRoundsViewMode] = useState<"card" | "table">(() => {
+    if (typeof window === "undefined") return "card";
+    const stored = window.sessionStorage.getItem("rps_rounds_view_v1");
+    return stored === "table" ? "table" : "card";
+  });
+  const [habitDrawer, setHabitDrawer] = useState<
+    "repeat" | "switch" | "transition" | "pattern" | null
+  >(null);
   const statsModalRef = useRef<HTMLDivElement | null>(null);
   const settingsPanelRef = useRef<HTMLDivElement | null>(null);
   const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
   const toastReaderCloseRef = useRef<HTMLButtonElement | null>(null);
   const wasSettingsOpenRef = useRef(false);
-  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
   const [roundPage, setRoundPage] = useState(0);
   const decisionTraceRef = useRef<PendingDecision | null>(null);
   const aiStreakRef = useRef(0);
@@ -1146,7 +1190,14 @@ function RPSDoodleAppInner(){
   const lastDecisionMsRef = useRef<number | null>(null);
   const currentMatchRoundsRef = useRef<RoundLog[]>([]);
   const [roundFilters, setRoundFilters] = useState<{ mode: RoundFilterMode; difficulty: RoundFilterDifficulty; outcome: RoundFilterOutcome; from: string; to: string }>({ mode: "all", difficulty: "all", outcome: "all", from: "", to: "" });
-  useEffect(() => { setRoundPage(0); }, [roundFilters, profileRounds]);
+  useEffect(() => {
+    setRoundPage(0);
+  }, [roundFilters, profileRounds, roundsViewMode]);
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem("rps_rounds_view_v1", roundsViewMode);
+    }
+  }, [roundsViewMode]);
   const rounds = useMemo(() => profileRounds, [profileRounds]);
   const matches = useMemo(() => profileMatches, [profileMatches]);
   const leaderboardPlayersById = useMemo(() => {
@@ -2596,7 +2647,6 @@ function RPSDoodleAppInner(){
 
   const statsTabs = [
     { key: "overview", label: "Overview" },
-    { key: "matches", label: "Matches" },
     { key: "rounds", label: "Rounds" },
     { key: "insights", label: "Insights" },
   ] as const;
@@ -2616,10 +2666,6 @@ function RPSDoodleAppInner(){
     },
   ], [TRAIN_ROUNDS]);
 
-  const matchesSorted = useMemo(() => {
-    return [...matches].sort((a, b) => (b.endedAt || b.startedAt).localeCompare(a.endedAt || a.startedAt));
-  }, [matches]);
-
   const filteredRounds = useMemo(() => {
     const items = [...rounds].sort((a, b) => b.t.localeCompare(a.t));
     return items.filter(r => {
@@ -2636,7 +2682,8 @@ function RPSDoodleAppInner(){
     });
   }, [rounds, roundFilters]);
 
-  const pageSize = 200;
+  const isCardView = roundsViewMode === "card";
+  const pageSize = isCardView ? 24 : 200;
   const totalRoundPages = Math.max(1, Math.ceil(filteredRounds.length / pageSize));
   useEffect(() => {
     if (roundPage >= totalRoundPages) {
@@ -2699,27 +2746,6 @@ function RPSDoodleAppInner(){
     return "idle";
   }, [robotResultReaction, phase, outcome]);
 
-  const difficultySummary = useMemo(() => {
-    const base = {
-      fair: { wins: 0, total: 0, confidence: 0 },
-      normal: { wins: 0, total: 0, confidence: 0 },
-      ruthless: { wins: 0, total: 0, confidence: 0 },
-    } as Record<AIMode, { wins: number; total: number; confidence: number }>;
-    matches.forEach(m => {
-      base[m.difficulty].total += 1;
-      if (m.score.you > m.score.ai) base[m.difficulty].wins += 1;
-    });
-    rounds.forEach(r => {
-      base[r.difficulty].confidence += r.confidence;
-    });
-    return (Object.keys(base) as AIMode[]).map(key => {
-      const entry = base[key];
-      const totalConfRounds = rounds.filter(r => r.difficulty === key).length;
-      const avgConf = totalConfRounds ? entry.confidence / totalConfRounds : 0;
-      return { difficulty: key, winRate: entry.total ? entry.wins / entry.total : 0, avgConfidence: avgConf };
-    });
-  }, [matches, rounds]);
-
   const behaviorStats = useMemo(() => {
     if (rounds.length === 0) {
       return { repeatAfterWin: 0, switchAfterLoss: 0, favoriteMove: null as Move | null, favoritePct: 0 };
@@ -2760,87 +2786,308 @@ function RPSDoodleAppInner(){
     const sorted = [...map.entries()].sort((a,b)=> b[1]-a[1]);
     return sorted.length ? { pair: sorted[0][0], count: sorted[0][1] } : null;
   }, [rounds]);
-  const topTransitionLabel = topTransition
-  ? `${topTransition.pair} (${topTransition.count})`
-  : "Not enough data";
+  const topTransitionDisplay = useMemo(() => {
+    if (!topTransition) return null;
+    const [from, to] = topTransition.pair.split("→") as [Move, Move];
+    if (!from || !to) return null;
+    return `${moveEmoji[from]} ${prettyMove(from)} → ${moveEmoji[to]} ${prettyMove(to)} (${topTransition.count})`;
+  }, [topTransition]);
 
-  const recentTrend = useMemo(() => {
+  const recentTrendDots = useMemo(() => {
     const slice = rounds.slice(-20);
-    if (!slice.length) return [] as { x: number; y: number; value: number }[];
+    if (!slice.length)
+      return [] as { x: number; outcome: Outcome; label: string }[];
     const width = 220;
-    const height = 60;
     const step = slice.length > 1 ? (width - 20) / (slice.length - 1) : 0;
     return slice.map((r, idx) => {
-      const winValue = r.outcome === "win" ? 1 : r.outcome === "tie" ? 0.5 : 0;
       const x = 10 + step * idx;
-      const y = height - 10 - winValue * (height - 20);
-      return { x, y, value: winValue };
+      return {
+        x,
+        outcome: r.outcome,
+        label: `${new Date(r.t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}: ${r.outcome}`,
+      };
     });
   }, [rounds]);
-  const sparklinePoints = useMemo(() => recentTrend.map(p => `${p.x},${p.y}`).join(" "), [recentTrend]);
-  const lastTrendPercent = recentTrend.length ? Math.round(recentTrend[recentTrend.length - 1].value * 100) : 0;
+  const recentConfidenceSpark = useMemo(() => {
+    const slice = rounds.slice(-20);
+    if (!slice.length)
+      return [] as { x: number; y: number; value: number }[];
+    const width = 180;
+    const height = 42;
+    const step = slice.length > 1 ? (width - 20) / (slice.length - 1) : 0;
+    return slice.map((r, idx) => {
+      const confidence = clamp01(r.confidence);
+      const x = 10 + step * idx;
+      const y = height - 8 - confidence * (height - 16);
+      return { x, y, value: confidence };
+    });
+  }, [rounds]);
+  const confidenceSparkPoints = useMemo(
+    () => recentConfidenceSpark.map(p => `${p.x},${p.y}`).join(" "),
+    [recentConfidenceSpark],
+  );
+  const lastConfidencePercent = recentConfidenceSpark.length
+    ? Math.round(recentConfidenceSpark[recentConfidenceSpark.length - 1].value * 100)
+    : null;
+  const averageConfidenceLast20 = recentConfidenceSpark.length
+    ? Math.round(
+        (recentConfidenceSpark.reduce((acc, point) => acc + point.value, 0) /
+          recentConfidenceSpark.length) *
+          100,
+      )
+    : null;
+  const averageConfidenceAll = totalRounds
+    ? Math.round(
+        (rounds.reduce((acc, item) => acc + clamp01(item.confidence), 0) / totalRounds) * 100,
+      )
+    : null;
 
-  const confidenceBuckets = useMemo(() => {
-    const buckets = [
-      { label: "0-33%", wins: 0, total: 0 },
-      { label: "34-66%", wins: 0, total: 0 },
-      { label: "67-100%", wins: 0, total: 0 },
+  const confidenceBandStats = useMemo(() => {
+    const bands = [
+      { key: "low" as const, min: 0, max: 0.34, label: "0-33%", tone: "Not sure" },
+      { key: "mid" as const, min: 0.34, max: 0.67, label: "34-66%", tone: "Kinda sure" },
+      { key: "high" as const, min: 0.67, max: 1.01, label: "67-100%", tone: "Very sure" },
     ];
+    const results = bands.map(band => ({
+      ...band,
+      total: 0,
+      playerWins: 0,
+      playerLosses: 0,
+      ties: 0,
+    }));
     rounds.forEach(r => {
-      const conf = r.confidence;
-      const idx = conf < 0.34 ? 0 : conf < 0.67 ? 1 : 2;
-      const bucket = buckets[idx];
+      const conf = clamp01(r.confidence);
+      const bandIndex = results.findIndex(b => conf >= b.min && conf < b.max);
+      const bucket = bandIndex >= 0 ? results[bandIndex] : results[results.length - 1];
       bucket.total += 1;
-      if (r.outcome === "lose") bucket.wins += 1;
+      if (r.outcome === "win") bucket.playerWins += 1;
+      else if (r.outcome === "lose") bucket.playerLosses += 1;
+      else bucket.ties += 1;
     });
-    return buckets.map(b => ({ ...b, winRate: b.total ? b.wins / b.total : 0 }));
+    return results.map(b => ({
+      ...b,
+      playerWinRate: b.total ? b.playerWins / b.total : 0,
+      aiWinRate: b.total ? b.playerLosses / b.total : 0,
+    }));
   }, [rounds]);
 
-  const expertContribution = useMemo(() => {
-    const counts = new Map<string, number>();
+  const calibrationSummary = useMemo(() => {
+    if (!rounds.length) {
+      return {
+        bins: [] as {
+          midpoint: number;
+          avgConfidence: number;
+          actual: number;
+          total: number;
+        }[],
+        ece: null as number | null,
+        brier: null as number | null,
+        sharpness: 0,
+      };
+    }
+    const binCount = 5;
+    const bins = Array.from({ length: binCount }, (_, idx) => ({
+      midpoint: (idx + 0.5) / binCount,
+      min: idx / binCount,
+      max: (idx + 1) / binCount,
+      sumConfidence: 0,
+      sumActual: 0,
+      total: 0,
+    }));
+    let brierSum = 0;
+    let sharpnessSum = 0;
     rounds.forEach(r => {
-      const top = r.mixer?.topExperts?.[0];
-      if (top){
-        counts.set(top.name, (counts.get(top.name) || 0) + 1);
-      }
+      const conf = clamp01(r.confidence);
+      const actual = r.outcome === "lose" ? 1 : r.outcome === "win" ? 0 : 0.5;
+      const binIndex = Math.min(binCount - 1, Math.floor(conf * binCount));
+      const bin = bins[binIndex];
+      bin.sumConfidence += conf;
+      bin.sumActual += actual;
+      bin.total += 1;
+      brierSum += (conf - actual) * (conf - actual);
+      sharpnessSum += Math.abs(conf - 0.5);
     });
-    return [...counts.entries()].sort((a,b)=> b[1]-a[1]);
+    const total = rounds.length;
+    const computedBins = bins.map(bin => ({
+      midpoint: bin.midpoint,
+      avgConfidence: bin.total ? bin.sumConfidence / bin.total : bin.midpoint,
+      actual: bin.total ? bin.sumActual / bin.total : bin.midpoint,
+      total: bin.total,
+    }));
+    const ece = computedBins.reduce((acc, bin) => acc + Math.abs(bin.avgConfidence - bin.actual) * (bin.total / total), 0);
+    return {
+      bins: computedBins,
+      ece,
+      brier: total ? brierSum / total : null,
+      sharpness: total ? sharpnessSum / total : 0,
+    };
   }, [rounds]);
 
-  const averageYouStreak = totalRounds ? (rounds.reduce((acc, r) => acc + r.streakYou, 0) / totalRounds).toFixed(2) : "0.00";
-  const averageAiStreak = totalRounds ? (rounds.reduce((acc, r) => acc + r.streakAI, 0) / totalRounds).toFixed(2) : "0.00";
-  const selectedMatch = useMemo(() => matches.find(m => m.id === selectedMatchId) || null, [matches, selectedMatchId]);
-  const selectedMatchKey = selectedMatch ? (selectedMatch.clientId || selectedMatch.id) : null;
-  const selectedMatchResult = selectedMatch ? (selectedMatch.score.you > selectedMatch.score.ai ? "Win" : selectedMatch.score.you === selectedMatch.score.ai ? "Tie" : "Loss") : "";
-  const selectedMatchDate = selectedMatch ? new Date(selectedMatch.endedAt || selectedMatch.startedAt).toLocaleString() : "";
-  const selectedMatchRounds = useMemo(() => {
-    if (!selectedMatchKey) return [] as RoundLog[];
-    return rounds.filter(r => r.matchId === selectedMatchKey);
-  }, [rounds, selectedMatchKey]);
+  const flipRate = useMemo(() => {
+    if (rounds.length < 2) return 0;
+    let flips = 0;
+    for (let i = 1; i < rounds.length; i++) {
+      if (rounds[i].ai !== rounds[i - 1].ai) {
+        flips += 1;
+      }
+    }
+    return flips / (rounds.length - 1);
+  }, [rounds]);
 
-  const matchExpertBreakdown = useMemo(() => {
-    if (!selectedMatchRounds.length) return [] as { name: string; count: number }[];
-    const map = new Map<string, number>();
-    selectedMatchRounds.forEach(r => {
-      const top = r.mixer?.topExperts?.[0];
-      if (top) map.set(top.name, (map.get(top.name) || 0) + 1);
-    });
-    return [...map.entries()].sort((a,b)=> b[1]-a[1]).map(([name,count])=>({ name, count }));
-  }, [selectedMatchRounds]);
+  const activeCalibrationBins = calibrationSummary.bins.filter(bin => bin.total > 0);
+  const reliabilityPolyline = activeCalibrationBins
+    .map(bin => `${Math.round(bin.avgConfidence * 100)},${Math.round(100 - bin.actual * 100)}`)
+    .join(" ");
+  const ecePercent = calibrationSummary.ece !== null ? Math.round(calibrationSummary.ece * 1000) / 10 : null;
+  const sharpnessPercent = Math.round(Math.min(1, calibrationSummary.sharpness * 2) * 100);
+  const flipRatePercent = Math.round(flipRate * 100);
 
-  const matchAiWins = selectedMatchRounds.filter(r => r.outcome === "lose");
+  const favoriteMovePercent = behaviorStats.favoriteMove ? Math.round(behaviorStats.favoritePct * 100) : null;
 
-  const favoriteMoveText = behaviorStats.favoriteMove ? prettyMove(behaviorStats.favoriteMove) + " (" + Math.round(behaviorStats.favoritePct * 100) + "%)" : "None yet";
-
-  const patternHint = useMemo(() => {
+  const patternInfo = useMemo(() => {
     if (rounds.length < 6) return null;
     const sequence = rounds.map(r => r.player);
     const info = detectPatternNext(sequence);
     if (info.move && info.reason) {
-      return info.reason;
+      return { move: info.move, reason: info.reason };
     }
     return null;
   }, [rounds]);
+
+  const periodPatternLabel = useMemo(() => {
+    if (!patternInfo) return "No strong cycle yet";
+    const labelMove = moveEmojiLabel(patternInfo.move);
+    if (patternInfo.reason.includes("three-beat")) {
+      return `Every 3 moves: often ${labelMove}`;
+    }
+    if (patternInfo.reason.includes("Alternating")) {
+      return `Every other move: ${labelMove}`;
+    }
+    if (patternInfo.reason.includes("triple repeat")) {
+      return `Hot streak: ${labelMove}`;
+    }
+    return `Leans toward ${labelMove}`;
+  }, [patternInfo]);
+
+  const habitCards = [
+    {
+      key: "repeat" as const,
+      title: "Repeat after win",
+      value: totalRounds ? `${repeatAfterWinPct}%` : "—",
+      blurb: "Same move?",
+    },
+    {
+      key: "switch" as const,
+      title: "Switch after loss",
+      value: totalRounds ? `${switchAfterLossPct}%` : "—",
+      blurb: "Change it up",
+    },
+    {
+      key: "transition" as const,
+      title: "Top transition",
+      value: topTransitionDisplay ?? "—",
+      blurb: "Common next step",
+    },
+    {
+      key: "pattern" as const,
+      title: "Period pattern",
+      value: periodPatternLabel,
+      blurb: "Any rhythm?",
+    },
+  ];
+
+  const habitDrawerContent = useMemo(() => {
+    if (!habitDrawer) return null;
+    if (habitDrawer === "repeat") {
+      const stayedPct = totalRounds ? repeatAfterWinPct : 0;
+      const changedPct = totalRounds ? Math.max(0, 100 - repeatAfterWinPct) : 0;
+      return {
+        title: "Repeat after win",
+        copy: "After you win, this is how often you picked the same move again.",
+        visual: (
+          <div className="space-y-2 text-sm">
+            <div className="flex items-center justify-between font-semibold text-slate-700">
+              <span>Stayed same</span>
+              <span>{totalRounds ? `${stayedPct}%` : "—"}</span>
+            </div>
+            <div className="h-3 w-full overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
+              <div className="h-full rounded-full bg-sky-400" style={{ width: `${stayedPct}%` }} />
+            </div>
+            <div className="flex items-center justify-between text-xs text-slate-500">
+              <span>Switched</span>
+              <span>{totalRounds ? `${changedPct}%` : "—"}</span>
+            </div>
+          </div>
+        ),
+      };
+    }
+    if (habitDrawer === "switch") {
+      const switchedPct = totalRounds ? switchAfterLossPct : 0;
+      const stayedPct = totalRounds ? Math.max(0, 100 - switchAfterLossPct) : 0;
+      return {
+        title: "Switch after loss",
+        copy: "After you lose, this is how often you changed your move.",
+        visual: (
+          <div className="space-y-2 text-sm">
+            <div className="flex items-center justify-between font-semibold text-slate-700">
+              <span>Switched</span>
+              <span>{totalRounds ? `${switchedPct}%` : "—"}</span>
+            </div>
+            <div className="h-3 w-full overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
+              <div className="h-full rounded-full bg-emerald-400" style={{ width: `${switchedPct}%` }} />
+            </div>
+            <div className="flex items-center justify-between text-xs text-slate-500">
+              <span>Stayed</span>
+              <span>{totalRounds ? `${stayedPct}%` : "—"}</span>
+            </div>
+          </div>
+        ),
+      };
+    }
+    if (habitDrawer === "transition") {
+      const from = topTransition ? (topTransition.pair.split("→")[0] as Move) : null;
+      const to = topTransition ? (topTransition.pair.split("→")[1] as Move) : null;
+      const count = topTransition?.count ?? 0;
+      return {
+        title: "Top transition",
+        copy: topTransition
+          ? `Your most common next step is ${moveEmojiLabel(from!)} → ${moveEmojiLabel(to!)} (${count} times).`
+          : "Your most common next step is waiting for more rounds.",
+        visual: (
+          <div className="space-y-2 text-center text-sm">
+            <div className="flex items-center justify-center gap-3 text-3xl">
+              <span aria-hidden="true">{from ? moveEmoji[from] : "🔍"}</span>
+              <span className="text-slate-500">→</span>
+              <span aria-hidden="true">{to ? moveEmoji[to] : ""}</span>
+            </div>
+            <div className="text-xs text-slate-500">
+              {topTransition ? `${prettyMove(from!)} to ${prettyMove(to!)} pops up often.` : "Keep playing to reveal your go-to hop."}
+            </div>
+          </div>
+        ),
+      };
+    }
+    if (habitDrawer === "pattern") {
+      return {
+        title: "Period pattern",
+        copy: patternInfo
+          ? `We spotted a rhythm: ${periodPatternLabel}.`
+          : "No strong rhythm yet. If we spot one (like every 3 moves), we’ll show it.",
+        visual: (
+          <div className="space-y-2 text-center text-sm">
+            <div className="flex items-center justify-center gap-3 text-3xl">
+              <span aria-hidden="true">{patternInfo?.move ? moveEmoji[patternInfo.move] : "🌀"}</span>
+              {patternInfo?.move ? <span className="text-2xl text-slate-400">↻</span> : null}
+            </div>
+            <div className="text-xs text-slate-500">
+              {patternInfo ? patternInfo.reason : "We’re watching for repeating beats."}
+            </div>
+          </div>
+        ),
+      };
+    }
+    return null;
+  }, [habitDrawer, totalRounds, repeatAfterWinPct, switchAfterLossPct, topTransition, patternInfo, periodPatternLabel]);
 
   const EXPORT_WARNING_TEXT = "Export may include personal/demographic information. You are responsible for how exported files are stored and shared. No liability is assumed.";
   const RESET_TRAINING_TOAST =
@@ -5415,231 +5662,569 @@ function RPSDoodleAppInner(){
                   </button>
                 ))}
               </div>
-              <div className="flex-1 space-y-4 overflow-y-auto px-4 pb-4 pt-3">
+              <div className="flex-1 overflow-y-auto px-4 pb-4 pt-3">
                 {statsTab === "overview" && (
                   <div className="space-y-4">
-                    <div className="grid gap-3 sm:grid-cols-4">
-                      <div className="rounded-xl bg-sky-50 p-3">
-                        <div className="text-xs uppercase text-slate-500">Matches</div>
-                        <div className="text-2xl font-semibold text-sky-700">{totalMatches}</div>
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                      <div className="rounded-2xl bg-sky-50/80 p-4 shadow-sm">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Matches</div>
+                        <div className="mt-2 text-3xl font-bold text-slate-900">{totalMatches}</div>
+                        <p className="mt-1 text-xs text-slate-500">How many games you played.</p>
                       </div>
-                      <div className="rounded-xl bg-sky-50 p-3">
-                        <div className="text-xs uppercase text-slate-500">Rounds</div>
-                        <div className="text-2xl font-semibold text-sky-700">{totalRounds}</div>
+                      <div className="rounded-2xl bg-sky-50/80 p-4 shadow-sm">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Rounds</div>
+                        <div className="mt-2 text-3xl font-bold text-slate-900">{totalRounds}</div>
+                        <p className="mt-1 text-xs text-slate-500">Total turns logged.</p>
                       </div>
-                      <div className="rounded-xl bg-sky-50 p-3">
-                        <div className="text-xs uppercase text-slate-500">Win rate</div>
-                        <div className="text-2xl font-semibold text-sky-700">{Math.round(overallWinRate * 100)}%</div>
-                      </div>
-                      <div className="rounded-xl bg-sky-50 p-3">
-                        <div className="text-xs uppercase text-slate-500">Favorite move</div>
-                        <div className="text-2xl font-semibold text-sky-700">{favoriteMoveText}</div>
-                      </div>
-                    </div>
-                    <div className="grid gap-3 md:grid-cols-3">
-                      {difficultySummary.map(card => (
-                        <div key={card.difficulty} className="rounded-xl border border-slate-200 p-3">
-                          <div className="text-xs uppercase text-slate-500">{card.difficulty}</div>
-                          <div className="text-lg font-semibold text-slate-800">Win {Math.round(card.winRate * 100)}%</div>
-                          <div className="text-xs text-slate-500">Avg AI confidence {Math.round(card.avgConfidence * 100)}%</div>
+                      <div className="rounded-2xl bg-sky-50/80 p-4 shadow-sm">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Win rate</div>
+                        <div className="mt-2 text-3xl font-bold text-slate-900">
+                          {totalMatches ? `${Math.round(overallWinRate * 100)}%` : "—"}
                         </div>
-                      ))}
-                    </div>
-                    <div className="rounded-xl border border-slate-200 p-3">
-                      <div className="flex items-center justify-between text-sm text-slate-600">
-                        <span>Recent 20-round trend</span>
-                        <span>{lastTrendPercent}% last round win chance</span>
+                        <p className="mt-1 text-xs text-slate-500">Wins per match.</p>
                       </div>
-                      <svg width="240" height="60" className="mt-2">
-                        <polyline fill="none" stroke="#0ea5e9" strokeWidth="2" points={sparklinePoints} />
-                      </svg>
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div className="rounded-xl border border-slate-200 p-3">
-                        <div className="text-xs uppercase text-slate-500">Repeat after win</div>
-                        <div className="text-lg font-semibold text-slate-800">{repeatAfterWinPct}%</div>
-                      </div>
-                      <div className="rounded-xl border border-slate-200 p-3">
-                        <div className="text-xs uppercase text-slate-500">Switch after loss</div>
-                        <div className="text-lg font-semibold text-slate-800">{switchAfterLossPct}%</div>
-                      </div>
-                    </div>
-                    <div className="rounded-xl border border-slate-200 p-3 text-sm text-slate-600">
-                      <div>Top transition: {topTransition ? topTransitionLabel : "Not enough data"}</div>
-                      <div>Periodicity hint: {patternHint || 'No strong cycle detected yet.'}</div>
-                    </div>
-                  </div>
-                )}
-
-                {statsTab === "matches" && (
-                  <div className="space-y-4">
-                    <div className="overflow-auto">
-                      <table className="w-full text-sm">
-                        <thead className="text-left text-slate-500 border-b border-slate-200">
-                          <tr>
-                            <th className="py-2 pr-3">Date</th>
-                            <th className="py-2 pr-3">Mode</th>
-                            <th className="py-2 pr-3">Best of</th>
-                            <th className="py-2 pr-3">Difficulty</th>
-                            <th className="py-2 pr-3">Score</th>
-                            <th className="py-2 pr-3">Result</th>
-                            <th className="py-2 pr-3">Rounds</th>
-                            <th className="py-2">View</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {matchesSorted.map(m => {
-                            const result = m.score.you > m.score.ai ? 'Win' : m.score.you === m.score.ai ? 'Tie' : 'Loss';
-                            return (
-                              <tr key={m.id} className="border-b border-slate-100 last:border-none">
-                                <td className="py-2 pr-3">{new Date(m.endedAt || m.startedAt).toLocaleString()}</td>
-                                <td className="py-2 pr-3 capitalize">{m.mode}</td>
-                                <td className="py-2 pr-3">{m.bestOf}</td>
-                                <td className="py-2 pr-3 capitalize">{m.difficulty}</td>
-                                <td className="py-2 pr-3">{m.score.you} – {m.score.ai}</td>
-                                <td className="py-2 pr-3">{result}</td>
-                                <td className="py-2 pr-3">{m.rounds}</td>
-                                <td className="py-2"><button className="px-2 py-1 rounded bg-sky-100 text-sky-700 text-xs" onClick={() => setSelectedMatchId(m.id)}>View</button></td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                    {selectedMatch && (
-                      <div className="border border-slate-200 rounded-xl p-3 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="text-sm text-slate-500">Match detail</div>
-                            <div className="text-lg font-semibold text-slate-800">{selectedMatchDate}</div>
-                            <div className="text-xs text-slate-500">Result: {selectedMatchResult}</div>
-                          </div>
-                          <button className="text-xs text-slate-500" onClick={() => setSelectedMatchId(null)}>Clear</button>
+                      <div className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Favorite move</div>
+                        <div className="mt-2 flex items-baseline gap-2 text-slate-900">
+                          <span className="text-3xl" aria-hidden="true">
+                            {behaviorStats.favoriteMove ? moveEmoji[behaviorStats.favoriteMove] : "🎲"}
+                          </span>
+                          <span className="text-lg font-bold">
+                            {behaviorStats.favoriteMove ? prettyMove(behaviorStats.favoriteMove) : "None yet"}
+                          </span>
                         </div>
-                        <div className="overflow-x-auto flex gap-1 text-xs">
-                          {selectedMatchRounds.map((r, idx) => (
-                            <span key={r.id} className={"px-2 py-1 rounded-full text-xs " + outcomeBadgeClass(r.outcome)}>{idx+1}</span>
-                          ))}
+                        <p className="mt-1 text-xs text-slate-500">
+                          {favoriteMovePercent !== null
+                            ? `${favoriteMovePercent}% of your plays.`
+                            : "Play more rounds to find your fave."}
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm">
+                        <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          <span>AI sure?</span>
+                          <span className="text-slate-600">
+                            {averageConfidenceLast20 !== null ? `${averageConfidenceLast20}% avg` : "—"}
+                          </span>
                         </div>
-                        <div>
-                          <div className="font-semibold text-sm text-slate-700 mb-1">Why the AI won</div>
-                          {matchAiWins.length ? (
-                            <ul className="space-y-1 text-sm text-slate-600">
-                              {matchAiWins.map(r => (
-                                <li key={r.id}>Round reason: {r.reason}</li>
-                              ))}
-                            </ul>
+                        <div className="mt-2 h-14">
+                          {recentConfidenceSpark.length ? (
+                            <svg viewBox="0 0 200 50" className="h-full w-full" aria-hidden="true">
+                              <polyline
+                                fill="none"
+                                stroke="#0ea5e9"
+                                strokeWidth="3"
+                                strokeLinecap="round"
+                                points={confidenceSparkPoints}
+                              />
+                            </svg>
                           ) : (
-                            <div className="text-sm text-slate-500">No AI wins to explain in this match.</div>
+                            <div className="flex h-full items-center justify-center text-xs text-slate-400">
+                              No rounds yet.
+                            </div>
                           )}
                         </div>
-                        <div>
-                          <div className="font-semibold text-sm text-slate-700 mb-1">Top experts this match</div>
-                          <div className="flex flex-wrap gap-2 text-sm text-slate-600">
-                            {matchExpertBreakdown.length ? matchExpertBreakdown.map(item => (
-                              <span key={item.name} className="px-2 py-1 rounded-full bg-slate-100">{item.name}: {item.count}</span>
-                            )) : <span className="text-slate-500">No expert data.</span>}
-                          </div>
+                        <p className="mt-2 text-xs text-slate-500">
+                          Last round: {lastConfidencePercent !== null ? `${lastConfidencePercent}%` : "—"}.
+                          <br />
+                          AI was very sure last round. High confidence doesn’t always mean correct!
+                        </p>
+                      </div>
+                    </div>
+                    <div className="grid gap-4 lg:grid-cols-7">
+                      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:col-span-3">
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-sm font-semibold text-slate-700">Recent trend</h3>
+                          <span className="text-xs text-slate-500">Last 20 rounds</span>
+                        </div>
+                        <p className="mt-2 text-xs text-slate-500">
+                          Last 20 rounds: green = wins, gray = ties, red = losses.
+                        </p>
+                        <div className="mt-3">
+                          {recentTrendDots.length ? (
+                            <svg viewBox="0 0 240 50" className="h-14 w-full">
+                              {recentTrendDots.map((dot, idx) => (
+                                <circle
+                                  key={`${dot.x}-${idx}`}
+                                  cx={dot.x}
+                                  cy={25}
+                                  r={6}
+                                  fill={dot.outcome === "win" ? "#22c55e" : dot.outcome === "tie" ? "#94a3b8" : "#ef4444"}
+                                  stroke="#0f172a"
+                                  strokeWidth="1"
+                                >
+                                  <title>{dot.label}</title>
+                                </circle>
+                              ))}
+                            </svg>
+                          ) : (
+                            <div className="rounded-2xl bg-slate-50 py-6 text-center text-sm text-slate-500">
+                              Play rounds to see your trend.
+                            </div>
+                          )}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-500">
+                          <span className="flex items-center gap-1">
+                            <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" />
+                            Win
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <span className="h-2 w-2 rounded-full bg-slate-400" aria-hidden="true" />
+                            Tie
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <span className="h-2 w-2 rounded-full bg-rose-500" aria-hidden="true" />
+                            Loss
+                          </span>
                         </div>
                       </div>
-                    )}
+                      <div className="relative rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:col-span-4">
+                        <div className="flex items-center justify-between gap-2">
+                          <h3 className="text-sm font-semibold text-slate-700">Your habits</h3>
+                          <span className="text-xs text-slate-500">Tap a card to peek</span>
+                        </div>
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          {habitCards.map(card => (
+                            <button
+                              key={card.key}
+                              type="button"
+                              onClick={() => setHabitDrawer(prev => (prev === card.key ? null : card.key))}
+                              className={`rounded-2xl border border-slate-200 bg-slate-50/80 p-3 text-left shadow-sm transition hover:border-sky-200 hover:bg-sky-50 ${
+                                habitDrawer === card.key ? "ring-2 ring-sky-300" : ""
+                              }`}
+                            >
+                              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                {card.blurb}
+                              </div>
+                              <div className="mt-1 text-sm font-semibold text-slate-700">{card.title}</div>
+                              <div className="mt-2 text-xl font-bold text-slate-900">{card.value}</div>
+                            </button>
+                          ))}
+                        </div>
+                        <AnimatePresence>
+                          {habitDrawer && habitDrawerContent && (
+                            <motion.div
+                              key={habitDrawer}
+                              initial={{ opacity: 0, y: 8 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: 8 }}
+                              className="pointer-events-none mt-3"
+                            >
+                              <div
+                                className="pointer-events-auto relative rounded-2xl border border-slate-200 bg-white p-4 shadow-lg"
+                                role="dialog"
+                                aria-live="polite"
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <div className="text-sm font-semibold text-slate-700">
+                                      {habitDrawerContent.title}
+                                    </div>
+                                    <p className="mt-1 text-sm text-slate-600">{habitDrawerContent.copy}</p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setHabitDrawer(null)}
+                                    className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-200"
+                                    aria-label="Close habit details"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                                <div className="mt-3">{habitDrawerContent.visual}</div>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    </div>
                   </div>
                 )}
 
                 {statsTab === "rounds" && (
-                  <div className="space-y-3">
-                    <div className="flex flex-wrap gap-2 text-sm">
-                      <label className="flex items-center gap-1">Mode
-                        <select value={roundFilters.mode} onChange={e=> setRoundFilters(f => ({ ...f, mode: e.target.value as RoundFilterMode }))} className="ml-1 border rounded px-2 py-1">
-                          <option value="all">All</option>
-                          <option value="practice">Practice</option>
-                          <option value="challenge">Challenge</option>
-                        </select>
-                      </label>
-                      <label className="flex items-center gap-1">Difficulty
-                        <select value={roundFilters.difficulty} onChange={e=> setRoundFilters(f => ({ ...f, difficulty: e.target.value as RoundFilterDifficulty }))} className="ml-1 border rounded px-2 py-1">
-                          <option value="all">All</option>
-                          <option value="fair">Fair</option>
-                          <option value="normal">Normal</option>
-                          <option value="ruthless">Ruthless</option>
-                        </select>
-                      </label>
-                      <label className="flex items-center gap-1">Outcome
-                        <select value={roundFilters.outcome} onChange={e=> setRoundFilters(f => ({ ...f, outcome: e.target.value as RoundFilterOutcome }))} className="ml-1 border rounded px-2 py-1">
-                          <option value="all">All</option>
-                          <option value="win">Win</option>
-                          <option value="lose">Lose</option>
-                          <option value="tie">Tie</option>
-                        </select>
-                      </label>
-                      <label className="flex items-center gap-1">From
-                        <input type="date" value={roundFilters.from} onChange={e=> setRoundFilters(f => ({ ...f, from: e.target.value }))} className="ml-1 border rounded px-2 py-1" />
-                      </label>
-                      <label className="flex items-center gap-1">To
-                        <input type="date" value={roundFilters.to} onChange={e=> setRoundFilters(f => ({ ...f, to: e.target.value }))} className="ml-1 border rounded px-2 py-1" />
-                      </label>
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex flex-wrap gap-2">
+                        <label className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
+                          <span>Mode</span>
+                          <select
+                            value={roundFilters.mode}
+                            onChange={e =>
+                              setRoundFilters(f => ({ ...f, mode: e.target.value as RoundFilterMode }))
+                            }
+                            className="bg-transparent text-sm font-semibold text-slate-800 focus:outline-none"
+                          >
+                            <option value="all">All</option>
+                            <option value="practice">Practice</option>
+                            <option value="challenge">Challenge</option>
+                          </select>
+                        </label>
+                        <label className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
+                          <span>Difficulty</span>
+                          <select
+                            value={roundFilters.difficulty}
+                            onChange={e =>
+                              setRoundFilters(f => ({
+                                ...f,
+                                difficulty: e.target.value as RoundFilterDifficulty,
+                              }))
+                            }
+                            className="bg-transparent text-sm font-semibold text-slate-800 focus:outline-none"
+                          >
+                            <option value="all">All</option>
+                            <option value="fair">Fair</option>
+                            <option value="normal">Normal</option>
+                            <option value="ruthless">Ruthless</option>
+                          </select>
+                        </label>
+                        <label className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
+                          <span>Outcome</span>
+                          <select
+                            value={roundFilters.outcome}
+                            onChange={e =>
+                              setRoundFilters(f => ({ ...f, outcome: e.target.value as RoundFilterOutcome }))
+                            }
+                            className="bg-transparent text-sm font-semibold text-slate-800 focus:outline-none"
+                          >
+                            <option value="all">All</option>
+                            <option value="win">Win</option>
+                            <option value="lose">Loss</option>
+                            <option value="tie">Tie</option>
+                          </select>
+                        </label>
+                        <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600">
+                          <span>Date</span>
+                          <input
+                            type="date"
+                            value={roundFilters.from}
+                            onChange={e => setRoundFilters(f => ({ ...f, from: e.target.value }))}
+                            className="bg-transparent text-sm font-semibold text-slate-800 focus:outline-none"
+                            aria-label="From date"
+                          />
+                          <span className="text-slate-400">to</span>
+                          <input
+                            type="date"
+                            value={roundFilters.to}
+                            onChange={e => setRoundFilters(f => ({ ...f, to: e.target.value }))}
+                            className="bg-transparent text-sm font-semibold text-slate-800 focus:outline-none"
+                            aria-label="To date"
+                          />
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setRoundsViewMode(prev => (prev === "card" ? "table" : "card"))}
+                        className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+                      >
+                        {isCardView ? "Table view (advanced)" : "Card view"}
+                      </button>
                     </div>
-                    <div className="overflow-auto">
-                      <table className="w-full text-sm">
-                        <thead className="text-left text-slate-500 border-b border-slate-200">
-                          <tr>
-                            <th className="py-2 pr-3">#</th>
-                            <th className="py-2 pr-3">Player</th>
-                            <th className="py-2 pr-3">AI</th>
-                            <th className="py-2 pr-3">Outcome</th>
-                            <th className="py-2 pr-3">Confidence</th>
-                            <th className="py-2 pr-3">Top expert</th>
-                            <th className="py-2 pr-3">Reason</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {roundsPageSlice.map((r, idx) => (
-                            <tr key={r.id} className="border-b border-slate-100 last:border-none">
-                              <td className="py-2 pr-3">{roundPageStartIndex + idx + 1}</td>
-                              <td className="py-2 pr-3">{prettyMove(r.player)}</td>
-                              <td className="py-2 pr-3">{prettyMove(r.ai)}</td>
-                              <td className="py-2 pr-3 capitalize">{r.outcome}</td>
-                              <td className="py-2 pr-3">{Math.round(r.confidence * 100)}% ({r.confidenceBucket})</td>
-                              <td className="py-2 pr-3">{r.mixer?.topExperts?.[0]?.name || (r.policy === 'heuristic' ? 'Heuristic' : 'N/A')}</td>
-                              <td className="py-2 pr-3 text-slate-600">{r.reason}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                    {isCardView ? (
+                      roundsPageSlice.length ? (
+                        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                          {roundsPageSlice.map((round, idx) => {
+                            const bucketKey = round.confidenceBucket ?? confidenceBucket(round.confidence);
+                            const badgeInfo = CONFIDENCE_BADGE_INFO[bucketKey];
+                            const outcomeStyle = OUTCOME_CARD_STYLES[round.outcome];
+                            const dist = round.mixer?.dist
+                              ? {
+                                  rock: clamp01(round.mixer.dist.rock),
+                                  paper: clamp01(round.mixer.dist.paper),
+                                  scissors: clamp01(round.mixer.dist.scissors),
+                                }
+                              : { rock: 1 / 3, paper: 1 / 3, scissors: 1 / 3 };
+                            const sumDist = dist.rock + dist.paper + dist.scissors || 1;
+                            const normalized = {
+                              rock: (dist.rock / sumDist) * 100,
+                              paper: (dist.paper / sumDist) * 100,
+                              scissors: (dist.scissors / sumDist) * 100,
+                            };
+                            const chips = makeReasonChips(round.reason);
+                            const expertName =
+                              round.mixer?.topExperts?.[0]?.name || (round.policy === "heuristic" ? "Heuristic" : "Mixer");
+                            const roundIndex = roundPageStartIndex + idx + 1;
+                            const playedAt = new Date(round.t).toLocaleString();
+                            return (
+                              <article
+                                key={round.id}
+                                className={`rounded-2xl border ${outcomeStyle.border} bg-white p-4 shadow-sm transition hover:shadow-md`}
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="flex items-center gap-3 text-3xl">
+                                    <span aria-label={`You played ${prettyMove(round.player)}`}>
+                                      {moveEmoji[round.player]}
+                                    </span>
+                                    <span className="text-base font-semibold text-slate-500">vs</span>
+                                    <span aria-label={`AI played ${prettyMove(round.ai)}`}>
+                                      {moveEmoji[round.ai]}
+                                    </span>
+                                  </div>
+                                  <span
+                                    className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${badgeInfo.className}`}
+                                  >
+                                    <span aria-hidden="true">{badgeInfo.face}</span>
+                                    <span>{badgeInfo.label}</span>
+                                    <span>{Math.round(round.confidence * 100)}%</span>
+                                  </span>
+                                </div>
+                                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs font-semibold">
+                                  <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 ${outcomeStyle.badge}`}>
+                                    {outcomeStyle.label}
+                                  </span>
+                                  {round.mode === "practice" ? (
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-600">
+                                      No score — Practice
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-600 capitalize">
+                                      {round.mode} · {round.difficulty}
+                                    </span>
+                                  )}
+                                  <span className="ml-auto text-slate-500">#{roundIndex}</span>
+                                </div>
+                                {chips.length > 0 && (
+                                  <div className="mt-3 flex flex-wrap gap-2">
+                                    {chips.map(chip => (
+                                      <span
+                                        key={chip}
+                                        className="rounded-full bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700"
+                                      >
+                                        {chip}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                <div className="mt-4">
+                                  <div className="flex items-center justify-between text-xs font-semibold text-slate-600">
+                                    <span>R / P / S guess</span>
+                                    <span>{expertName}</span>
+                                  </div>
+                                  <div className="mt-2 flex h-16 items-end gap-2">
+                                    {MOVES.map(move => (
+                                      <div
+                                        key={move}
+                                        className="relative flex-1"
+                                        aria-label={`${prettyMove(move)} ${Math.round(normalized[move])}%`}
+                                      >
+                                        <div className="absolute inset-0 flex items-end justify-center rounded-t-lg bg-slate-100">
+                                          <div
+                                            className="w-7 rounded-t-lg bg-sky-400"
+                                            style={{ height: `${Math.min(100, Math.max(4, Math.round(normalized[move])))}%` }}
+                                          />
+                                        </div>
+                                        <div className="relative flex flex-col items-center justify-end gap-1">
+                                          <span className="text-xl" aria-hidden="true">
+                                            {moveEmoji[move]}
+                                          </span>
+                                          <span className="text-[0.65rem] font-semibold text-slate-600">
+                                            {Math.round(normalized[move])}%
+                                          </span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                                <div className="mt-4 flex items-center justify-between text-[0.7rem] text-slate-500">
+                                  <span>{playedAt}</span>
+                                  <span>Confidence badge: {badgeInfo.label}</span>
+                                </div>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500">
+                          Play rounds to unlock card insights.
+                        </div>
+                      )
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="overflow-auto rounded-2xl border border-slate-200">
+                          <table className="min-w-full text-sm">
+                            <thead className="bg-slate-50 text-left text-slate-600">
+                              <tr>
+                                <th className="px-3 py-2">#</th>
+                                <th className="px-3 py-2">You</th>
+                                <th className="px-3 py-2">AI</th>
+                                <th className="px-3 py-2">Outcome</th>
+                                <th className="px-3 py-2">Confidence</th>
+                                <th className="px-3 py-2">Mode</th>
+                                <th className="px-3 py-2">Reason</th>
+                                <th className="px-3 py-2">Date</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {roundsPageSlice.map((round, idx) => {
+                                const badgeInfo = CONFIDENCE_BADGE_INFO[round.confidenceBucket ?? confidenceBucket(round.confidence)];
+                                const roundIndex = roundPageStartIndex + idx + 1;
+                                return (
+                                  <tr key={round.id} className="border-b border-slate-100 last:border-none">
+                                    <td className="px-3 py-2">{roundIndex}</td>
+                                    <td className="px-3 py-2">{prettyMove(round.player)}</td>
+                                    <td className="px-3 py-2">{prettyMove(round.ai)}</td>
+                                    <td className="px-3 py-2 capitalize">{round.outcome}</td>
+                                    <td className="px-3 py-2">
+                                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${badgeInfo.className}`}>
+                                        <span aria-hidden="true">{badgeInfo.face}</span>
+                                        <span>{Math.round(round.confidence * 100)}%</span>
+                                      </span>
+                                    </td>
+                                    <td className="px-3 py-2 text-xs text-slate-600">
+                                      {round.mode === "practice"
+                                        ? "Practice · No score — Practice"
+                                        : `${round.mode} · ${round.difficulty}`}
+                                    </td>
+                                    <td className="px-3 py-2 text-xs text-slate-600">{round.reason || "—"}</td>
+                                    <td className="px-3 py-2 text-xs text-slate-500">
+                                      {new Date(round.t).toLocaleString()}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                              {!roundsPageSlice.length && (
+                                <tr>
+                                  <td className="px-3 py-4 text-center text-sm text-slate-500" colSpan={8}>
+                                    Play rounds to see table stats.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                        <p className="text-xs text-slate-500">
+                          Practice rows show “No score — Practice.” Challenge rows list the mode and difficulty you faced.
+                        </p>
+                      </div>
+                    )}
                     <div className="flex items-center justify-between text-sm text-slate-600">
-                      <span>Page {roundPage + 1} of {totalRoundPages}</span>
+                      <span>
+                        Page {Math.min(roundPage + 1, totalRoundPages)} of {totalRoundPages}
+                      </span>
                       <div className="flex gap-2">
-                        <button disabled={roundPage === 0} onClick={()=> setRoundPage(p=> Math.max(0, p-1))} className="px-2 py-1 rounded bg-slate-100 disabled:opacity-50">Prev</button>
-                        <button disabled={roundPage + 1 >= totalRoundPages} onClick={()=> setRoundPage(p=> Math.min(totalRoundPages-1, p+1))} className="px-2 py-1 rounded bg-slate-100 disabled:opacity-50">Next</button>
+                        <button
+                          type="button"
+                          disabled={roundPage === 0}
+                          onClick={() => setRoundPage(p => Math.max(0, p - 1))}
+                          className="rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-semibold text-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Prev
+                        </button>
+                        <button
+                          type="button"
+                          disabled={roundPage + 1 >= totalRoundPages}
+                          onClick={() => setRoundPage(p => Math.min(totalRoundPages - 1, p + 1))}
+                          className="rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-semibold text-slate-600 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Next
+                        </button>
                       </div>
                     </div>
                   </div>
                 )}
 
                 {statsTab === "insights" && (
-                  <div className="space-y-3 text-sm text-slate-600">
-                    <div className="font-semibold text-slate-700">Things we've learned</div>
-                    <ul className="list-disc pl-5 space-y-1">
-                      <li>Favorite move: {favoriteMoveText}</li>
-                      <li>Repeat after win: {repeatAfterWinPct}%</li>
-                      <li>Switch after loss: {switchAfterLossPct}%</li>
-                      <li>Top transition: {topTransition ? topTransitionLabel : 'Not enough data yet.'}</li>
-                      <li>{patternHint || 'No strong periodic pattern detected yet.'}</li>
-                    </ul>
-                    <div className="font-semibold text-slate-700">Against you, the AI excels when…</div>
-                    <div className="space-y-1">
-                      {confidenceBuckets.map(bucket => (
-                        <div key={bucket.label}>Confidence {bucket.label}: {bucket.total} rounds, AI win rate {bucket.total ? Math.round(bucket.winRate * 100) : 0}%</div>
-                      ))}
+                  <div className="space-y-4">
+                    <div className="grid gap-4 lg:grid-cols-3">
+                      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                        <h3 className="text-sm font-semibold text-slate-700">Win/Lose by confidence</h3>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {totalRounds
+                            ? `When AI is very sure, you win ${Math.round((confidenceBandStats.find(b => b.key === "high")?.playerWinRate ?? 0) * 100)}%.`
+                            : "Play rounds to see how confidence changes outcomes."}
+                        </p>
+                        <div className="mt-3 space-y-3">
+                          {confidenceBandStats.map(band => {
+                            const winPct = Math.round(band.playerWinRate * 100);
+                            const tiePct = band.total ? Math.round((band.ties / band.total) * 100) : 0;
+                            const lossPct = Math.round(band.aiWinRate * 100);
+                            return (
+                              <div key={band.key} className="space-y-2 rounded-xl bg-slate-50/80 p-3">
+                                <div className="flex items-center justify-between text-xs font-semibold text-slate-600">
+                                  <span>{band.tone}</span>
+                                  <span>{band.total} rounds</span>
+                                </div>
+                                <div className="relative h-6 overflow-hidden rounded-full">
+                                  <div className="absolute inset-0 flex">
+                                    <div style={{ width: `${winPct}%` }} className="bg-emerald-400" aria-hidden="true" />
+                                    <div style={{ width: `${tiePct}%` }} className="bg-slate-300" aria-hidden="true" />
+                                    <div style={{ width: `${lossPct}%` }} className="bg-rose-400" aria-hidden="true" />
+                                  </div>
+                                  <div className="relative z-10 flex h-full w-full items-center justify-between px-2 text-[0.7rem] font-semibold">
+                                    <span className="flex items-center gap-1 text-emerald-50">
+                                      <span className="h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true" />Win {winPct}%
+                                    </span>
+                                    <span className="flex items-center gap-1 text-slate-700">
+                                      <span className="h-2 w-2 rounded-full bg-slate-400" aria-hidden="true" />Tie {tiePct}%
+                                    </span>
+                                    <span className="flex items-center gap-1 text-rose-50">
+                                      <span className="h-2 w-2 rounded-full bg-rose-500" aria-hidden="true" />AI {lossPct}%
+                                    </span>
+                                  </div>
+                                </div>
+                                <p className="text-xs text-slate-500">
+                                  When AI is {band.tone.toLowerCase()}, you win {winPct}%.
+                                </p>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                        <h3 className="text-sm font-semibold text-slate-700">Calibration</h3>
+                        <p className="mt-1 text-xs text-slate-500">If I say 70% sure, I should be right about 70%.</p>
+                        <div className="mt-3 flex items-center gap-4">
+                          <svg viewBox="0 0 100 100" className="h-28 w-28">
+                            <rect x="0" y="0" width="100" height="100" fill="#f1f5f9" rx="12" />
+                            <line x1="0" y1="100" x2="100" y2="0" stroke="#38bdf8" strokeWidth="2" strokeDasharray="4 3" />
+                            {activeCalibrationBins.length ? (
+                              <polyline
+                                fill="none"
+                                stroke="#0f172a"
+                                strokeWidth="2"
+                                points={reliabilityPolyline}
+                                strokeLinecap="round"
+                              />
+                            ) : null}
+                            {activeCalibrationBins.map((bin, index) => (
+                              <circle
+                                key={index}
+                                cx={Math.round(bin.avgConfidence * 100)}
+                                cy={Math.round(100 - bin.actual * 100)}
+                                r={2.5}
+                                fill="#f97316"
+                              />
+                            ))}
+                          </svg>
+                          <div className="text-sm font-semibold text-slate-700">
+                            {ecePercent !== null ? `${ecePercent}% ECE` : "—"}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                        <h3 className="text-sm font-semibold text-slate-700">Sharpness</h3>
+                        <p className="mt-1 text-xs text-slate-500">Pointy = strong guess, flat = unsure.</p>
+                        <div className="mt-3">
+                          <div className="h-3 w-full rounded-full bg-slate-100" aria-hidden="true">
+                            <div
+                              className="h-full rounded-full bg-sky-400"
+                              style={{ width: `${Math.min(100, Math.max(0, sharpnessPercent))}%` }}
+                            />
+                          </div>
+                          <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                            <span>Flat</span>
+                            <span>{sharpnessPercent}%</span>
+                            <span>Pointy</span>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <div className="font-semibold text-slate-700">Expert contributions</div>
-                    <div className="flex flex-wrap gap-2">
-                      {expertContribution.length ? expertContribution.map(([name, count]) => (
-                        <span key={name} className="px-2 py-1 rounded-full bg-slate-100 text-slate-700">{name}: {count}</span>
-                      )) : <span className="text-slate-500">Not enough mixer data yet.</span>}
-                    </div>
-                    <div className="text-xs text-slate-500">Average streaks — You: {averageYouStreak} | AI: {averageAiStreak}. Reveal timing currently not tracked.</div>
+                    <details className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                      <summary className="cursor-pointer text-sm font-semibold text-slate-700">More details</summary>
+                      <div className="mt-2 space-y-1 text-sm text-slate-600">
+                        <div>Brier score: {calibrationSummary.brier !== null ? calibrationSummary.brier.toFixed(3) : "—"}</div>
+                        <div>Flip rate: {totalRounds > 1 ? `${flipRatePercent}%` : "—"}</div>
+                        <div>Avg AI confidence: {averageConfidenceAll !== null ? `${averageConfidenceAll}%` : "—"}</div>
+                      </div>
+                    </details>
                   </div>
                 )}
               </div>
