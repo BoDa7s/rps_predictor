@@ -73,10 +73,6 @@ const WELCOME_PREF_KEY = "rps_welcome_pref_v1";
 const INSIGHT_PANEL_STATE_KEY = "rps_insight_panel_open_v1";
 type WelcomePreference = "show" | "skip";
 
-const HUD_PANEL_GUTTER = 8;
-const HUD_PANEL_RIGHT_GAP_EXTRA = 12;
-const HUD_PANEL_OPEN_MEASURE_FRAMES = 12;
-
 type RobotVariant = "idle" | "happy" | "meh" | "sad";
 type RobotReaction = { emoji: string; body?: string; label: string; variant: RobotVariant };
 
@@ -931,9 +927,11 @@ function RPSDoodleAppInner(){
   const insightReturnFocusRef = useRef<HTMLElement | null>(null);
   const insightShouldFocusRef = useRef(false);
   const insightDismissedForMatchRef = useRef(false);
-  const [insightPanelWidth, setInsightPanelWidth] = useState(0);
-  const hudColumnRef = useRef<HTMLDivElement | null>(null);
-  const [hudColumnOffset, setHudColumnOffset] = useState(0);
+  const hudShellRef = useRef<HTMLDivElement | null>(null);
+  const [hudShellWidth, setHudShellWidth] = useState(0);
+  const [viewportWidth, setViewportWidth] = useState<number>(() =>
+    typeof window === "undefined" ? 0 : window.innerWidth,
+  );
   const [liveDecisionSnapshot, setLiveDecisionSnapshot] = useState<LiveInsightSnapshot | null>(null);
   const [liveInsightRounds, setLiveInsightRounds] = useState<RoundLog[]>([]);
   const persistInsightPreference = useCallback((next: boolean) => {
@@ -944,6 +942,22 @@ function RPSDoodleAppInner(){
     } catch {
       /* ignore */
     }
+  }, []);
+
+  const computeInsightRailWidth = useCallback((vw: number, shellWidth: number) => {
+    if (vw >= 1024) {
+      return Math.min(520, vw * 0.4);
+    }
+    if (vw >= 768) {
+      return Math.min(440, vw * 0.6);
+    }
+    if (shellWidth > 0) {
+      return shellWidth;
+    }
+    if (vw > 0) {
+      return vw;
+    }
+    return 360;
   }, []);
 
   const buildLiveSnapshot = useCallback(
@@ -1028,7 +1042,7 @@ function RPSDoodleAppInner(){
         trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
       insightShouldFocusRef.current = shouldFocus;
       setInsightPanelOpen(true);
-      setLive("Live AI Insight panel opened. Overlays the game.");
+      setLive("Live AI Insight panel opened inside the HUD.");
     },
     [persistInsightPreference, setLive],
   );
@@ -1118,109 +1132,66 @@ function RPSDoodleAppInner(){
     if (typeof window === "undefined") {
       return;
     }
-    if (!insightPanelOpen) {
-      setInsightPanelWidth(0);
-      return;
-    }
-    const node = insightPanelRef.current;
-    if (!node) {
-      return;
-    }
-    const updateWidth = () => {
-      const measuredWidth = Math.max(0, node.getBoundingClientRect().width);
-      if (!Number.isFinite(measuredWidth)) {
-        return;
-      }
-      setInsightPanelWidth(measuredWidth);
+    const handleResize = () => {
+      setViewportWidth(window.innerWidth);
     };
-    updateWidth();
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
+  }, []);
+
+  useEffect(() => {
+    const node = hudShellRef.current;
+    if (!node) {
+      setHudShellWidth(0);
+      return;
+    }
+    const updateShellWidth = () => {
+      const rect = node.getBoundingClientRect();
+      setHudShellWidth(rect.width);
+    };
+    updateShellWidth();
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(() => updateWidth());
+      resizeObserver = new ResizeObserver(() => updateShellWidth());
       resizeObserver.observe(node);
+      return () => {
+        resizeObserver?.disconnect();
+      };
     }
-    window.addEventListener("resize", updateWidth);
-    return () => {
-      if (resizeObserver) {
-        resizeObserver.disconnect();
-      }
-      window.removeEventListener("resize", updateWidth);
-    };
-  }, [insightPanelOpen]);
-
-  const updateHudColumnOffset = useCallback(() => {
     if (typeof window === "undefined") {
       return;
     }
-    const node = hudColumnRef.current;
-    const commitOffset = (value: number) => {
-      setHudColumnOffset(prev => (Math.abs(prev - value) < 0.5 ? prev : value));
-    };
-    if (!node || scene !== "MATCH" || !insightPanelOpen || insightPanelWidth <= 0) {
-      commitOffset(0);
-      return;
-    }
-    const rect = node.getBoundingClientRect();
-    const rightGap = Math.max(0, window.innerWidth - rect.right);
-    const adjustedRightGap = Math.max(0, rightGap - HUD_PANEL_RIGHT_GAP_EXTRA);
-    const desiredOffset = Math.max(
-      0,
-      insightPanelWidth + HUD_PANEL_GUTTER - adjustedRightGap,
-    );
-    commitOffset(desiredOffset);
-  }, [insightPanelOpen, insightPanelWidth, scene]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    const node = hudColumnRef.current;
-    if (!node) {
-      setHudColumnOffset(0);
-      return;
-    }
-    updateHudColumnOffset();
-    let resizeObserver: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(() => updateHudColumnOffset());
-      resizeObserver.observe(node);
-    }
-    window.addEventListener("resize", updateHudColumnOffset);
+    window.addEventListener("resize", updateShellWidth);
     return () => {
-      if (resizeObserver) {
-        resizeObserver.disconnect();
-      }
-      window.removeEventListener("resize", updateHudColumnOffset);
+      window.removeEventListener("resize", updateShellWidth);
     };
-  }, [updateHudColumnOffset]);
+  }, []);
 
-  useEffect(() => {
-    updateHudColumnOffset();
-  }, [insightPanelOpen, insightPanelWidth, updateHudColumnOffset]);
+  const insightRailTargetWidth = useMemo(
+    () => computeInsightRailWidth(viewportWidth, hudShellWidth),
+    [computeInsightRailWidth, hudShellWidth, viewportWidth],
+  );
 
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
+  const fallbackInsightRailWidth = useMemo(() => {
+    if (viewportWidth > 0) {
+      return Math.max(280, Math.min(520, viewportWidth * 0.9));
     }
-    if (!insightPanelOpen) {
-      return;
-    }
-    let frameCount = 0;
-    let rafId: number | null = null;
-    const measure = () => {
-      updateHudColumnOffset();
-      frameCount += 1;
-      if (frameCount < HUD_PANEL_OPEN_MEASURE_FRAMES) {
-        rafId = window.requestAnimationFrame(measure);
-      }
-    };
-    rafId = window.requestAnimationFrame(measure);
-    return () => {
-      if (rafId !== null) {
-        window.cancelAnimationFrame(rafId);
-      }
-    };
-  }, [insightPanelOpen, updateHudColumnOffset]);
+    return 360;
+  }, [viewportWidth]);
+
+  const insightRailWidthForMotion =
+    insightRailTargetWidth > 0 ? insightRailTargetWidth : fallbackInsightRailWidth;
+
+  const insightRailTransition = useMemo(
+    () =>
+      reduceMotion
+        ? { duration: 0 }
+        : { duration: 0.24, ease: [0.16, 1, 0.3, 1] as [number, number, number, number] },
+    [reduceMotion],
+  );
   const robotResultTimeoutRef = useRef<number | null>(null);
   const robotRestTimeoutRef = useRef<number | null>(null);
   const [trainingCelebrationActive, setTrainingCelebrationActive] = useState(false);
@@ -3683,8 +3654,6 @@ function RPSDoodleAppInner(){
         <motion.div
           layout
           className="absolute top-0 left-0 right-0 z-[75] flex items-center justify-between p-3"
-          animate={{ marginRight: insightPanelOpen ? insightPanelWidth : 0 }}
-          transition={{ duration: 0.2, ease: [0.22, 0.61, 0.36, 1] }}
         >
           <motion.h1 layout className="text-2xl font-extrabold tracking-tight text-sky-700 drop-shadow-sm">RPS Lab</motion.h1>
           <div className="flex items-center gap-2">
@@ -4406,13 +4375,13 @@ function RPSDoodleAppInner(){
               </div>
             )}
             <div className="w-full px-4">
-              <motion.div
-                ref={hudColumnRef}
-                className="mx-auto flex w-full max-w-[820px] flex-col items-center gap-6"
-                animate={{ x: -hudColumnOffset }}
-                transition={{ duration: 0.2, ease: [0.22, 0.61, 0.36, 1] }}
-              >
-                <div className="flex w-full flex-col items-center gap-4 lg:gap-6">
+              <div className="mx-auto w-full max-w-[1400px]">
+                <div
+                  ref={hudShellRef}
+                  className="relative flex w-full flex-col items-stretch gap-6 md:grid md:grid-cols-[minmax(0,1fr)_auto] md:items-start md:gap-5"
+                >
+                  <motion.div className="mx-auto flex w-full max-w-[820px] flex-col items-center gap-6">
+                    <div className="flex w-full flex-col items-center gap-4 lg:gap-6">
                   {/* HUD */}
                   <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .05 }} className="relative w-full max-w-[820px] bg-white/70 rounded-2xl shadow px-4 py-3">
                     {(needsTraining || trainingActive) ? (
@@ -4578,7 +4547,57 @@ function RPSDoodleAppInner(){
                     })}
                   </motion.div>
                 </div>
-              </motion.div>
+                  </motion.div>
+                  <AnimatePresence initial={false}>
+                    {insightPanelOpen && (
+                      <>
+                        <motion.div
+                          key="insight-rail-scrim"
+                          className="absolute inset-0 z-10 bg-slate-900/40 md:hidden"
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          transition={insightRailTransition}
+                          aria-hidden="true"
+                          onClick={() =>
+                            closeInsightPanel({ persistPreference: false, suppressForMatch: true })
+                          }
+                        />
+                        <motion.aside
+                          key="insight-panel"
+                          id="live-insight-panel"
+                          role="dialog"
+                          aria-label="Live AI Insight panel."
+                          ref={insightPanelRef}
+                          initial={
+                            reduceMotion
+                              ? { opacity: 1, width: insightRailWidthForMotion }
+                              : { opacity: 0, width: 0 }
+                          }
+                          animate={{ opacity: 1, width: insightRailWidthForMotion }}
+                          exit={
+                            reduceMotion
+                              ? { opacity: 1, width: 0 }
+                              : { opacity: 0, width: 0 }
+                          }
+                          transition={insightRailTransition}
+                          className="pointer-events-auto absolute inset-0 z-20 flex h-full w-full flex-col overflow-hidden bg-white shadow-2xl ring-1 ring-slate-200 md:static md:h-auto md:max-h-[calc(100vh-6rem)] md:rounded-3xl md:bg-white/85 md:shadow-lg"
+                        >
+                          <InsightPanel
+                            snapshot={liveDecisionSnapshot}
+                            liveRounds={liveInsightRounds}
+                            historicalRounds={rounds}
+                            titleRef={insightHeadingRef}
+                            onClose={() =>
+                              closeInsightPanel({ persistPreference: false, suppressForMatch: true })
+                            }
+                          />
+                        </motion.aside>
+                      </>
+                    )}
+                  </AnimatePresence>
+                </div>
+              </div>
             </div>
           </motion.section>
         )}
@@ -4657,40 +4676,6 @@ function RPSDoodleAppInner(){
 
       {/* Wipe overlay */}
       <div className={"wipe " + (wipeRun ? 'run' : '')} aria-hidden={true} />
-
-      <AnimatePresence>
-        {insightPanelOpen && (
-          <motion.div
-            key="insight-panel"
-            className="pointer-events-none fixed inset-0 z-[70] flex justify-end"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          >
-            <motion.aside
-              id="live-insight-panel"
-              role="dialog"
-              aria-label="Live AI Insight panel. Overlays the game."
-              ref={insightPanelRef}
-              initial={{ x: reduceMotion ? 0 : 48, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: reduceMotion ? 0 : 48, opacity: 0 }}
-              transition={{ duration: reduceMotion ? 0 : 0.25, ease: [0.22, 0.61, 0.36, 1] }}
-              className="pointer-events-auto relative z-10 flex h-full w-full flex-col bg-white shadow-2xl ring-1 ring-slate-200 sm:w-[min(440px,60vw)] lg:w-[min(520px,40vw)]"
-            >
-              <InsightPanel
-                snapshot={liveDecisionSnapshot}
-                liveRounds={liveInsightRounds}
-                historicalRounds={rounds}
-                titleRef={insightHeadingRef}
-                onClose={() =>
-                  closeInsightPanel({ persistPreference: false, suppressForMatch: true })
-                }
-              />
-            </motion.aside>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* Calibration modal */}
       {/* Calibration modal removed */}

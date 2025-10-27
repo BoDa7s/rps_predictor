@@ -458,7 +458,7 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
           >
             Live AI Insight panel
           </h2>
-          <p className="text-xs text-slate-500">Overlays the game with real-time confidence analytics.</p>
+          <p className="text-xs text-slate-500">Right-rail analytics with real-time confidence tracking.</p>
         </div>
         <button
           type="button"
