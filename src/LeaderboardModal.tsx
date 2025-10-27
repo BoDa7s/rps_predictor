@@ -1,29 +1,19 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import { motion } from "framer-motion";
-import { useStats, RoundLog } from "./stats";
-import { usePlayers, Grade } from "./players";
+import { useStats } from "./stats";
+import { usePlayers } from "./players";
 import { AIMode, Mode } from "./gameTypes";
-import { computeMatchScore } from "./leaderboard";
+import {
+  aggregateLeaderboardEntries,
+  collectLeaderboardEntries,
+  groupRoundsByMatch,
+  type LeaderboardMatchEntry,
+  type LeaderboardPlayerInfo,
+} from "./leaderboardData";
 
 interface LeaderboardModalProps {
   open: boolean;
   onClose: () => void;
-}
-
-interface LeaderboardMatchEntry {
-  matchId: string;
-  matchKey: string;
-  playerId: string;
-  profileId: string;
-  playerName: string;
-  grade?: Grade;
-  score: number;
-  streak: number;
-  rounds: number;
-  mode: Mode;
-  difficulty: AIMode;
-  endedAt: string;
-  endedAtMs: number;
 }
 
 const MODE_LABELS: Record<Mode, string> = {
@@ -38,55 +28,6 @@ const DIFFICULTY_LABELS: Record<AIMode, string> = {
 };
 
 const DEFAULT_LIMIT = 10;
-
-const DIFFICULTY_RANK: Record<AIMode, number> = {
-  fair: 0,
-  normal: 1,
-  ruthless: 2,
-};
-
-function isCandidateBetter(
-  candidate: LeaderboardMatchEntry,
-  current: LeaderboardMatchEntry,
-): boolean {
-  if (candidate.score !== current.score) {
-    return candidate.score > current.score;
-  }
-  if (candidate.endedAtMs !== current.endedAtMs) {
-    return candidate.endedAtMs > current.endedAtMs;
-  }
-  const candidateRank = DIFFICULTY_RANK[candidate.difficulty] ?? 0;
-  const currentRank = DIFFICULTY_RANK[current.difficulty] ?? 0;
-  if (candidateRank !== currentRank) {
-    return candidateRank > currentRank;
-  }
-  const candidateId = candidate.matchId ?? candidate.matchKey;
-  const currentId = current.matchId ?? current.matchKey;
-  return (candidateId ?? "").localeCompare(currentId ?? "") < 0;
-}
-
-function compareEntriesDesc(a: LeaderboardMatchEntry, b: LeaderboardMatchEntry) {
-  if (b.score !== a.score) return b.score - a.score;
-  if (b.endedAtMs !== a.endedAtMs) return b.endedAtMs - a.endedAtMs;
-  const rankA = DIFFICULTY_RANK[a.difficulty] ?? 0;
-  const rankB = DIFFICULTY_RANK[b.difficulty] ?? 0;
-  if (rankB !== rankA) return rankB - rankA;
-  const aId = a.matchId ?? a.matchKey;
-  const bId = b.matchId ?? b.matchKey;
-  return (aId ?? "").localeCompare(bId ?? "");
-}
-
-function aggregateByPlayer(entries: LeaderboardMatchEntry[]): LeaderboardMatchEntry[] {
-  const map = new Map<string, LeaderboardMatchEntry>();
-  entries.forEach(entry => {
-    const key = entry.playerId;
-    const existing = map.get(key);
-    if (!existing || isCandidateBetter(entry, existing)) {
-      map.set(key, entry);
-    }
-  });
-  return Array.from(map.values()).sort(compareEntriesDesc);
-}
 
 function safeDate(value: string): Date | null {
   const date = new Date(value);
@@ -125,7 +66,7 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
   }, [open, onClose]);
 
   const playersById = useMemo(() => {
-    const map = new Map<string, { name: string; grade?: Grade }>();
+    const map = new Map<string, LeaderboardPlayerInfo>();
     players.forEach(player => {
       map.set(player.id, {
         name: player.playerName,
@@ -135,69 +76,18 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
     return map;
   }, [players]);
 
-  const roundsByMatchId = useMemo(() => {
-    const map = new Map<string, RoundLog[]>();
-    adminRounds.forEach(round => {
-      if (!round.matchId) return;
-      const existing = map.get(round.matchId);
-      if (existing) {
-        existing.push(round);
-      } else {
-        map.set(round.matchId, [round]);
-      }
-    });
-    return map;
-  }, [adminRounds]);
+  const roundsByMatchId = useMemo(() => groupRoundsByMatch(adminRounds), [adminRounds]);
 
-  const { matchEntries, hasPracticeLegacy } = useMemo(() => {
-    let legacy = false;
-    const entries: LeaderboardMatchEntry[] = [];
-    adminMatches.forEach(match => {
-      if (match.mode === "practice" || match.leaderboardType === "Practice Legacy") {
-        legacy = true;
-        return;
-      }
-      if (match.mode !== "challenge") return;
-      const player = playersById.get(match.playerId);
-      if (!player) return;
-      const matchKey = match.clientId ?? match.id;
-      const rounds = roundsByMatchId.get(matchKey) ?? [];
-      if (!rounds.length) return;
-      const endedAt = match.endedAt || match.startedAt;
-      if (!endedAt) return;
-      const endedDate = safeDate(endedAt);
-      if (!endedDate) return;
-      const computed = match.leaderboardScore != null && match.leaderboardRoundCount != null
-        ? null
-        : computeMatchScore(rounds);
-      const totalScore = match.leaderboardScore ?? computed?.total ?? 0;
-      if (totalScore <= 0) return;
-      const maxStreak = match.leaderboardMaxStreak ?? computed?.maxStreak ?? 0;
-      const roundCount = match.leaderboardRoundCount ?? computed?.rounds ?? rounds.length;
-      entries.push({
-        matchId: match.id,
-        matchKey,
-        playerId: match.playerId,
-        profileId: match.profileId,
-        playerName: player.name,
-        grade: player.grade,
-        score: totalScore,
-        streak: maxStreak,
-        rounds: roundCount,
-        mode: match.mode,
-        difficulty: match.difficulty,
-        endedAt,
-        endedAtMs: endedDate.getTime(),
-      });
-    });
-    return { matchEntries: entries, hasPracticeLegacy: legacy };
-  }, [adminMatches, playersById, roundsByMatchId]);
+  const { entries: matchEntries, hasPracticeLegacy } = useMemo(
+    () => collectLeaderboardEntries({ matches: adminMatches, roundsByMatchId, playersById }),
+    [adminMatches, roundsByMatchId, playersById],
+  );
 
   const allTimeRows = useMemo(() => {
     if (!matchEntries.length) {
       return [] as LeaderboardMatchEntry[];
     }
-    return aggregateByPlayer(matchEntries);
+    return aggregateLeaderboardEntries(matchEntries);
   }, [matchEntries]);
 
   const rowsToDisplay = useMemo(
