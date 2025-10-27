@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 
 export type HelpQuestion = {
@@ -52,6 +52,29 @@ export const HelpCenter: React.FC<HelpCenterProps> = ({
   const isMobile = useMediaQuery("(max-width: 767px)");
   const modalId = "help-center-modal";
 
+  const groupedQuestions = useMemo(() => {
+    const groups = new Map<
+      string,
+      { category: string; entries: { id: string; question: string; answer: string }[] }
+    >();
+
+    questions.forEach(question => {
+      const parts = question.question.split("·");
+      const category = parts.length > 1 ? parts[0].trim() : "General";
+      const label = parts.length > 1 ? parts.slice(1).join("·").trim() : question.question.trim();
+
+      const existing = groups.get(category);
+      const entry = { id: question.id, question: label, answer: question.answer };
+      if (existing) {
+        existing.entries.push(entry);
+      } else {
+        groups.set(category, { category, entries: [entry] });
+      }
+    });
+
+    return Array.from(groups.values());
+  }, [questions]);
+
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -86,62 +109,71 @@ export const HelpCenter: React.FC<HelpCenterProps> = ({
           ×
         </button>
       </div>
-      <div className="mt-4 flex-1 space-y-2 overflow-y-auto pr-1">
-        {questions.map(question => {
-          const isActive = activeQuestionId === question.id;
-          const containerClass = `rounded-xl border bg-white shadow-sm transition-colors ${
-            isActive ? "border-sky-200 bg-sky-50/80" : "border-slate-200"
-          }`;
-          return (
-            <div key={question.id} className={containerClass}>
-              <button
-                type="button"
-                className={`flex w-full items-center justify-between gap-3 rounded-xl px-4 py-3 text-left text-sm font-semibold transition ${
-                  isActive
-                    ? "text-sky-700"
-                    : "text-slate-800 hover:bg-slate-50"
-                } focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400`}
-                aria-expanded={isActive}
-                aria-controls={`${question.id}-content`}
-                onClick={() => onChangeActiveQuestion(isActive ? null : question.id)}
-              >
-                <span>{question.question}</span>
-                <span
-                  aria-hidden
-                  className={`flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition-transform duration-200 ${
-                    isActive ? "rotate-90 bg-sky-100 text-sky-600" : ""
-                  }`}
-                >
-                  <svg
-                    className="h-3.5 w-3.5"
-                    viewBox="0 0 20 20"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path d="M7 5l6 5-6 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                </span>
-              </button>
-              <AnimatePresence initial={false}>
-                {isActive && (
-                  <motion.div
-                    key="content"
-                    id={`${question.id}-content`}
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: "auto", opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={accordionTransition}
-                    className="overflow-hidden"
-                  >
-                    <div className="px-4 pb-4 text-sm leading-relaxed text-slate-600">
-                      {question.answer}
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+      <div className="mt-4 flex-1 space-y-6 overflow-y-auto pr-1">
+        {groupedQuestions.map(group => (
+          <section key={group.category} className="space-y-3">
+            <h3 className="text-lg font-bold uppercase tracking-wide text-slate-900">
+              {group.category}
+            </h3>
+            <div className="space-y-2">
+              {group.entries.map(question => {
+                const isActive = activeQuestionId === question.id;
+                const containerClass = `rounded-xl border bg-white shadow-sm transition-colors ${
+                  isActive ? "border-sky-200 bg-sky-50/80" : "border-slate-200"
+                }`;
+                return (
+                  <div key={question.id} className={containerClass}>
+                    <button
+                      type="button"
+                      className={`flex w-full items-center justify-between gap-3 rounded-xl px-4 py-3 text-left text-sm font-semibold transition ${
+                        isActive
+                          ? "text-sky-700"
+                          : "text-slate-800 hover:bg-slate-50"
+                      } focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400`}
+                      aria-expanded={isActive}
+                      aria-controls={`${question.id}-content`}
+                      onClick={() => onChangeActiveQuestion(isActive ? null : question.id)}
+                    >
+                      <span>{question.question}</span>
+                      <span
+                        aria-hidden
+                        className={`flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition-transform duration-200 ${
+                          isActive ? "rotate-90 bg-sky-100 text-sky-600" : ""
+                        }`}
+                      >
+                        <svg
+                          className="h-3.5 w-3.5"
+                          viewBox="0 0 20 20"
+                          fill="none"
+                          xmlns="http://www.w3.org/2000/svg"
+                        >
+                          <path d="M7 5l6 5-6 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </span>
+                    </button>
+                    <AnimatePresence initial={false}>
+                      {isActive && (
+                        <motion.div
+                          key="content"
+                          id={`${question.id}-content`}
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: "auto", opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          transition={accordionTransition}
+                          className="overflow-hidden"
+                        >
+                          <div className="px-4 pb-4 text-sm leading-relaxed text-slate-600">
+                            {question.answer}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                );
+              })}
             </div>
-          );
-        })}
+          </section>
+        ))}
       </div>
     </div>
   );
