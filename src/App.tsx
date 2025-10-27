@@ -1950,6 +1950,19 @@ function RPSDoodleAppInner(){
 
   const [selectedMode, setSelectedMode] = useState<Mode|null>(null);
   const showMatchScoreBadge = !trainingActive && (selectedMode ?? "practice") === "challenge";
+  const showResultsScoreBadge = showMatchScoreBadge && matchScoreTotal !== null;
+  const resultMascot = useMemo((): { variant: RobotVariant; alt: string } => {
+    if (resultBanner === "Victory") {
+      return { variant: "sad", alt: "Robot looking disappointed after your loss." };
+    }
+    if (resultBanner === "Defeat") {
+      return { variant: "happy", alt: "Robot smiling after your win." };
+    }
+    if (resultBanner === "Tie") {
+      return { variant: "meh", alt: "Robot with a neutral expression after a tie." };
+    }
+    return { variant: "idle", alt: "Robot mascot." };
+  }, [resultBanner]);
   const hideUiDuringModeTransition = scene === "MODE" && selectedMode !== null;
   const [wipeRun, setWipeRun] = useState(false);
   const modeLabel = (m:Mode)=> m.charAt(0).toUpperCase()+m.slice(1);
@@ -5029,11 +5042,29 @@ function RPSDoodleAppInner(){
               <div id="match-results-title" className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold text-white ${bannerColor()}`}>
                 {resultBanner}
               </div>
+              {showResultsScoreBadge && (
+                <div className="absolute right-6 top-6">
+                  <div className="inline-flex items-center gap-2 rounded-full bg-slate-900/90 px-4 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.25em] text-white shadow-sm">
+                    <span className="text-[0.6rem] font-semibold uppercase tracking-[0.3em] text-slate-200/80">Score</span>
+                    <span className="text-sm font-semibold tracking-normal">{matchScoreDisplay}</span>
+                  </div>
+                </div>
+              )}
               <div className="mt-4 rounded-2xl bg-slate-50/80 p-4">
-                <div className="flex items-center justify-around text-xl">
+                <div className="flex items-center justify-around gap-6 text-xl">
                   <div className="flex flex-col items-center gap-1">
                     <div className="text-slate-500 text-sm">You</div>
                     <div className="text-3xl font-semibold text-slate-900">{playerScore}</div>
+                  </div>
+                  <div className="flex flex-col items-center gap-2">
+                    <div className="rounded-full border border-slate-200 bg-white/90 p-3 shadow-sm">
+                      <img
+                        src={ROBOT_ASSETS[resultMascot.variant][96]}
+                        alt={resultMascot.alt}
+                        className="h-16 w-16 md:h-20 md:w-20"
+                        style={{ filter: ROBOT_BASE_GLOW }}
+                      />
+                    </div>
                   </div>
                   <div className="flex flex-col items-center gap-1">
                     <div className="text-slate-500 text-sm">AI</div>

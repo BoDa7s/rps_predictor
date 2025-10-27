@@ -39,27 +39,53 @@ const DIFFICULTY_LABELS: Record<AIMode, string> = {
 
 const DEFAULT_LIMIT = 10;
 
+const DIFFICULTY_RANK: Record<AIMode, number> = {
+  fair: 0,
+  normal: 1,
+  ruthless: 2,
+};
+
+function isCandidateBetter(
+  candidate: LeaderboardMatchEntry,
+  current: LeaderboardMatchEntry,
+): boolean {
+  if (candidate.score !== current.score) {
+    return candidate.score > current.score;
+  }
+  if (candidate.endedAtMs !== current.endedAtMs) {
+    return candidate.endedAtMs > current.endedAtMs;
+  }
+  const candidateRank = DIFFICULTY_RANK[candidate.difficulty] ?? 0;
+  const currentRank = DIFFICULTY_RANK[current.difficulty] ?? 0;
+  if (candidateRank !== currentRank) {
+    return candidateRank > currentRank;
+  }
+  const candidateId = candidate.matchId ?? candidate.matchKey;
+  const currentId = current.matchId ?? current.matchKey;
+  return (candidateId ?? "").localeCompare(currentId ?? "") < 0;
+}
+
+function compareEntriesDesc(a: LeaderboardMatchEntry, b: LeaderboardMatchEntry) {
+  if (b.score !== a.score) return b.score - a.score;
+  if (b.endedAtMs !== a.endedAtMs) return b.endedAtMs - a.endedAtMs;
+  const rankA = DIFFICULTY_RANK[a.difficulty] ?? 0;
+  const rankB = DIFFICULTY_RANK[b.difficulty] ?? 0;
+  if (rankB !== rankA) return rankB - rankA;
+  const aId = a.matchId ?? a.matchKey;
+  const bId = b.matchId ?? b.matchKey;
+  return (aId ?? "").localeCompare(bId ?? "");
+}
+
 function aggregateByPlayer(entries: LeaderboardMatchEntry[]): LeaderboardMatchEntry[] {
   const map = new Map<string, LeaderboardMatchEntry>();
   entries.forEach(entry => {
-    const key = `${entry.playerId}|${entry.profileId}`;
+    const key = entry.playerId;
     const existing = map.get(key);
-    if (!existing) {
-      map.set(key, entry);
-      return;
-    }
-    if (entry.score > existing.score) {
-      map.set(key, entry);
-      return;
-    }
-    if (entry.score === existing.score && entry.endedAtMs > existing.endedAtMs) {
+    if (!existing || isCandidateBetter(entry, existing)) {
       map.set(key, entry);
     }
   });
-  return Array.from(map.values()).sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    return b.endedAtMs - a.endedAtMs;
-  });
+  return Array.from(map.values()).sort(compareEntriesDesc);
 }
 
 function safeDate(value: string): Date | null {
