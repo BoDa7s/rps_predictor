@@ -37,7 +37,7 @@ const DIFFICULTY_LABELS: Record<AIMode, string> = {
   ruthless: "Ruthless",
 };
 
-const DEFAULT_LIMIT = 15;
+const DEFAULT_LIMIT = 10;
 
 function aggregateByPlayer(entries: LeaderboardMatchEntry[]): LeaderboardMatchEntry[] {
   const map = new Map<string, LeaderboardMatchEntry>();
@@ -123,10 +123,15 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
     return map;
   }, [adminRounds]);
 
-  const matchEntries = useMemo<LeaderboardMatchEntry[]>(() => {
+  const { matchEntries, hasPracticeLegacy } = useMemo(() => {
+    let legacy = false;
     const entries: LeaderboardMatchEntry[] = [];
     adminMatches.forEach(match => {
-      if (match.mode !== "challenge" && match.mode !== "practice") return;
+      if (match.mode === "practice" || match.leaderboardType === "Practice Legacy") {
+        legacy = true;
+        return;
+      }
+      if (match.mode !== "challenge") return;
       const player = playersById.get(match.playerId);
       if (!player) return;
       const matchKey = match.clientId ?? match.id;
@@ -159,7 +164,7 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
         endedAtMs: endedDate.getTime(),
       });
     });
-    return entries;
+    return { matchEntries: entries, hasPracticeLegacy: legacy };
   }, [adminMatches, playersById, roundsByMatchId]);
 
   const allTimeRows = useMemo(() => {
@@ -255,6 +260,11 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
                 </tbody>
               </table>
             </div>
+          )}
+          {hasPracticeLegacy && (
+            <p className="mt-4 text-xs text-slate-500">
+              Practice matches are archived as <span className="font-semibold">Practice Legacy</span> and are excluded from these rankings.
+            </p>
           )}
         </div>
       </motion.div>

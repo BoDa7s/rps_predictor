@@ -1802,6 +1802,11 @@ function RPSDoodleAppInner(){
   const [bestOf, setBestOf] = useState<BestOf>(5);
   const [playerScore, setPlayerScore] = useState(0);
   const [aiScore, setAiScore] = useState(0);
+  const [matchScoreTotal, setMatchScoreTotal] = useState<number | null>(null);
+  const matchScoreTotalRef = useRef(0);
+  const [matchScoreChange, setMatchScoreChange] = useState<{ value: number; key: number } | null>(null);
+  const scoreChangeTimeoutRef = useRef<number | null>(null);
+  const matchScoreDisplay = useMemo(() => (matchScoreTotal ?? 0).toLocaleString(), [matchScoreTotal]);
   const [round, setRound] = useState(1);
   const [lastMoves, setLastMoves] = useState<Move[]>([]);
   const [aiHistory, setAiHistory] = useState<Move[]>([]);
@@ -1814,6 +1819,14 @@ function RPSDoodleAppInner(){
   const [count, setCount] = useState<number>(3);
   const [outcome, setOutcome] = useState<Outcome|undefined>();
   const [resultBanner, setResultBanner] = useState<"Victory"|"Defeat"|"Tie"|null>(null);
+  useEffect(() => {
+    return () => {
+      if (scoreChangeTimeoutRef.current !== null) {
+        window.clearTimeout(scoreChangeTimeoutRef.current);
+        scoreChangeTimeoutRef.current = null;
+      }
+    };
+  }, []);
   useEffect(() => {
     if (!showMainUi) {
       setHelpCenterOpen(false);
@@ -1936,6 +1949,7 @@ function RPSDoodleAppInner(){
   };
 
   const [selectedMode, setSelectedMode] = useState<Mode|null>(null);
+  const showMatchScoreBadge = !trainingActive && (selectedMode ?? "practice") === "challenge";
   const hideUiDuringModeTransition = scene === "MODE" && selectedMode !== null;
   const [wipeRun, setWipeRun] = useState(false);
   const modeLabel = (m:Mode)=> m.charAt(0).toUpperCase()+m.slice(1);
@@ -2242,6 +2256,32 @@ function RPSDoodleAppInner(){
     if (logged) {
       currentMatchRoundsRef.current = [...currentMatchRoundsRef.current, logged];
       setLiveInsightRounds([...currentMatchRoundsRef.current]);
+      const activeMode: Mode = selectedMode ?? "practice";
+      if (activeMode === "challenge") {
+        const breakdown = computeMatchScore(currentMatchRoundsRef.current);
+        const nextTotal = breakdown?.total ?? 0;
+        const previousTotal = matchScoreTotalRef.current;
+        matchScoreTotalRef.current = nextTotal;
+        setMatchScoreTotal(nextTotal);
+        const delta = nextTotal - previousTotal;
+        if (delta !== 0) {
+          if (scoreChangeTimeoutRef.current !== null) {
+            window.clearTimeout(scoreChangeTimeoutRef.current);
+          }
+          const changeKey = Date.now();
+          setMatchScoreChange({ value: delta, key: changeKey });
+          scoreChangeTimeoutRef.current = window.setTimeout(() => {
+            setMatchScoreChange(null);
+            scoreChangeTimeoutRef.current = null;
+          }, 600);
+        } else {
+          if (scoreChangeTimeoutRef.current !== null) {
+            window.clearTimeout(scoreChangeTimeoutRef.current);
+            scoreChangeTimeoutRef.current = null;
+          }
+          setMatchScoreChange(null);
+        }
+      }
     }
     devInstrumentation.roundCompleted({
       matchId: currentMatchIdRef.current,
@@ -2975,6 +3015,13 @@ function RPSDoodleAppInner(){
   function resetMatch(){
     setPlayerScore(0);
     setAiScore(0);
+    if (scoreChangeTimeoutRef.current !== null) {
+      window.clearTimeout(scoreChangeTimeoutRef.current);
+      scoreChangeTimeoutRef.current = null;
+    }
+    matchScoreTotalRef.current = 0;
+    setMatchScoreChange(null);
+    setMatchScoreTotal(null);
     setRound(1);
     setLastMoves([]);
     setAiHistory([]);
@@ -3011,6 +3058,14 @@ function RPSDoodleAppInner(){
     const matchMode: Mode = mode ?? selectedMode ?? "practice";
     const matchId = makeLocalId("match");
     currentMatchIdRef.current = matchId;
+    if (matchMode === "challenge") {
+      matchScoreTotalRef.current = 0;
+      setMatchScoreTotal(0);
+    } else {
+      matchScoreTotalRef.current = 0;
+      setMatchScoreTotal(null);
+    }
+    setMatchScoreChange(null);
     const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
     roundStartRef.current = startedAt;
     lastDecisionMsRef.current = null;
@@ -3205,12 +3260,14 @@ function RPSDoodleAppInner(){
         const totalRounds = outcomesHist.length;
         const aiWins = outcomesHist.filter(o => o === "lose").length;
         const switchRate = computeSwitchRate(lastMoves);
-        const matchScore = computeMatchScore(currentMatchRoundsRef.current);
+        const matchMode: Mode = selectedMode ?? "practice";
+        const leaderboardEligible = matchMode === "challenge";
+        const matchScore = leaderboardEligible ? computeMatchScore(currentMatchRoundsRef.current) : null;
         logMatch({
           clientId: currentMatchIdRef.current,
           startedAt: matchStartRef.current,
           endedAt,
-          mode: selectedMode ?? "practice",
+          mode: matchMode,
           bestOf,
           difficulty: aiMode,
           score: { you: playerScore, ai: aiScore },
@@ -3218,11 +3275,12 @@ function RPSDoodleAppInner(){
           aiWinRate: totalRounds ? aiWins / totalRounds : 0,
           youSwitchedRate: switchRate,
           notes: undefined,
-          leaderboardScore: matchScore?.total,
-          leaderboardMaxStreak: matchScore?.maxStreak,
-          leaderboardRoundCount: matchScore?.rounds,
-          leaderboardTimerBonus: matchScore?.timerBonus,
-          leaderboardBeatConfidenceBonus: matchScore?.beatConfidenceBonus,
+          leaderboardScore: leaderboardEligible ? matchScore?.total : undefined,
+          leaderboardMaxStreak: leaderboardEligible ? matchScore?.maxStreak : undefined,
+          leaderboardRoundCount: leaderboardEligible ? matchScore?.rounds : undefined,
+          leaderboardTimerBonus: leaderboardEligible ? matchScore?.timerBonus : undefined,
+          leaderboardBeatConfidenceBonus: leaderboardEligible ? matchScore?.beatConfidenceBonus : undefined,
+          leaderboardType: leaderboardEligible ? "Challenge" : "Practice Legacy",
         });
         devInstrumentation.matchEnded({
           matchId: currentMatchIdRef.current,
@@ -4729,7 +4787,37 @@ function RPSDoodleAppInner(){
                           Insight
                         </button>
                         <div className="flex w-full flex-col items-center gap-3 text-center">
-                          <div className="text-sm text-slate-700">Round <strong>{round}</strong> • Best of {bestOf}</div>
+                          <div className="flex flex-wrap items-center justify-center gap-2 text-sm text-slate-700">
+                            <div>Round <strong>{round}</strong> • Best of {bestOf}</div>
+                            {showMatchScoreBadge && (
+                              <div className="relative flex items-center justify-center" aria-live="polite">
+                                <motion.span
+                                  className="inline-flex items-center gap-2 rounded-full bg-slate-900/90 px-3 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] text-white shadow-sm"
+                                  animate={matchScoreChange && !reduceMotion ? { scale: 1.06 } : { scale: 1 }}
+                                  transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 320, damping: 24, mass: 0.7 }}
+                                >
+                                  <span className="text-[0.6rem] font-semibold uppercase tracking-[0.28em] text-slate-200/80">Score</span>
+                                  <span className="text-sm font-semibold tracking-normal">{matchScoreDisplay}</span>
+                                </motion.span>
+                                <AnimatePresence>
+                                  {matchScoreChange && matchScoreChange.value !== 0 && (
+                                    <motion.span
+                                      key={matchScoreChange.key}
+                                      initial={reduceMotion ? { opacity: 1 } : { opacity: 0, y: 6 }}
+                                      animate={reduceMotion ? { opacity: 1 } : { opacity: 1, y: 0 }}
+                                      exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: -6 }}
+                                      transition={reduceMotion ? { duration: 0 } : { duration: 0.35, ease: "easeOut" }}
+                                      className={`absolute -bottom-6 left-1/2 -translate-x-1/2 text-xs font-semibold ${matchScoreChange.value > 0 ? "text-emerald-500" : "text-rose-500"}`}
+                                    >
+                                      {matchScoreChange.value > 0
+                                        ? `+${matchScoreChange.value.toLocaleString()}`
+                                        : `-${Math.abs(matchScoreChange.value).toLocaleString()}`}
+                                    </motion.span>
+                                  )}
+                                </AnimatePresence>
+                              </div>
+                            )}
+                          </div>
                           <span
                             className={`inline-flex items-center justify-center rounded-full px-4 py-1 text-xs font-semibold uppercase tracking-wide ${
                               (phase === "resolve" || phase === "feedback") && outcome

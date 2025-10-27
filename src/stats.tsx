@@ -68,6 +68,7 @@ export interface MatchSummary {
   leaderboardRoundCount?: number;
   leaderboardTimerBonus?: number;
   leaderboardBeatConfidenceBonus?: number;
+  leaderboardType?: "Challenge" | "Practice Legacy";
 }
 
 export interface StatsProfile {
@@ -122,6 +123,7 @@ const PROFILE_KEY = "rps_stats_profiles_v1";
 const CURRENT_PROFILE_KEY = "rps_current_stats_profile_v1";
 const MAX_ROUNDS = 1000;
 const PRIMARY_BASE = "primary";
+const PRACTICE_LEGACY_TYPE = "Practice Legacy" as const;
 
 function formatLineageBaseName(index: number): string {
   const normalizedIndex = Number.isFinite(index) ? Math.max(1, Math.floor(index)) : 1;
@@ -172,6 +174,25 @@ function saveToStorage(key: string, value: unknown) {
   } catch (err) {
     console.warn("Failed to persist stats", err);
   }
+}
+
+function migrateMatchRecords(matches: MatchSummary[]): { matches: MatchSummary[]; changed: boolean } {
+  let changed = false;
+  const migrated = matches.map(match => {
+    if (match.mode === "practice") {
+      if (match.leaderboardType !== PRACTICE_LEGACY_TYPE) {
+        changed = true;
+        return { ...match, leaderboardType: PRACTICE_LEGACY_TYPE } satisfies MatchSummary;
+      }
+      return match;
+    }
+    if (match.mode === "challenge" && match.leaderboardType && match.leaderboardType !== "Challenge") {
+      changed = true;
+      return { ...match, leaderboardType: "Challenge" } satisfies MatchSummary;
+    }
+    return match;
+  });
+  return { matches: migrated, changed };
 }
 
 function loadProfiles(): StatsProfile[] {
@@ -253,7 +274,14 @@ function makeId(prefix: string) {
 
 export function StatsProvider({ children }: { children: React.ReactNode }) {
   const [allRounds, setAllRounds] = useState<RoundLog[]>(() => loadFromStorage<RoundLog>(ROUND_KEY));
-  const [allMatches, setAllMatches] = useState<MatchSummary[]>(() => loadFromStorage<MatchSummary>(MATCH_KEY));
+  const [allMatches, setAllMatches] = useState<MatchSummary[]>(() => {
+    const loaded = loadFromStorage<MatchSummary>(MATCH_KEY);
+    const { matches, changed } = migrateMatchRecords(loaded);
+    if (changed) {
+      saveToStorage(MATCH_KEY, matches);
+    }
+    return matches;
+  });
   const [profiles, setProfiles] = useState<StatsProfile[]>(() => loadProfiles());
   const [currentProfileId, setCurrentProfileId] = useState<string | null>(() => loadCurrentProfileId());
   const [roundsDirty, setRoundsDirty] = useState(false);
