@@ -75,6 +75,7 @@ type WelcomePreference = "show" | "skip";
 
 const HUD_PANEL_GUTTER = 8;
 const HUD_PANEL_RIGHT_GAP_EXTRA = 12;
+const HUD_PANEL_OPEN_MEASURE_FRAMES = 12;
 
 type RobotVariant = "idle" | "happy" | "meh" | "sad";
 type RobotReaction = { emoji: string; body?: string; label: string; variant: RobotVariant };
@@ -1196,6 +1197,30 @@ function RPSDoodleAppInner(){
   useEffect(() => {
     updateHudColumnOffset();
   }, [insightPanelOpen, insightPanelWidth, updateHudColumnOffset]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (!insightPanelOpen) {
+      return;
+    }
+    let frameCount = 0;
+    let rafId: number | null = null;
+    const measure = () => {
+      updateHudColumnOffset();
+      frameCount += 1;
+      if (frameCount < HUD_PANEL_OPEN_MEASURE_FRAMES) {
+        rafId = window.requestAnimationFrame(measure);
+      }
+    };
+    rafId = window.requestAnimationFrame(measure);
+    return () => {
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+      }
+    };
+  }, [insightPanelOpen, updateHudColumnOffset]);
   const robotResultTimeoutRef = useRef<number | null>(null);
   const robotRestTimeoutRef = useRef<number | null>(null);
   const [trainingCelebrationActive, setTrainingCelebrationActive] = useState(false);
