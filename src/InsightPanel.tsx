@@ -448,7 +448,7 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
   const recentSurprise = derived.surpriseValues.slice(-MAX_ENTRIES_FOR_TIMELINES).map(item => item.value);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <header className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
         <div>
           <h2
@@ -468,7 +468,7 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
           Close ✕
         </button>
       </header>
-      <div className="flex-1 overflow-y-auto px-6 pb-8 pt-4">
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-8 pt-4">
         <div className="space-y-6">
           <section className="rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">

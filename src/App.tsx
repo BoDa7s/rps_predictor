@@ -928,7 +928,9 @@ function RPSDoodleAppInner(){
   const insightShouldFocusRef = useRef(false);
   const insightDismissedForMatchRef = useRef(false);
   const hudShellRef = useRef<HTMLDivElement | null>(null);
+  const hudMainColumnRef = useRef<HTMLDivElement | null>(null);
   const [hudShellWidth, setHudShellWidth] = useState(0);
+  const [hudMainColumnHeight, setHudMainColumnHeight] = useState(0);
   const [viewportWidth, setViewportWidth] = useState<number>(() =>
     typeof window === "undefined" ? 0 : window.innerWidth,
   );
@@ -1148,14 +1150,14 @@ function RPSDoodleAppInner(){
       setHudShellWidth(0);
       return;
     }
-    const updateShellWidth = () => {
+    const updateShellMetrics = () => {
       const rect = node.getBoundingClientRect();
       setHudShellWidth(rect.width);
     };
-    updateShellWidth();
+    updateShellMetrics();
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(() => updateShellWidth());
+      resizeObserver = new ResizeObserver(() => updateShellMetrics());
       resizeObserver.observe(node);
       return () => {
         resizeObserver?.disconnect();
@@ -1164,11 +1166,39 @@ function RPSDoodleAppInner(){
     if (typeof window === "undefined") {
       return;
     }
-    window.addEventListener("resize", updateShellWidth);
+    window.addEventListener("resize", updateShellMetrics);
     return () => {
-      window.removeEventListener("resize", updateShellWidth);
+      window.removeEventListener("resize", updateShellMetrics);
     };
-  }, []);
+  }, [scene]);
+
+  useEffect(() => {
+    const node = hudMainColumnRef.current;
+    if (!node) {
+      setHudMainColumnHeight(0);
+      return;
+    }
+    const updateMainHeight = () => {
+      const rect = node.getBoundingClientRect();
+      setHudMainColumnHeight(rect.height);
+    };
+    updateMainHeight();
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => updateMainHeight());
+      resizeObserver.observe(node);
+      return () => {
+        resizeObserver?.disconnect();
+      };
+    }
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.addEventListener("resize", updateMainHeight);
+    return () => {
+      window.removeEventListener("resize", updateMainHeight);
+    };
+  }, [scene]);
 
   const insightRailTargetWidth = useMemo(
     () => computeInsightRailWidth(viewportWidth, hudShellWidth),
@@ -1184,6 +1214,16 @@ function RPSDoodleAppInner(){
 
   const insightRailWidthForMotion =
     insightRailTargetWidth > 0 ? insightRailTargetWidth : fallbackInsightRailWidth;
+
+  const insightRailMaxHeight = useMemo(() => {
+    if (viewportWidth < 768) {
+      return null;
+    }
+    if (hudMainColumnHeight <= 0) {
+      return null;
+    }
+    return hudMainColumnHeight;
+  }, [hudMainColumnHeight, viewportWidth]);
 
   const insightRailTransition = useMemo(
     () =>
@@ -4378,9 +4418,9 @@ function RPSDoodleAppInner(){
               <div className="mx-auto w-full max-w-[1400px]">
                 <div
                   ref={hudShellRef}
-                  className="relative flex w-full flex-col items-stretch gap-6 md:grid md:grid-cols-[minmax(0,1fr)_auto] md:items-start md:gap-5"
+                  className="relative flex w-full flex-col items-stretch gap-6 md:grid md:grid-cols-[minmax(0,1fr)_auto] md:items-stretch md:gap-5"
                 >
-                  <motion.div className="mx-auto flex w-full max-w-[820px] flex-col items-center gap-6">
+                  <motion.div ref={hudMainColumnRef} className="mx-auto flex w-full max-w-[820px] flex-col items-center gap-6">
                     <div className="flex w-full flex-col items-center gap-4 lg:gap-6">
                   {/* HUD */}
                   <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .05 }} className="relative w-full max-w-[820px] bg-white/70 rounded-2xl shadow px-4 py-3">
@@ -4569,6 +4609,11 @@ function RPSDoodleAppInner(){
                           role="dialog"
                           aria-label="Live AI Insight panel."
                           ref={insightPanelRef}
+                          style={
+                            insightRailMaxHeight
+                              ? { maxHeight: insightRailMaxHeight }
+                              : undefined
+                          }
                           initial={
                             reduceMotion
                               ? { opacity: 1, width: insightRailWidthForMotion }
@@ -4581,7 +4626,7 @@ function RPSDoodleAppInner(){
                               : { opacity: 0, width: 0 }
                           }
                           transition={insightRailTransition}
-                          className="pointer-events-auto absolute inset-0 z-20 flex h-full w-full flex-col overflow-hidden bg-white shadow-2xl ring-1 ring-slate-200 md:static md:h-auto md:max-h-[calc(100vh-6rem)] md:rounded-3xl md:bg-white/85 md:shadow-lg"
+                          className="pointer-events-auto absolute inset-0 z-20 flex h-full w-full flex-col overflow-hidden bg-white shadow-2xl ring-1 ring-slate-200 md:static md:h-full md:min-h-0 md:max-h-[calc(100vh-6rem)] md:self-stretch md:rounded-3xl md:bg-white/85 md:shadow-lg"
                         >
                           <InsightPanel
                             snapshot={liveDecisionSnapshot}
