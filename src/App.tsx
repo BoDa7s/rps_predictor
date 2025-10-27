@@ -76,6 +76,12 @@ type WelcomePreference = "show" | "skip";
 type RobotVariant = "idle" | "happy" | "meh" | "sad";
 type RobotReaction = { emoji: string; body?: string; label: string; variant: RobotVariant };
 
+type ModernToast = {
+  variant: "danger";
+  title: string;
+  message: string;
+};
+
 const ROBOT_ASSETS: Record<RobotVariant, { 48: string; 64: string; 96: string }> = {
   idle: { 48: botIdle48, 64: botIdle64, 96: botIdle96 },
   happy: { 48: botHappy48, 64: botHappy64, 96: botHappy96 },
@@ -1094,6 +1100,8 @@ function RPSDoodleAppInner(){
     { confirmLabel: string; cancelLabel?: string; onConfirm: () => void } | null
   >(null);
   const [helpToast, setHelpToast] = useState<{ title: string; message: string } | null>(null);
+  const [modernToast, setModernToast] = useState<ModernToast | null>(null);
+  const modernToastTimeoutRef = useRef<number | null>(null);
   const [helpGuideOpen, setHelpGuideOpen] = useState(false);
   const helpButtonRef = useRef<HTMLButtonElement | null>(null);
   const [helpCenterOpen, setHelpCenterOpen] = useState(false);
@@ -1466,6 +1474,22 @@ function RPSDoodleAppInner(){
     return () => window.clearTimeout(id);
   }, [toastMessage, toastReaderOpen]);
   useEffect(() => {
+    if (!modernToast) return;
+    if (modernToastTimeoutRef.current !== null) {
+      window.clearTimeout(modernToastTimeoutRef.current);
+    }
+    modernToastTimeoutRef.current = window.setTimeout(() => {
+      setModernToast(null);
+      modernToastTimeoutRef.current = null;
+    }, 4800);
+    return () => {
+      if (modernToastTimeoutRef.current !== null) {
+        window.clearTimeout(modernToastTimeoutRef.current);
+        modernToastTimeoutRef.current = null;
+      }
+    };
+  }, [modernToast]);
+  useEffect(() => {
     if (!toastMessage && toastReaderOpen) {
       setToastReaderOpen(false);
     }
@@ -1485,6 +1509,20 @@ function RPSDoodleAppInner(){
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [toastReaderOpen]);
+  const showModernToast = useCallback(
+    (toast: ModernToast) => {
+      setModernToast(toast);
+      setLive(`${toast.title}. ${toast.message}`);
+    },
+    [setLive],
+  );
+  const dismissModernToast = useCallback(() => {
+    if (modernToastTimeoutRef.current !== null) {
+      window.clearTimeout(modernToastTimeoutRef.current);
+      modernToastTimeoutRef.current = null;
+    }
+    setModernToast(null);
+  }, []);
   useEffect(() => {
     if (!insightPanelOpen || !insightShouldFocusRef.current) {
       return;
@@ -3449,6 +3487,35 @@ function RPSDoodleAppInner(){
         )}
       </AnimatePresence>
 
+      {modernToast && (
+        <div className="fixed top-4 right-4 z-[96] w-[min(22rem,calc(100vw-2rem))]">
+          <div
+            role="alert"
+            aria-live="assertive"
+            className="flex items-start gap-3 rounded-2xl border border-rose-200/80 bg-white/95 px-4 py-3 text-sm text-slate-700 shadow-2xl ring-1 ring-rose-200/70"
+          >
+            <div
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-600"
+              aria-hidden="true"
+            >
+              ⚠️
+            </div>
+            <div className="flex-1 space-y-1">
+              <p className="text-sm font-semibold text-rose-600">{modernToast.title}</p>
+              <p className="text-sm leading-relaxed text-slate-600">{modernToast.message}</p>
+            </div>
+            <button
+              type="button"
+              onClick={dismissModernToast}
+              className="rounded-full bg-rose-100 px-2 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-200"
+              aria-label="Dismiss alert"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
+
       {toastMessage && toastConfirm ? (
         <div className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/50 px-4">
           <div
@@ -4263,7 +4330,24 @@ function RPSDoodleAppInner(){
                               role="radio"
                               aria-checked={isActive}
                               data-dev-label={`set.bestOf.${option}`}
-                              onClick={() => setBestOf(option)}
+                              onClick={() => {
+                                if (bestOf === option) return;
+                                const inMode = selectedMode !== null;
+                                const matchOver = scene === "RESULTS";
+                                if (inMode && !matchOver) {
+                                  showModernToast({
+                                    variant: "danger",
+                                    title: "Finish the current match first",
+                                    message:
+                                      "Finish your current Challenge or Practice match or exit to Modes before changing Best of.",
+                                  });
+                                  return;
+                                }
+                                if (modernToast) {
+                                  dismissModernToast();
+                                }
+                                setBestOf(option);
+                              }}
                               className={`px-3 py-1 text-xs font-semibold transition-colors ${
                                 isActive ? "bg-sky-600 text-white" : "text-slate-600 hover:bg-slate-100"
                               }`}
