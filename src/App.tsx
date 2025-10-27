@@ -4381,7 +4381,7 @@ function RPSDoodleAppInner(){
               <motion.div
                 ref={hudColumnRef}
                 className="mx-auto flex w-full max-w-[820px] flex-col items-center gap-6"
-                animate={{ marginRight: hudColumnOffset }}
+                animate={{ x: -hudColumnOffset }}
                 transition={{ duration: 0.2, ease: [0.22, 0.61, 0.36, 1] }}
               >
                 <div className="flex w-full flex-col items-center gap-4 lg:gap-6">
