@@ -3488,11 +3488,11 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
 
       {modernToast && (
-        <div className="fixed top-4 right-4 z-[96] w-[min(22rem,calc(100vw-2rem))]">
+        <div className="pointer-events-none fixed inset-0 z-[96] flex items-center justify-center p-4">
           <div
             role="alert"
             aria-live="assertive"
-            className="flex items-start gap-3 rounded-2xl border border-rose-200/80 bg-white/95 px-4 py-3 text-sm text-slate-700 shadow-2xl ring-1 ring-rose-200/70"
+            className="pointer-events-auto flex w-[min(22rem,calc(100vw-2rem))] items-start gap-3 rounded-2xl border border-rose-200/80 bg-white/95 px-4 py-3 text-sm text-slate-700 shadow-2xl ring-1 ring-rose-200/70"
           >
             <div
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-600"
