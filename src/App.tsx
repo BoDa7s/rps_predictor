@@ -1126,13 +1126,11 @@ function RPSDoodleAppInner(){
       return;
     }
     const updateWidth = () => {
-      const { innerWidth } = window;
       const measuredWidth = Math.max(0, node.getBoundingClientRect().width);
       if (!Number.isFinite(measuredWidth)) {
         return;
       }
-      const maxAllowed = Math.max(0, innerWidth - 64);
-      setInsightPanelWidth(Math.min(measuredWidth, maxAllowed));
+      setInsightPanelWidth(measuredWidth);
     };
     updateWidth();
     let resizeObserver: ResizeObserver | null = null;
