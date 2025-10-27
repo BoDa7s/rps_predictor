@@ -2045,6 +2045,17 @@ function RPSDoodleAppInner(){
           });
           return;
         }
+      } else {
+        const inPracticeMatch = selectedMode === "practice" && scene === "MATCH";
+        if (inPracticeMatch) {
+          showModernToast({
+            variant: "danger",
+            title: "Finish the current match first",
+            message:
+              "Finish your current Practice match or exit to Modes before turning on the AI predictor.",
+          });
+          return;
+        }
       }
       setPredictorMode(checked);
       if (currentProfile) {
@@ -2813,7 +2824,7 @@ function RPSDoodleAppInner(){
     setLive("Challenge needs the AI predictor. Turn it on from settings.");
   }, [setLive, setToastConfirm, setToastMessage, showModernToast]);
 
-  const handleDisabledInsightHover = useCallback(() => {
+  const handleDisabledInsightClick = useCallback(() => {
     showModernToast({
       variant: "danger",
       title: "Enable AI predictor for Live Insight",
@@ -4845,13 +4856,6 @@ function RPSDoodleAppInner(){
                           }
                         : undefined
                     }
-                    onDisabledHover={
-                      challengeNeedsPredictor
-                        ? (_mode: Mode) => {
-                            showChallengeNeedsPredictorPrompt();
-                          }
-                        : undefined
-                    }
                   />
                 );
               })}
@@ -4940,7 +4944,7 @@ function RPSDoodleAppInner(){
                             if (hudInsightDisabled) {
                               event.preventDefault();
                               event.stopPropagation();
-                              handleDisabledInsightHover();
+                              handleDisabledInsightClick();
                               return;
                             }
                             if (insightPanelOpen) {
@@ -4958,16 +4962,6 @@ function RPSDoodleAppInner(){
                           aria-controls="live-insight-panel"
                           aria-disabled={hudInsightDisabled || undefined}
                           data-dev-label="hud.insight"
-                          onMouseEnter={() => {
-                            if (hudInsightDisabled) {
-                              handleDisabledInsightHover();
-                            }
-                          }}
-                          onFocus={() => {
-                            if (hudInsightDisabled) {
-                              handleDisabledInsightHover();
-                            }
-                          }}
                         >
                           Insight
                           {hudInsightDisabled && (
