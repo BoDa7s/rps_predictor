@@ -930,6 +930,7 @@ function ModeCard({
   disabled = false,
   disabledReason,
   onDisabledClick,
+  onDisabledHover,
 }: {
   mode: Mode;
   onSelect: (m: Mode) => void;
@@ -937,6 +938,7 @@ function ModeCard({
   disabled?: boolean;
   disabledReason?: string | null;
   onDisabledClick?: (mode: Mode) => void;
+  onDisabledHover?: (mode: Mode) => void;
 }) {
   const label = mode.charAt(0).toUpperCase()+mode.slice(1);
   const isUnavailable = disabled || Boolean(disabledReason);
@@ -959,6 +961,16 @@ function ModeCard({
         onSelect(mode);
       }}
       disabled={disabled}
+      onMouseEnter={() => {
+        if (disabledReason) {
+          onDisabledHover?.(mode);
+        }
+      }}
+      onFocus={() => {
+        if (disabledReason) {
+          onDisabledHover?.(mode);
+        }
+      }}
       whileTap={{ scale: isUnavailable ? 1 : 0.98 }}
       whileHover={{ y: isUnavailable ? 0 : -4 }}
       aria-label={`${label} mode`}
@@ -1665,13 +1677,6 @@ function RPSDoodleAppInner(){
     setDeveloperOpen(false);
   }, [lockSecureStore, setDeveloperOpen]);
 
-  const handlePredictorToggle = useCallback((checked: boolean) => {
-    setPredictorMode(checked);
-    if (currentProfile) {
-      updateStatsProfile(currentProfile.id, { predictorDefault: checked });
-    }
-  }, [currentProfile, updateStatsProfile]);
-
   const handleInsightPreferenceToggle = useCallback(
     (next: boolean, trigger?: HTMLElement | null) => {
       if (next) {
@@ -2026,6 +2031,28 @@ function RPSDoodleAppInner(){
   const hideUiDuringModeTransition = scene === "MODE" && selectedMode !== null;
   const [wipeRun, setWipeRun] = useState(false);
   const modeLabel = (m:Mode)=> m.charAt(0).toUpperCase()+m.slice(1);
+
+  const handlePredictorToggle = useCallback(
+    (checked: boolean) => {
+      if (!checked) {
+        const inActiveMatch = selectedMode !== null && scene === "MATCH";
+        if (inActiveMatch) {
+          showModernToast({
+            variant: "danger",
+            title: "Finish the current match first",
+            message:
+              "Finish your current Challenge or Practice match or exit to Modes before turning off the AI predictor.",
+          });
+          return;
+        }
+      }
+      setPredictorMode(checked);
+      if (currentProfile) {
+        updateStatsProfile(currentProfile.id, { predictorDefault: checked });
+      }
+    },
+    [currentProfile, scene, selectedMode, showModernToast, updateStatsProfile],
+  );
 
   const goToWelcomeSlide = useCallback(
     (delta: number) => {
@@ -2776,18 +2803,23 @@ function RPSDoodleAppInner(){
   }, [setLive]);
 
   const showChallengeNeedsPredictorPrompt = useCallback(() => {
-    setToastMessage("Challenge needs the AI predictor. Turn it on from settings");
-    setToastConfirm({
-      confirmLabel: "Go to Settings",
-      cancelLabel: "Cancel",
-      onConfirm: () => {
-        setToastConfirm(null);
-        setToastMessage(null);
-        handleOpenSettings();
-      },
+    showModernToast({
+      variant: "danger",
+      title: "Enable AI predictor to play Challenge",
+      message: "Turn on the AI predictor in Settings to unlock Challenge mode.",
     });
-    setLive("Challenge needs the AI predictor. Prompt opened.");
-  }, [handleOpenSettings, setLive, setToastConfirm, setToastMessage]);
+    setToastMessage(null);
+    setToastConfirm(null);
+    setLive("Challenge needs the AI predictor. Turn it on from settings.");
+  }, [setLive, setToastConfirm, setToastMessage, showModernToast]);
+
+  const handleDisabledInsightHover = useCallback(() => {
+    showModernToast({
+      variant: "danger",
+      title: "Enable AI predictor for Live Insight",
+      message: "Turn on the AI predictor in Settings to view Live AI Insight during Practice matches.",
+    });
+  }, [showModernToast]);
 
   const handleCloseSettings = useCallback(
     (announce: boolean = true) => {
@@ -4813,6 +4845,13 @@ function RPSDoodleAppInner(){
                           }
                         : undefined
                     }
+                    onDisabledHover={
+                      challengeNeedsPredictor
+                        ? (_mode: Mode) => {
+                            showChallengeNeedsPredictorPrompt();
+                          }
+                        : undefined
+                    }
                   />
                 );
               })}
@@ -4901,6 +4940,7 @@ function RPSDoodleAppInner(){
                             if (hudInsightDisabled) {
                               event.preventDefault();
                               event.stopPropagation();
+                              handleDisabledInsightHover();
                               return;
                             }
                             if (insightPanelOpen) {
@@ -4918,7 +4958,16 @@ function RPSDoodleAppInner(){
                           aria-controls="live-insight-panel"
                           aria-disabled={hudInsightDisabled || undefined}
                           data-dev-label="hud.insight"
-                          title={hudInsightDisabled ? "Enable AI to view insights" : undefined}
+                          onMouseEnter={() => {
+                            if (hudInsightDisabled) {
+                              handleDisabledInsightHover();
+                            }
+                          }}
+                          onFocus={() => {
+                            if (hudInsightDisabled) {
+                              handleDisabledInsightHover();
+                            }
+                          }}
                         >
                           Insight
                           {hudInsightDisabled && (
