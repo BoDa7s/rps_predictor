@@ -2200,7 +2200,7 @@ function RPSDoodleAppInner(){
   const overallWinRate = totalMatches ? playerWins / totalMatches : 0;
   const trainingRoundDisplay = Math.min(trainingCount + 1, TRAIN_ROUNDS);
   const shouldShowIdleBubble = !trainingActive && !trainingCelebrationActive && !robotResultReaction && (robotHovered || robotFocused || helpGuideOpen);
-  const robotBubbleContent: { message: React.ReactNode; buttons?: { label: string; onClick: () => void }[]; ariaLabel?: string; emphasise?: boolean } | null = trainingCelebrationActive
+  const robotBubbleContent: { message: React.ReactNode; buttons?: { label: string; onClick: () => void }[]; ariaLabel?: string } | null = trainingCelebrationActive
     ? {
         message: "Training complete! You can now play Modes (Challenge or Practice).",
         buttons: [
@@ -2224,24 +2224,7 @@ function RPSDoodleAppInner(){
           },
         ],
       }
-    : robotResultReaction
-      ? {
-          message: (
-            <div className="flex flex-col items-center gap-1 text-center text-slate-800">
-              <span className="text-3xl leading-none" aria-hidden="true">
-                {robotResultReaction.emoji}
-              </span>
-              {robotResultReaction.body && (
-                <span className="text-sm font-medium text-slate-800">
-                  {robotResultReaction.body}
-                </span>
-              )}
-            </div>
-          ),
-          ariaLabel: robotResultReaction.label,
-          emphasise: true,
-        }
-      : trainingActive
+    : trainingActive
         ? {
             message: `Training round ${Math.min(trainingRoundDisplay, TRAIN_ROUNDS)}/${TRAIN_ROUNDS}—keep going!`,
           }
@@ -5091,9 +5074,7 @@ function RPSDoodleAppInner(){
                   (typeof robotBubbleContent.message === "string" ? robotBubbleContent.message : undefined)
                 }
               >
-                <div className={robotBubbleContent.emphasise ? "text-slate-800" : "text-sm font-medium text-slate-800"}>
-                  {robotBubbleContent.message}
-                </div>
+                <div className="text-sm font-medium text-slate-800">{robotBubbleContent.message}</div>
                 {robotBubbleContent.buttons && (
                   <div className="mt-3 flex flex-wrap gap-2">
                     {robotBubbleContent.buttons.map(button => (
