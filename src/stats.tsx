@@ -79,6 +79,7 @@ export interface StatsProfile {
   trainingCount: number;
   trained: boolean;
   predictorDefault: boolean;
+  seenPostTrainingCTA: boolean;
   baseName: string;
   version: number;
   previousProfileId?: string | null;
@@ -88,7 +89,15 @@ export interface StatsProfile {
 type StatsProfileUpdate = Partial<
   Pick<
     StatsProfile,
-    "name" | "trainingCount" | "trained" | "predictorDefault" | "baseName" | "version" | "previousProfileId" | "nextProfileId"
+    | "name"
+    | "trainingCount"
+    | "trained"
+    | "predictorDefault"
+    | "seenPostTrainingCTA"
+    | "baseName"
+    | "version"
+    | "previousProfileId"
+    | "nextProfileId"
   >
 >;
 
@@ -225,7 +234,8 @@ function loadProfiles(): StatsProfile[] {
         createdAt: typeof item?.createdAt === "string" ? item.createdAt : new Date().toISOString(),
         trainingCount: typeof item?.trainingCount === "number" ? item.trainingCount : 0,
         trained: Boolean(item?.trained),
-        predictorDefault: item?.predictorDefault !== undefined ? Boolean(item.predictorDefault) : true,
+        predictorDefault: item?.predictorDefault !== undefined ? Boolean(item.predictorDefault) : false,
+        seenPostTrainingCTA: item?.seenPostTrainingCTA !== undefined ? Boolean(item.seenPostTrainingCTA) : false,
         previousProfileId: typeof item?.previousProfileId === "string" ? item.previousProfileId : null,
         nextProfileId: typeof item?.nextProfileId === "string" ? item.nextProfileId : null,
       } satisfies StatsProfile;
@@ -342,7 +352,8 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         createdAt: new Date().toISOString(),
         trainingCount: 0,
         trained: false,
-        predictorDefault: true,
+        predictorDefault: false,
+        seenPostTrainingCTA: false,
         previousProfileId: null,
         nextProfileId: null,
       };
@@ -451,7 +462,8 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         createdAt: new Date().toISOString(),
         trainingCount: 0,
         trained: false,
-        predictorDefault: true,
+        predictorDefault: false,
+        seenPostTrainingCTA: false,
         previousProfileId: null,
         nextProfileId: null,
       };
@@ -505,6 +517,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       trainingCount: 0,
       trained: false,
       predictorDefault: source.predictorDefault,
+      seenPostTrainingCTA: false,
       previousProfileId: source.id,
       nextProfileId: null,
     };

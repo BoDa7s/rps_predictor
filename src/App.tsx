@@ -1614,7 +1614,6 @@ function RPSDoodleAppInner(){
   );
   const robotResultTimeoutRef = useRef<number | null>(null);
   const robotRestTimeoutRef = useRef<number | null>(null);
-  const [trainingCelebrationActive, setTrainingCelebrationActive] = useState(false);
   const robotButtonRef = useRef<HTMLButtonElement | null>(null);
   const welcomeToastShownRef = useRef(false);
   const welcomeFinalToastShownRef = useRef(false);
@@ -1887,7 +1886,7 @@ function RPSDoodleAppInner(){
     };
   }, [scene]);
 
-  const [predictorMode, setPredictorMode] = useState<boolean>(currentProfile?.predictorDefault ?? true);
+  const [predictorMode, setPredictorMode] = useState<boolean>(currentProfile?.predictorDefault ?? false);
   const [aiMode, setAiMode] = useState<AIMode>("normal");
   const [difficultyHint, setDifficultyHint] = useState<string>(DIFFICULTY_INFO["normal"].helper);
   const TRAIN_ROUNDS = 10;
@@ -1896,6 +1895,10 @@ function RPSDoodleAppInner(){
   const previousTrainingCountRef = useRef(trainingCount);
   const [trainingActive, setTrainingActive] = useState<boolean>(false);
   const [trainingCalloutQueue, setTrainingCalloutQueue] = useState<string[]>([]);
+  const [postTrainingCtaOpen, setPostTrainingCtaOpen] = useState(false);
+  const [postTrainingCtaAcknowledged, setPostTrainingCtaAcknowledged] = useState(
+    currentProfile?.seenPostTrainingCTA ?? false,
+  );
   const welcomeSlides = useMemo(
     () => [
       {
@@ -1920,6 +1923,36 @@ function RPSDoodleAppInner(){
   const trainingDisplayCount = Math.min(trainingCount, TRAIN_ROUNDS);
   const trainingProgress = Math.min(trainingDisplayCount / TRAIN_ROUNDS, 1);
   const showTrainingCompleteBadge = !needsTraining && trainingCount >= TRAIN_ROUNDS;
+  const postTrainingLockActive = postTrainingCtaOpen;
+
+  const acknowledgePostTrainingCta = useCallback(() => {
+    if (!postTrainingCtaOpen) return false;
+    setPostTrainingCtaOpen(false);
+    setPostTrainingCtaAcknowledged(true);
+    if (currentProfile && !currentProfile.seenPostTrainingCTA) {
+      updateStatsProfile(currentProfile.id, { seenPostTrainingCTA: true });
+    }
+    return true;
+  }, [currentProfile, postTrainingCtaOpen, updateStatsProfile]);
+
+  const handleEnablePredictorForChallenge = useCallback(() => {
+    if (predictorMode) return;
+    setPredictorMode(true);
+    if (currentProfile) {
+      updateStatsProfile(currentProfile.id, { predictorDefault: true });
+    }
+    setLive("AI predictor enabled. Challenge unlocked.");
+  }, [currentProfile, predictorMode, setLive, updateStatsProfile]);
+
+  useEffect(() => {
+    setPostTrainingCtaAcknowledged(currentProfile?.seenPostTrainingCTA ?? false);
+  }, [currentProfile?.id]);
+
+  useEffect(() => {
+    if (currentProfile?.seenPostTrainingCTA && !postTrainingCtaAcknowledged) {
+      setPostTrainingCtaAcknowledged(true);
+    }
+  }, [currentProfile?.seenPostTrainingCTA, postTrainingCtaAcknowledged]);
 
   useEffect(() => {
     if (scene !== "MATCH") {
@@ -2219,7 +2252,7 @@ function RPSDoodleAppInner(){
       setTrainingActive(false);
       setTrainingCalloutQueue([]);
       trainingAnnouncementsRef.current.clear();
-      setTrainingCelebrationActive(false);
+      setPostTrainingCtaOpen(false);
       clearRobotReactionTimers();
       setRobotResultReaction(null);
       setRobotHovered(false);
@@ -2306,7 +2339,6 @@ function RPSDoodleAppInner(){
       setToastReaderOpen,
       setTrainingActive,
       setTrainingCalloutQueue,
-      setTrainingCelebrationActive,
       setWelcomeActive,
       setWelcomeSeen,
       setWelcomeSlide,
@@ -2528,7 +2560,7 @@ function RPSDoodleAppInner(){
       if (predictorMode) setPredictorMode(false);
       return;
     }
-    const preferred = currentProfile?.predictorDefault ?? true;
+    const preferred = currentProfile?.predictorDefault ?? false;
     setPredictorMode(preferred);
   }, [currentProfile?.id, currentProfile?.predictorDefault, needsTraining, trainingActive, predictorMode]);
 
@@ -2708,40 +2740,17 @@ function RPSDoodleAppInner(){
   const playerWins = matches.reduce((acc, m) => acc + (m.score.you > m.score.ai ? 1 : 0), 0);
   const overallWinRate = totalMatches ? playerWins / totalMatches : 0;
   const trainingRoundDisplay = Math.min(trainingCount + 1, TRAIN_ROUNDS);
-  const shouldShowIdleBubble = !trainingActive && !trainingCelebrationActive && !robotResultReaction && (robotHovered || robotFocused || helpGuideOpen);
-  const robotBubbleContent: { message: React.ReactNode; buttons?: { label: string; onClick: () => void }[]; ariaLabel?: string } | null = trainingCelebrationActive
-    ? {
-        message: "Training complete! You can now play Modes (Challenge or Practice).",
-        buttons: [
-          {
-            label: "Play Challenge",
-            onClick: () => {
-              setTrainingCelebrationActive(false);
-              setHelpGuideOpen(false);
-              setLive("Opening Challenge mode from training completion.");
-              handleModeSelect("challenge");
-            },
-          },
-          {
-            label: "View My Stats",
-            onClick: () => {
-              setTrainingCelebrationActive(false);
-              setHelpGuideOpen(false);
-              setLive("Opening statistics after training completion.");
-              setStatsOpen(true);
-            },
-          },
-        ],
-      }
-    : trainingActive
+  const shouldShowIdleBubble = !trainingActive && !postTrainingCtaOpen && !robotResultReaction && (robotHovered || robotFocused || helpGuideOpen);
+  const robotBubbleContent: { message: React.ReactNode; buttons?: { label: string; onClick: () => void }[]; ariaLabel?: string } | null =
+    trainingActive
+      ? {
+          message: `Training round ${Math.min(trainingRoundDisplay, TRAIN_ROUNDS)}/${TRAIN_ROUNDS}—keep going!`,
+        }
+      : shouldShowIdleBubble
         ? {
-            message: `Training round ${Math.min(trainingRoundDisplay, TRAIN_ROUNDS)}/${TRAIN_ROUNDS}—keep going!`,
+            message: "Ready! Choose a Mode to start.",
           }
-            : shouldShowIdleBubble
-              ? {
-                  message: "Ready! Choose a Mode to start.",
-                }
-              : null;
+        : null;
 
   const hudRobotVariant: RobotVariant = useMemo(() => {
     if (robotResultReaction?.variant) return robotResultReaction.variant;
@@ -3124,9 +3133,13 @@ function RPSDoodleAppInner(){
   );
 
   const handleOpenSettings = useCallback(() => {
+    if (postTrainingLockActive) {
+      setLive("Finish choosing a mode or dismiss the banner before opening Settings.");
+      return;
+    }
     setSettingsOpen(true);
     setLive("Settings opened. Press Escape to close.");
-  }, [setLive]);
+  }, [postTrainingLockActive, setLive]);
 
   const showChallengeNeedsPredictorPrompt = useCallback(() => {
     showModernToast({
@@ -3658,15 +3671,59 @@ function RPSDoodleAppInner(){
 
   useEffect(() => {
     if (previousTrainingCountRef.current < TRAIN_ROUNDS && trainingCount >= TRAIN_ROUNDS) {
-      setTrainingCelebrationActive(true);
-      setHelpGuideOpen(false);
-      setLive("Training complete. You can now play Challenge or Practice modes.");
+      if (currentProfile && !currentProfile.seenPostTrainingCTA && !postTrainingCtaAcknowledged) {
+        setPostTrainingCtaOpen(true);
+        setHelpGuideOpen(false);
+        setLive("Training complete. You’re ready for Modes.");
+        if (scene !== "MODE") {
+          goToMode();
+        }
+      }
     }
     if (trainingCount < TRAIN_ROUNDS) {
-      setTrainingCelebrationActive(false);
+      setPostTrainingCtaOpen(false);
     }
     previousTrainingCountRef.current = trainingCount;
-  }, [trainingCount]);
+  }, [currentProfile, postTrainingCtaAcknowledged, scene, trainingCount]);
+
+  useEffect(() => {
+    if (!currentProfile) {
+      if (postTrainingCtaOpen) {
+        setPostTrainingCtaOpen(false);
+      }
+      return;
+    }
+    if (postTrainingCtaAcknowledged) {
+      if (postTrainingCtaOpen) {
+        setPostTrainingCtaOpen(false);
+      }
+      return;
+    }
+    if (trainingActive || needsTraining) {
+      if (postTrainingCtaOpen) {
+        setPostTrainingCtaOpen(false);
+      }
+      return;
+    }
+    if (currentProfile.trainingCount >= TRAIN_ROUNDS && !currentProfile.seenPostTrainingCTA) {
+      if (!postTrainingCtaOpen) {
+        setPostTrainingCtaOpen(true);
+        setHelpGuideOpen(false);
+      }
+      if (scene !== "MODE") {
+        goToMode();
+      }
+    } else if (postTrainingCtaOpen) {
+      setPostTrainingCtaOpen(false);
+    }
+  }, [
+    currentProfile,
+    needsTraining,
+    postTrainingCtaAcknowledged,
+    postTrainingCtaOpen,
+    scene,
+    trainingActive,
+  ]);
 
   // Failsafes: if something stalls, advance automatically
   useEffect(()=>{ if (phase === "selected"){ const t = setTimeout(()=>{ if (phase === "selected") startCountdown(); }, 500); return ()=> clearTimeout(t); } }, [phase]);
@@ -3900,6 +3957,9 @@ function RPSDoodleAppInner(){
       showChallengeNeedsPredictorPrompt();
       return;
     }
+    if (postTrainingCtaOpen) {
+      acknowledgePostTrainingCta();
+    }
     armAudio(); audio.cardSelect(); setSelectedMode(mode); setLive(`${modeLabel(mode)} mode selected. Loading match.`);
     addT(()=>{ audio.whooshShort(); }, 140); // morph start cue
     const graphicBudget = 1400; addT(()=>{ startSceneWipe(mode); }, graphicBudget);
@@ -3940,59 +4000,6 @@ function RPSDoodleAppInner(){
       </div>
 
       <LiveRegion message={live} />
-
-      <AnimatePresence>
-        {trainingCelebrationActive && (
-          <motion.div
-            key="training-complete-toast"
-            className="fixed top-4 left-1/2 z-[95] w-[min(90vw,480px)] -translate-x-1/2"
-            initial={{ y: -16, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: -16, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-          >
-            <div className="rounded-2xl bg-white/95 px-4 py-4 text-sm text-slate-700 shadow-2xl ring-1 ring-slate-200">
-              <div className="text-sm font-semibold text-slate-900">Training complete!</div>
-              <p className="mt-1 text-sm text-slate-600">
-                You can now play Modes (Challenge or Practice).
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="rounded-full bg-sky-600 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-sky-700"
-                  onClick={() => {
-                    setTrainingCelebrationActive(false);
-                    setHelpGuideOpen(false);
-                    setLive("Opening Challenge mode from training completion.");
-                    handleModeSelect("challenge");
-                  }}
-                >
-                  Play Challenge
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full bg-slate-900/90 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-slate-900"
-                  onClick={() => {
-                    setTrainingCelebrationActive(false);
-                    setHelpGuideOpen(false);
-                    setLive("Opening statistics after training completion.");
-                    setStatsOpen(true);
-                  }}
-                >
-                  View My Stats
-                </button>
-                <button
-                  type="button"
-                  className="rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-                  onClick={() => setTrainingCelebrationActive(false)}
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {modernToast && (() => {
         const variantStyles = MODERN_TOAST_STYLES[modernToast.variant];
@@ -4480,27 +4487,38 @@ function RPSDoodleAppInner(){
             )}
             <button
               onClick={() => {
+                if (postTrainingLockActive) {
+                  setLive("Choose a mode or dismiss the banner to view Statistics.");
+                  return;
+                }
                 suspendInsightPanelForHeader();
                 setStatsOpen(true);
               }}
-              className="px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 hover:bg-white text-sky-900"
+              disabled={postTrainingLockActive}
+              className={`px-3 py-1.5 rounded-xl shadow text-sm ${
+                postTrainingLockActive ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900"
+              }`}
               data-dev-label="hdr.stats"
             >
               Statistics
             </button>
             <button
               onClick={() => {
+                if (postTrainingLockActive) {
+                  setLive("Choose a mode or dismiss the banner to view the leaderboard.");
+                  return;
+                }
                 suspendInsightPanelForHeader();
                 setLeaderboardOpen(true);
               }}
               className={
                 "inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm shadow " +
-                (hasConsented
-                  ? "bg-white/70 hover:bg-white text-sky-900"
-                  : "cursor-not-allowed bg-white/50 text-slate-400")
+                (!hasConsented || postTrainingLockActive
+                  ? "cursor-not-allowed bg-white/50 text-slate-400"
+                  : "bg-white/70 hover:bg-white text-sky-900")
               }
-              disabled={!hasConsented}
-              title={!hasConsented ? "Select a player to continue." : undefined}
+              disabled={!hasConsented || postTrainingLockActive}
+              title={!hasConsented ? "Select a player to continue." : postTrainingLockActive ? "Choose a mode or dismiss the banner first." : undefined}
               data-dev-label="hdr.leaderboard"
             >
               Leaderboard
@@ -4531,12 +4549,21 @@ function RPSDoodleAppInner(){
                   setPlayerModalMode(currentPlayer ? "edit" : "create");
                   return;
                 }
+                if (postTrainingLockActive) {
+                  setLive("Finish with the celebration banner before leaving Modes.");
+                  return;
+                }
                 suspendInsightPanelForHeader();
                 goToMode();
               }}
               title={!hasConsented ? "Select a player to continue." : undefined}
-              disabled={modesDisabled || !hasConsented}
-              className={"px-3 py-1.5 rounded-xl shadow text-sm " + ((modesDisabled || !hasConsented) ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900")}
+              disabled={modesDisabled || !hasConsented || postTrainingLockActive}
+              className={
+                "px-3 py-1.5 rounded-xl shadow text-sm " +
+                (modesDisabled || !hasConsented || postTrainingLockActive
+                  ? "bg-white/50 text-slate-400 cursor-not-allowed"
+                  : "bg-white/70 hover:bg-white text-sky-900")
+              }
               data-dev-label="hdr.modes"
             >
               Modes
@@ -4545,6 +4572,10 @@ function RPSDoodleAppInner(){
               ref={helpButtonRef}
               type="button"
               onClick={() => {
+                if (postTrainingLockActive) {
+                  setLive("Choose a mode or dismiss the banner before opening Help.");
+                  return;
+                }
                 if (!helpCenterOpen) {
                   suspendInsightPanelForHeader();
                 }
@@ -4555,8 +4586,13 @@ function RPSDoodleAppInner(){
                 });
               }}
               className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl shadow text-sm transition ${
-                helpCenterOpen ? "bg-sky-600 text-white" : "bg-white/70 hover:bg-white text-sky-900"
+                postTrainingLockActive
+                  ? "bg-white/50 text-slate-400 cursor-not-allowed"
+                  : helpCenterOpen
+                    ? "bg-sky-600 text-white"
+                    : "bg-white/70 hover:bg-white text-sky-900"
               }`}
+              disabled={postTrainingLockActive}
               aria-haspopup="dialog"
               aria-expanded={helpCenterOpen}
               aria-keyshortcuts="Alt+H"
@@ -4572,7 +4608,14 @@ function RPSDoodleAppInner(){
                 suspendInsightPanelForHeader();
                 handleOpenSettings();
               }}
-              className={`px-3 py-1.5 rounded-xl shadow text-sm transition ${settingsOpen ? "bg-sky-600 text-white" : "bg-white/70 hover:bg-white text-sky-900"}`}
+              className={`px-3 py-1.5 rounded-xl shadow text-sm transition ${
+                postTrainingLockActive
+                  ? "bg-white/50 text-slate-400 cursor-not-allowed"
+                  : settingsOpen
+                    ? "bg-sky-600 text-white"
+                    : "bg-white/70 hover:bg-white text-sky-900"
+              }`}
+              disabled={postTrainingLockActive}
               aria-haspopup="dialog"
               aria-expanded={settingsOpen}
               data-dev-label="hdr.settings"
@@ -5157,6 +5200,78 @@ function RPSDoodleAppInner(){
         {/* MODE SELECT */}
         {scene === "MODE" && (
           <motion.main key="mode" initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -20, opacity: 0 }} transition={{ duration: .36, ease: [0.22,0.61,0.36,1] }} className="min-h-screen pt-28 flex flex-col items-center gap-6">
+            {postTrainingCtaOpen && (
+              <div className="w-full px-4">
+                <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 rounded-3xl bg-white/95 p-6 text-slate-700 shadow-2xl ring-1 ring-sky-100">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="space-y-1">
+                      <h2 className="text-xl font-semibold text-sky-800">Nice job—training complete!</h2>
+                      <p className="text-sm text-slate-600">You’re ready to play. Pick a mode:</p>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label="Dismiss training celebration"
+                      className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500 transition hover:bg-slate-200"
+                      onClick={() => {
+                        if (acknowledgePostTrainingCta()) {
+                          setLive("Training celebration dismissed.");
+                        }
+                      }}
+                    >
+                      Dismiss ✕
+                    </button>
+                  </div>
+                  <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-slate-600">
+                    <li>
+                      <span className="font-semibold text-slate-800">Practice</span> — Try strategies without points. No leaderboard scores here.
+                    </li>
+                    <li>
+                      <span className="font-semibold text-slate-800">Challenge</span> — Play for points. Your best scores go to the leaderboard.
+                    </li>
+                  </ul>
+                  <div className="flex flex-wrap gap-3 pt-2">
+                    <button
+                      type="button"
+                      className={`rounded-full px-4 py-2 text-sm font-semibold shadow transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500 ${
+                        predictorMode
+                          ? "bg-white text-sky-700 hover:bg-sky-50"
+                          : "bg-sky-600 text-white hover:bg-sky-700"
+                      }`}
+                      onClick={() => handleModeSelect("practice")}
+                    >
+                      Play Practice
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!predictorMode}
+                      className={`rounded-full px-4 py-2 text-sm font-semibold shadow transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500 ${
+                        predictorMode
+                          ? "bg-sky-600 text-white hover:bg-sky-700"
+                          : "cursor-not-allowed bg-slate-200 text-slate-400"
+                      }`}
+                      onClick={() => {
+                        if (!predictorMode) return;
+                        handleModeSelect("challenge");
+                      }}
+                    >
+                      Play Challenge
+                    </button>
+                  </div>
+                  {!predictorMode && (
+                    <p className="text-xs font-medium text-amber-600">
+                      Enable AI to play Challenge (Settings → AI predictor).
+                      <button
+                        type="button"
+                        className="ml-2 font-semibold text-sky-600 underline decoration-dotted underline-offset-2 transition hover:text-sky-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
+                        onClick={handleEnablePredictorForChallenge}
+                      >
+                        Enable AI
+                      </button>
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
             <motion.div layout className="text-4xl font-black text-sky-700">Choose Your Mode</motion.div>
             <div className="mode-grid">
               {MODES.map(m => {
