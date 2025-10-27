@@ -4206,12 +4206,26 @@ function RPSDoodleAppInner(){
                 suspendInsightPanelForHeader();
                 setLeaderboardOpen(true);
               }}
-              className={"px-3 py-1.5 rounded-xl shadow text-sm " + (hasConsented ? "bg-white/70 hover:bg-white text-sky-900" : "bg-white/50 text-slate-400 cursor-not-allowed")}
+              className={
+                "inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm shadow " +
+                (hasConsented
+                  ? "bg-white/70 hover:bg-white text-sky-900"
+                  : "cursor-not-allowed bg-white/50 text-slate-400")
+              }
               disabled={!hasConsented}
               title={!hasConsented ? "Select a player to continue." : undefined}
               data-dev-label="hdr.leaderboard"
             >
               Leaderboard
+              {hasConsented && showMatchScoreBadge && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-slate-900/90 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-[0.22em] text-white shadow"
+                  aria-live="polite"
+                >
+                  <span className="text-[0.55rem] font-semibold uppercase tracking-[0.32em] text-slate-200/80">Score</span>
+                  <span className="text-xs font-semibold tracking-normal">{matchScoreDisplay}</span>
+                </span>
+              )}
             </button>
             <div
               className={"px-3 py-1.5 rounded-xl shadow text-sm bg-white/70 text-slate-700 flex items-center gap-2 " + (demographicsNeedReview ? "ring-2 ring-amber-400" : "")}
