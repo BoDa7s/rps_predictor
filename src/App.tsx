@@ -2728,6 +2728,11 @@ function RPSDoodleAppInner(){
   const hideUiDuringModeTransition = scene === "MODE" && selectedMode !== null;
   const [wipeRun, setWipeRun] = useState(false);
   const modeLabel = (m:Mode)=> m.charAt(0).toUpperCase()+m.slice(1);
+  const activeMatchMode: Mode = selectedMode ?? "practice";
+  const matchModeBadgeTheme =
+    activeMatchMode === "challenge"
+      ? "border-rose-200 bg-rose-100 text-rose-700"
+      : "border-sky-200 bg-sky-100 text-sky-700";
 
   const handlePredictorToggle = useCallback(
     (checked: boolean) => {
@@ -5985,7 +5990,15 @@ function RPSDoodleAppInner(){
                   <motion.div ref={hudMainColumnRef} className="mx-auto flex w-full max-w-[820px] flex-col items-center gap-6">
                     <div className="flex w-full flex-col items-center gap-4 lg:gap-6">
                   {/* HUD */}
-                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .05 }} className="relative w-full max-w-[820px] bg-white/70 rounded-2xl shadow px-4 py-3">
+                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .05 }} className="relative w-full max-w-[820px] bg-white/70 rounded-2xl shadow px-4 pt-9 pb-4">
+                    <div
+                      className={`absolute left-4 top-3 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${matchModeBadgeTheme}`}
+                    >
+                      <span aria-hidden="true" className="text-base">
+                        {activeMatchMode === "challenge" ? "🎯" : "💡"}
+                      </span>
+                      <span className="leading-none">{modeLabel(activeMatchMode)} Mode</span>
+                    </div>
                     {(needsTraining || trainingActive) ? (
                       <div className="space-y-2">
                         <div className="flex items-center justify-between text-sm text-slate-700">
