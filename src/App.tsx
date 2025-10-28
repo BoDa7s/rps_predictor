@@ -1531,6 +1531,7 @@ function RPSDoodleAppInner(){
   const roundStartRef = useRef<number | null>(null);
   const lastDecisionMsRef = useRef<number | null>(null);
   const currentMatchRoundsRef = useRef<RoundLog[]>([]);
+  const [lastMoves, setLastMoves] = useState<Move[]>([]);
   const historyMixerRef = useRef<HedgeMixer | null>(null);
   const sessionMixerRef = useRef<HedgeMixer | null>(null);
   const historyDisplayMixerRef = useRef<HedgeMixer | null>(null);
@@ -1538,6 +1539,7 @@ function RPSDoodleAppInner(){
   const roundsSeenRef = useRef<number>(0);
   const modelPersistTimeoutRef = useRef<number | null>(null);
   const modelPersistPendingRef = useRef(false);
+  const [trainingActive, setTrainingActive] = useState<boolean>(false);
   const prevTrainingActiveRef = useRef(trainingActive);
   const [roundFilters, setRoundFilters] = useState<{ mode: RoundFilterMode; difficulty: RoundFilterDifficulty; outcome: RoundFilterOutcome; from: string; to: string }>({ mode: "all", difficulty: "all", outcome: "all", from: "", to: "" });
   useEffect(() => {
@@ -2444,7 +2446,6 @@ function RPSDoodleAppInner(){
   const trainingCount = currentProfile?.trainingCount ?? 0;
   const isTrained = currentProfile?.trained ?? false;
   const previousTrainingCountRef = useRef(trainingCount);
-  const [trainingActive, setTrainingActive] = useState<boolean>(false);
   const [trainingCalloutQueue, setTrainingCalloutQueue] = useState<string[]>([]);
   const [postTrainingCtaOpen, setPostTrainingCtaOpen] = useState(false);
   const [postTrainingCtaAcknowledged, setPostTrainingCtaAcknowledged] = useState(
@@ -2568,7 +2569,6 @@ function RPSDoodleAppInner(){
   const scoreChangeTimeoutRef = useRef<number | null>(null);
   const matchScoreDisplay = useMemo(() => (matchScoreTotal ?? 0).toLocaleString(), [matchScoreTotal]);
   const [round, setRound] = useState(1);
-  const [lastMoves, setLastMoves] = useState<Move[]>([]);
   const [aiHistory, setAiHistory] = useState<Move[]>([]);
   const [outcomesHist, setOutcomesHist] = useState<Outcome[]>([]);
 
@@ -3019,38 +3019,42 @@ function RPSDoodleAppInner(){
   const recordRound = useCallback((playerMove: Move, aiMove: Move, outcomeForPlayer: Outcome) => {
     const trace = decisionTraceRef.current;
     const policy: DecisionPolicy = trace?.policy ?? "heuristic";
-    let mixerTrace: MixerTrace | undefined = trace?.mixer
-      ? {
-          dist: trace.mixer.dist,
-          counter: trace.mixer.counter,
-          topExperts: trace.mixer.experts
-            .map(e => ({ name: e.name, weight: e.weight, pActual: e.dist[playerMove] ?? 0 }))
-            .sort((a, b) => b.weight - a.weight)
-            .slice(0, 3),
-          confidence: trace.mixer.confidence,
-          realtimeWeight: trace.mixer.realtimeWeight,
-          historyWeight: trace.mixer.historyWeight,
-          realtimeTopExperts: trace.mixer.realtimeExperts
-            .map(expert => ({
-              name: expert.name,
-              weight: expert.weight * (trace.mixer.realtimeWeight ?? 1),
-              pActual: expert.dist[playerMove] ?? 0,
-            }))
-            .sort((a, b) => b.weight - a.weight)
-            .slice(0, 3),
-          historyTopExperts: trace.mixer.historyExperts
-            .map(expert => ({
-              name: expert.name,
-              weight: expert.weight * (trace.mixer.historyWeight ?? 1),
-              pActual: expert.dist[playerMove] ?? 0,
-            }))
-            .sort((a, b) => b.weight - a.weight)
-            .slice(0, 3),
-          realtimeRounds: trace.mixer.realtimeRounds,
-          historyRounds: trace.mixer.historyRounds,
-          conflict: trace.mixer.conflict ?? null,
-        }
-      : undefined;
+    const mixer = trace?.mixer;
+    let mixerTrace: MixerTrace | undefined;
+    if (mixer) {
+      const realtimeWeight = mixer.realtimeWeight ?? 1;
+      const historyWeight = mixer.historyWeight ?? 1;
+      mixerTrace = {
+        dist: mixer.dist,
+        counter: mixer.counter,
+        topExperts: mixer.experts
+          .map(e => ({ name: e.name, weight: e.weight, pActual: e.dist[playerMove] ?? 0 }))
+          .sort((a, b) => b.weight - a.weight)
+          .slice(0, 3),
+        confidence: mixer.confidence,
+        realtimeWeight: mixer.realtimeWeight,
+        historyWeight: mixer.historyWeight,
+        realtimeTopExperts: (mixer.realtimeExperts ?? [])
+          .map(expert => ({
+            name: expert.name,
+            weight: expert.weight * realtimeWeight,
+            pActual: expert.dist[playerMove] ?? 0,
+          }))
+          .sort((a, b) => b.weight - a.weight)
+          .slice(0, 3),
+        historyTopExperts: (mixer.historyExperts ?? [])
+          .map(expert => ({
+            name: expert.name,
+            weight: expert.weight * historyWeight,
+            pActual: expert.dist[playerMove] ?? 0,
+          }))
+          .sort((a, b) => b.weight - a.weight)
+          .slice(0, 3),
+        realtimeRounds: mixer.realtimeRounds,
+        historyRounds: mixer.historyRounds,
+        conflict: mixer.conflict ?? null,
+      };
+    }
     const heuristicTrace = trace?.heuristic;
     const confidence = trace?.confidence ?? mixerTrace?.confidence ?? heuristicTrace?.conf ?? 0;
     const now = new Date().toISOString();
