@@ -553,25 +553,57 @@ const DistributionList: React.FC<{ distribution: Distribution; barColor: string 
   );
 };
 
-const ExpertChips: React.FC<{ snapshot: LiveInsightSnapshot | null }> = ({ snapshot }) => {
+interface SignalsDrawerProps {
+  snapshot: LiveInsightSnapshot | null;
+  open: boolean;
+  onToggle: () => void;
+}
+
+const SignalsDrawer: React.FC<SignalsDrawerProps> = ({ snapshot, open, onToggle }) => {
   const realtimeExperts = snapshot?.realtimeExperts ?? [];
   const historyExperts = snapshot?.historyExperts ?? [];
   const hasSignals = realtimeExperts.length + historyExperts.length > 0;
 
   return (
-    <div>
-      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Signals</div>
-      <div className="mt-2 flex flex-wrap gap-2">
-        {realtimeExperts.map(expert => (
-          <ExpertChip key={`realtime-${expert.name}`} expert={expert} variant="realtime" />
-        ))}
-        {historyExperts.map(expert => (
-          <ExpertChip key={`history-${expert.name}`} expert={expert} variant="history" />
-        ))}
-        {!hasSignals && (
-          <span className="text-xs text-slate-500">Play a few rounds to surface expert signals.</span>
-        )}
-      </div>
+    <div className="rounded-xl border border-slate-200/80 bg-white/80 p-3">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center justify-between text-left text-sm font-medium text-slate-700"
+      >
+        <span>Signals</span>
+        <span className="text-xs text-slate-500">{open ? "Hide" : "Show"}</span>
+      </button>
+      {open && (
+        <div className="mt-3 space-y-3 text-xs text-slate-600">
+          {hasSignals ? (
+            <>
+              {realtimeExperts.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500">From this session</div>
+                  <div className="flex flex-wrap gap-2">
+                    {realtimeExperts.map(expert => (
+                      <ExpertChip key={`realtime-${expert.name}`} expert={expert} variant="realtime" />
+                    ))}
+                  </div>
+                </div>
+              )}
+              {historyExperts.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500">From previous sessions</div>
+                  <div className="flex flex-wrap gap-2">
+                    {historyExperts.map(expert => (
+                      <ExpertChip key={`history-${expert.name}`} expert={expert} variant="history" />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <span className="text-xs text-slate-500">Play a few rounds to surface expert signals.</span>
+          )}
+        </div>
+      )}
     </div>
   );
 };
@@ -705,6 +737,7 @@ function formatConfidenceBucket(bucket: string): string {
 
 const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, historicalRounds, titleRef, onClose }) => {
   const [threshold, setThreshold] = useState(0.7);
+  const [signalsOpen, setSignalsOpen] = useState(false);
   const [historyPeekOpen, setHistoryPeekOpen] = useState(false);
 
   const timelineRounds = useMemo(() => sortRoundsChronologically(liveRounds), [liveRounds]);
@@ -941,7 +974,11 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
                 </div>
                 <PredictionSources snapshot={snapshot} realtimeRounds={timelineRounds.length} />
               </div>
-              <ExpertChips snapshot={snapshot} />
+              <SignalsDrawer
+                snapshot={snapshot}
+                open={signalsOpen}
+                onToggle={() => setSignalsOpen(prev => !prev)}
+              />
               <HistoryPeek
                 open={historyPeekOpen}
                 onToggle={() => setHistoryPeekOpen(prev => !prev)}
