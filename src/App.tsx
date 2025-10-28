@@ -5995,9 +5995,17 @@ function RPSDoodleAppInner(){
                       className={`absolute left-4 top-3 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${matchModeBadgeTheme}`}
                     >
                       <span aria-hidden="true" className="text-base">
-                        {activeMatchMode === "challenge" ? "🎯" : "💡"}
+                        {needsTraining || trainingActive
+                          ? "🧠"
+                          : activeMatchMode === "challenge"
+                            ? "🎯"
+                            : "💡"}
                       </span>
-                      <span className="leading-none">{modeLabel(activeMatchMode)} Mode</span>
+                      <span className="leading-none">
+                        {needsTraining || trainingActive
+                          ? "TRAINIGN  PHASE"
+                          : `${modeLabel(activeMatchMode)} Mode`}
+                      </span>
                     </div>
                     {(needsTraining || trainingActive) ? (
                       <div className="space-y-2">
