@@ -14,22 +14,22 @@ export type MatchTimings = Record<Mode, ModeTimingConfig>;
 
 export const MATCH_TIMING_DEFAULTS: MatchTimings = {
   challenge: {
-    countdownTickMs: 1100,
-    revealHoldMs: 2200,
-    resultBannerMs: 1200,
-    robotRoundReactionMs: 1800,
-    robotRoundRestMs: 4000,
-    robotResultReactionMs: 2000,
-    robotResultRestMs: 4000,
+    countdownTickMs: 800,
+    revealHoldMs: 1600,
+    resultBannerMs: 1600,
+    robotRoundReactionMs: 10000,
+    robotRoundRestMs: 120000,
+    robotResultReactionMs: 10000,
+    robotResultRestMs: 120000,
   },
   practice: {
-    countdownTickMs: 1100,
-    revealHoldMs: 2200,
-    resultBannerMs: 1800,
-    robotRoundReactionMs: 2000,
-    robotRoundRestMs: 4000,
-    robotResultReactionMs: 2000,
-    robotResultRestMs: 4000,
+    countdownTickMs: 800,
+    revealHoldMs: 1600,
+    resultBannerMs: 1600,
+    robotRoundReactionMs: 10000,
+    robotRoundRestMs: 120000,
+    robotResultReactionMs: 10000,
+    robotResultRestMs: 120000,
   },
 };
 

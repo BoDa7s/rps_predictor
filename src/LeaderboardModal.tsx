@@ -1,29 +1,19 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import { motion } from "framer-motion";
-import { useStats, RoundLog } from "./stats";
-import { usePlayers, Grade } from "./players";
+import { useStats } from "./stats";
+import { usePlayers } from "./players";
 import { AIMode, Mode } from "./gameTypes";
-import { computeMatchScore } from "./leaderboard";
+import {
+  aggregateLeaderboardEntries,
+  collectLeaderboardEntries,
+  groupRoundsByMatch,
+  type LeaderboardMatchEntry,
+  type LeaderboardPlayerInfo,
+} from "./leaderboardData";
 
 interface LeaderboardModalProps {
   open: boolean;
   onClose: () => void;
-}
-
-interface LeaderboardMatchEntry {
-  matchId: string;
-  matchKey: string;
-  playerId: string;
-  profileId: string;
-  playerName: string;
-  grade?: Grade;
-  score: number;
-  streak: number;
-  rounds: number;
-  mode: Mode;
-  difficulty: AIMode;
-  endedAt: string;
-  endedAtMs: number;
 }
 
 const MODE_LABELS: Record<Mode, string> = {
@@ -37,30 +27,7 @@ const DIFFICULTY_LABELS: Record<AIMode, string> = {
   ruthless: "Ruthless",
 };
 
-const DEFAULT_LIMIT = 15;
-
-function aggregateByPlayer(entries: LeaderboardMatchEntry[]): LeaderboardMatchEntry[] {
-  const map = new Map<string, LeaderboardMatchEntry>();
-  entries.forEach(entry => {
-    const key = `${entry.playerId}|${entry.profileId}`;
-    const existing = map.get(key);
-    if (!existing) {
-      map.set(key, entry);
-      return;
-    }
-    if (entry.score > existing.score) {
-      map.set(key, entry);
-      return;
-    }
-    if (entry.score === existing.score && entry.endedAtMs > existing.endedAtMs) {
-      map.set(key, entry);
-    }
-  });
-  return Array.from(map.values()).sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    return b.endedAtMs - a.endedAtMs;
-  });
-}
+const DEFAULT_LIMIT = 10;
 
 function safeDate(value: string): Date | null {
   const date = new Date(value);
@@ -99,75 +66,28 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
   }, [open, onClose]);
 
   const playersById = useMemo(() => {
-    const map = new Map<string, { name: string; grade?: Grade; consented: boolean }>();
+    const map = new Map<string, LeaderboardPlayerInfo>();
     players.forEach(player => {
       map.set(player.id, {
         name: player.playerName,
         grade: player.grade,
-        consented: Boolean(player.consent?.agreed),
       });
     });
     return map;
   }, [players]);
 
-  const roundsByMatchId = useMemo(() => {
-    const map = new Map<string, RoundLog[]>();
-    adminRounds.forEach(round => {
-      if (!round.matchId) return;
-      const existing = map.get(round.matchId);
-      if (existing) {
-        existing.push(round);
-      } else {
-        map.set(round.matchId, [round]);
-      }
-    });
-    return map;
-  }, [adminRounds]);
+  const roundsByMatchId = useMemo(() => groupRoundsByMatch(adminRounds), [adminRounds]);
 
-  const matchEntries = useMemo<LeaderboardMatchEntry[]>(() => {
-    const entries: LeaderboardMatchEntry[] = [];
-    adminMatches.forEach(match => {
-      if (match.mode !== "challenge" && match.mode !== "practice") return;
-      const player = playersById.get(match.playerId);
-      if (!player || !player.consented) return;
-      const matchKey = match.clientId ?? match.id;
-      const rounds = roundsByMatchId.get(matchKey) ?? [];
-      if (!rounds.length) return;
-      const endedAt = match.endedAt || match.startedAt;
-      if (!endedAt) return;
-      const endedDate = safeDate(endedAt);
-      if (!endedDate) return;
-      const computed = match.leaderboardScore != null && match.leaderboardRoundCount != null
-        ? null
-        : computeMatchScore(rounds);
-      const totalScore = match.leaderboardScore ?? computed?.total ?? 0;
-      if (totalScore <= 0) return;
-      const maxStreak = match.leaderboardMaxStreak ?? computed?.maxStreak ?? 0;
-      const roundCount = match.leaderboardRoundCount ?? computed?.rounds ?? rounds.length;
-      entries.push({
-        matchId: match.id,
-        matchKey,
-        playerId: match.playerId,
-        profileId: match.profileId,
-        playerName: player.name,
-        grade: player.grade,
-        score: totalScore,
-        streak: maxStreak,
-        rounds: roundCount,
-        mode: match.mode,
-        difficulty: match.difficulty,
-        endedAt,
-        endedAtMs: endedDate.getTime(),
-      });
-    });
-    return entries;
-  }, [adminMatches, playersById, roundsByMatchId]);
+  const { entries: matchEntries, hasPracticeLegacy } = useMemo(
+    () => collectLeaderboardEntries({ matches: adminMatches, roundsByMatchId, playersById }),
+    [adminMatches, roundsByMatchId, playersById],
+  );
 
   const allTimeRows = useMemo(() => {
     if (!matchEntries.length) {
       return [] as LeaderboardMatchEntry[];
     }
-    return aggregateByPlayer(matchEntries);
+    return aggregateLeaderboardEntries(matchEntries);
   }, [matchEntries]);
 
   const rowsToDisplay = useMemo(
@@ -256,6 +176,11 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
                 </tbody>
               </table>
             </div>
+          )}
+          {hasPracticeLegacy && (
+            <p className="mt-4 text-xs text-slate-500">
+              Practice matches are archived as <span className="font-semibold">Practice Legacy</span> and are excluded from these rankings.
+            </p>
           )}
         </div>
       </motion.div>
