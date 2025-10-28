@@ -37,9 +37,8 @@ The Docker image uses a multi-stage build (Node for compilation, Nginx for servi
 ## Local development
 
 1. Install dependencies: `npm install`
-2. Build project with `npm run build`
-3. Start the Vite dev server: `npm run dev`
-4. Open the URL that Vite prints (defaults to http://localhost:5173).
+2. Start the Vite dev server: `npm run dev`
+3. Open the URL that Vite prints (defaults to http://localhost:5173).
 
 ## Windows batch launcher
 
