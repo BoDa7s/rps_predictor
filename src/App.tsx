@@ -5990,7 +5990,7 @@ function RPSDoodleAppInner(){
                   <motion.div ref={hudMainColumnRef} className="mx-auto flex w-full max-w-[820px] flex-col items-center gap-6">
                     <div className="flex w-full flex-col items-center gap-4 lg:gap-6">
                   {/* HUD */}
-                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .05 }} className="relative w-full max-w-[820px] bg-white/70 rounded-2xl shadow px-4 pt-9 pb-4">
+                  <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: .05 }} className="relative w-full max-w-[820px] bg-white/70 rounded-2xl shadow px-4 pt-12 pb-4">
                     <div
                       className={`absolute left-4 top-3 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-wide ${matchModeBadgeTheme}`}
                     >
