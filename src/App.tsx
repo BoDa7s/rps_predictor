@@ -4572,10 +4572,6 @@ function RPSDoodleAppInner(){
               ref={helpButtonRef}
               type="button"
               onClick={() => {
-                if (postTrainingLockActive) {
-                  setLive("Choose a mode or dismiss the banner before opening Help.");
-                  return;
-                }
                 if (!helpCenterOpen) {
                   suspendInsightPanelForHeader();
                 }
@@ -4586,13 +4582,8 @@ function RPSDoodleAppInner(){
                 });
               }}
               className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl shadow text-sm transition ${
-                postTrainingLockActive
-                  ? "bg-white/50 text-slate-400 cursor-not-allowed"
-                  : helpCenterOpen
-                    ? "bg-sky-600 text-white"
-                    : "bg-white/70 hover:bg-white text-sky-900"
+                helpCenterOpen ? "bg-sky-600 text-white" : "bg-white/70 hover:bg-white text-sky-900"
               }`}
-              disabled={postTrainingLockActive}
               aria-haspopup="dialog"
               aria-expanded={helpCenterOpen}
               aria-keyshortcuts="Alt+H"
@@ -4609,13 +4600,8 @@ function RPSDoodleAppInner(){
                 handleOpenSettings();
               }}
               className={`px-3 py-1.5 rounded-xl shadow text-sm transition ${
-                postTrainingLockActive
-                  ? "bg-white/50 text-slate-400 cursor-not-allowed"
-                  : settingsOpen
-                    ? "bg-sky-600 text-white"
-                    : "bg-white/70 hover:bg-white text-sky-900"
+                settingsOpen ? "bg-sky-600 text-white" : "bg-white/70 hover:bg-white text-sky-900"
               }`}
-              disabled={postTrainingLockActive}
               aria-haspopup="dialog"
               aria-expanded={settingsOpen}
               data-dev-label="hdr.settings"
@@ -5200,7 +5186,7 @@ function RPSDoodleAppInner(){
         {/* MODE SELECT */}
         {scene === "MODE" && (
           <motion.main key="mode" initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -20, opacity: 0 }} transition={{ duration: .36, ease: [0.22,0.61,0.36,1] }} className="min-h-screen pt-28 flex flex-col items-center gap-6">
-            {postTrainingCtaOpen && (
+            {postTrainingCtaOpen ? (
               <div className="w-full px-4">
                 <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 rounded-3xl bg-white/95 p-6 text-slate-700 shadow-2xl ring-1 ring-sky-100">
                   <div className="flex items-start justify-between gap-4">
@@ -5271,74 +5257,77 @@ function RPSDoodleAppInner(){
                   )}
                 </div>
               </div>
-            )}
-            <motion.div layout className="text-4xl font-black text-sky-700">Choose Your Mode</motion.div>
-            <div className="mode-grid">
-              {MODES.map(m => {
-                const isChallenge = m === "challenge";
-                const disabledBase = (isChallenge && needsTraining) || !hasConsented;
-                const challengeNeedsPredictor =
-                  isChallenge && !needsTraining && hasConsented && !predictorMode;
-                const disabledReason = isChallenge
-                  ? needsTraining
-                    ? "Complete training to unlock Challenge."
-                    : !hasConsented
-                      ? "Consent is required before starting a match."
-                      : challengeNeedsPredictor
-                        ? "Enable AI to play Challenge."
-                        : null
-                  : null;
-                return (
-                  <ModeCard
-                    key={m}
-                    mode={m}
-                    onSelect={handleModeSelect}
-                    isDimmed={!!selectedMode && selectedMode !== m}
-                    disabled={disabledBase}
-                    disabledReason={disabledReason}
-                    onDisabledClick={
-                      challengeNeedsPredictor
-                        ? (_mode: Mode) => {
-                            showChallengeNeedsPredictorPrompt();
-                          }
-                        : undefined
-                    }
-                  />
-                );
-              })}
-            </div>
+            ) : (
+              <>
+                <motion.div layout className="text-4xl font-black text-sky-700">Choose Your Mode</motion.div>
+                <div className="mode-grid">
+                  {MODES.map(m => {
+                    const isChallenge = m === "challenge";
+                    const disabledBase = (isChallenge && needsTraining) || !hasConsented;
+                    const challengeNeedsPredictor =
+                      isChallenge && !needsTraining && hasConsented && !predictorMode;
+                    const disabledReason = isChallenge
+                      ? needsTraining
+                        ? "Complete training to unlock Challenge."
+                        : !hasConsented
+                          ? "Consent is required before starting a match."
+                          : challengeNeedsPredictor
+                            ? "Enable AI to play Challenge."
+                            : null
+                      : null;
+                    return (
+                      <ModeCard
+                        key={m}
+                        mode={m}
+                        onSelect={handleModeSelect}
+                        isDimmed={!!selectedMode && selectedMode !== m}
+                        disabled={disabledBase}
+                        disabledReason={disabledReason}
+                        onDisabledClick={
+                          challengeNeedsPredictor
+                            ? (_mode: Mode) => {
+                                showChallengeNeedsPredictorPrompt();
+                              }
+                            : undefined
+                        }
+                      />
+                    );
+                  })}
+                </div>
 
-            {/* Fullscreen morph container */}
-            <AnimatePresence>
-              {/* Trying to add different colors to challenge and training backgrounds.  Original code block commented out below.  This changed the splash page that welcomes player to the challenge or training mode.  */}
-              {selectedMode && (
-                <motion.div
-                  key="fs"
-                  className={`fullscreen ${
-                    selectedMode === 'challenge'
-                      ? 'bg-red-700'
-                      : selectedMode === 'practice'
-                      ? 'bg-blue-700'
-                      : 'bg-gray-700'
-                  }`}
-                  layoutId={`card-${selectedMode}`}
-                  initial={{ borderRadius: 16 }}
-                  animate={{
-                    borderRadius: 0,
-                    transition: { duration: 0.44, ease: [0.22, 0.61, 0.36, 1] },
-                  }}
-                >
-                  {/* <motion.div key="fs" className={`fullscreen ${selectedMode}`} layoutId={`card-${selectedMode}`} initial={{ borderRadius: 16 }} animate={{ borderRadius: 0, transition: { duration: 0.44, ease: [0.22,0.61,0.36,1] }}/> */}
-                  <div className="absolute inset-0 grid place-items-center">
-                    <motion.div initial={{ scale: .9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: .36 }} className="text-7xl">
-                      {selectedMode === 'challenge' ? '🎯' : '💡'}
+                {/* Fullscreen morph container */}
+                <AnimatePresence>
+                  {/* Trying to add different colors to challenge and training backgrounds.  Original code block commented out below.  This changed the splash page that welcomes player to the challenge or training mode.  */}
+                  {selectedMode && (
+                    <motion.div
+                      key="fs"
+                      className={`fullscreen ${
+                        selectedMode === 'challenge'
+                          ? 'bg-red-700'
+                          : selectedMode === 'practice'
+                          ? 'bg-blue-700'
+                          : 'bg-gray-700'
+                      }`}
+                      layoutId={`card-${selectedMode}`}
+                      initial={{ borderRadius: 16 }}
+                      animate={{
+                        borderRadius: 0,
+                        transition: { duration: 0.44, ease: [0.22, 0.61, 0.36, 1] },
+                      }}
+                    >
+                      {/* <motion.div key="fs" className={`fullscreen ${selectedMode}`} layoutId={`card-${selectedMode}`} initial={{ borderRadius: 16 }} animate={{ borderRadius: 0, transition: { duration: 0.44, ease: [0.22,0.61,0.36,1] }}/> */}
+                      <div className="absolute inset-0 grid place-items-center">
+                        <motion.div initial={{ scale: .9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: .36 }} className="text-7xl">
+                          {selectedMode === 'challenge' ? '🎯' : '💡'}
+                        </motion.div>
+                      </div>
+
+                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: .74, duration: .28 }} className="absolute bottom-10 left-0 right-0 text-center text-white text-3xl font-black drop-shadow">{modeLabel(selectedMode)}</motion.div>
                     </motion.div>
-                  </div>
-
-                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: .74, duration: .28 }} className="absolute bottom-10 left-0 right-0 text-center text-white text-3xl font-black drop-shadow">{modeLabel(selectedMode)}</motion.div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+                  )}
+                </AnimatePresence>
+              </>
+            )}
           </motion.main>
         )}
 
