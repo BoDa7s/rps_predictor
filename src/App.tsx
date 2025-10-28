@@ -1540,6 +1540,7 @@ function RPSDoodleAppInner(){
   const modelPersistTimeoutRef = useRef<number | null>(null);
   const modelPersistPendingRef = useRef(false);
   const [trainingActive, setTrainingActive] = useState<boolean>(false);
+  const [forceTrainingPrompt, setForceTrainingPrompt] = useState(false);
   const prevTrainingActiveRef = useRef(trainingActive);
   const [roundFilters, setRoundFilters] = useState<{ mode: RoundFilterMode; difficulty: RoundFilterDifficulty; outcome: RoundFilterOutcome; from: string; to: string }>({ mode: "all", difficulty: "all", outcome: "all", from: "", to: "" });
   useEffect(() => {
@@ -3209,12 +3210,18 @@ function RPSDoodleAppInner(){
       return;
     }
     if (needsTraining && currentProfile && hasConsented) {
-      startMatch("practice", { silent: true });
-      if (!trainingActive) {
+      if (forceTrainingPrompt) {
+        if (trainingActive) {
+          setTrainingActive(false);
+        }
+      } else if (!trainingActive) {
         setTrainingActive(true);
       }
+      startMatch("practice", { silent: true });
+      setForceTrainingPrompt(false);
       return;
     }
+    setForceTrainingPrompt(false);
     setScene("MODE");
   }, [
     scene,
@@ -3224,6 +3231,7 @@ function RPSDoodleAppInner(){
     currentProfile,
     hasConsented,
     trainingActive,
+    forceTrainingPrompt,
     setWelcomeOrigin,
     setWelcomeSeen,
     setWelcomeStage,
@@ -5633,41 +5641,6 @@ function RPSDoodleAppInner(){
                     </div>
                   </div>
                 </section>
-                <section className="space-y-3">
-                  <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Help &amp; About</h2>
-                  <div className="rounded-lg border border-slate-200/80 bg-white/80 p-3">
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sky-700">
-                      <button
-                        type="button"
-                        className="text-xs font-semibold hover:underline"
-                        onClick={() => {
-                          goToMode();
-                          setHelpToast({
-                            title: "What are Modes?",
-                            message: "Modes show different ways to play and practice.",
-                          });
-                          setLive("Opening modes overview and showing help toast.");
-                        }}
-                      >
-                        What are Modes?
-                      </button>
-                      <span aria-hidden className="text-slate-300">•</span>
-                      <button
-                        type="button"
-                        className="text-xs font-semibold hover:underline"
-                        onClick={() => {
-                          setHelpToast({
-                            title: "How training works",
-                            message: `Training runs ${TRAIN_ROUNDS} rounds so the AI can learn your habits.`,
-                          });
-                          setLive("Training overview shared in help toast.");
-                        }}
-                      >
-                        How training works
-                      </button>
-                    </div>
-                  </div>
-                </section>
               </div>
             </motion.aside>
           </motion.div>
@@ -7037,10 +7010,24 @@ function RPSDoodleAppInner(){
                 player={modalPlayer}
                 onClose={handlePlayerModalClose}
                 onSaved={(result) => {
+                  const origin = playerModalOrigin;
                   setPlayerModalMode("hidden");
                   setPlayerModalOrigin(null);
-                  if (playerModalOrigin === "welcome") {
+                  if (origin === "welcome") {
                     finishWelcomeFlow("setup");
+                  } else if (origin === "settings" && result.action === "create") {
+                    setForceTrainingPrompt(true);
+                    openWelcome({
+                      bootFirst: true,
+                      origin: "settings",
+                      announce: "New player saved. Booting into training setup.",
+                    });
+                    setBootNext("AUTO");
+                    setWelcomeOrigin(null);
+                    setWelcomeSeen(true);
+                    setToastMessage("New player saved. Booting up to start training.");
+                    setLive("New player saved. Boot sequence initiated to start training.");
+                    return;
                   }
                   if (result.action === "create") {
                     setToastMessage("New player starts a fresh training session (10 rounds).");
