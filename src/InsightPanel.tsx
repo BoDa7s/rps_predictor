@@ -10,6 +10,18 @@ export interface LiveInsightSnapshot {
   distribution: Record<Move, number>;
   topExperts: Array<{ name: string; weight: number; topMove: Move | null; probability: number }>;
   reason?: string | null;
+  realtimeDistribution: Record<Move, number>;
+  historyDistribution: Record<Move, number>;
+  realtimeWeight: number;
+  historyWeight: number;
+  realtimeExperts: Array<{ name: string; weight: number; topMove: Move | null; probability: number }>;
+  historyExperts: Array<{ name: string; weight: number; topMove: Move | null; probability: number }>;
+  realtimeRounds: number;
+  historyRounds: number;
+  historyUpdatedAt: string | null;
+  conflict: { realtime: Move | null; history: Move | null } | null;
+  realtimeMove: Move | null;
+  historyMove: Move | null;
 }
 
 interface InsightPanelProps {
@@ -21,6 +33,7 @@ interface InsightPanelProps {
 }
 
 const MOVES: Move[] = ["rock", "paper", "scissors"];
+const MOVE_EMOJI: Record<Move, string> = { rock: "🪨", paper: "📄", scissors: "✂️" };
 
 type Distribution = Record<Move, number>;
 
@@ -320,6 +333,25 @@ function formatPercent(value: number | null, digits = 1): string {
   return `${(value * 100).toFixed(digits)}%`;
 }
 
+function formatRelativeTime(iso: string | null): string | null {
+  if (!iso) return null;
+  const timestamp = Date.parse(iso);
+  if (!Number.isFinite(timestamp)) return null;
+  const diff = Date.now() - timestamp;
+  if (diff < 0) return "just now";
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) {
+    return `${minutes} min${minutes === 1 ? "" : "s"} ago`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours} hr${hours === 1 ? "" : "s"} ago`;
+  }
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
 function formatNumber(value: number | null, digits = 2): string {
   if (value == null || Number.isNaN(value)) return "—";
   return value.toFixed(digits);
@@ -328,6 +360,11 @@ function formatNumber(value: number | null, digits = 2): string {
 function formatMove(move: Move | null): string {
   if (!move) return "—";
   return move.charAt(0).toUpperCase() + move.slice(1);
+}
+
+function getMoveEmoji(move: Move | null): string {
+  if (!move) return "•";
+  return MOVE_EMOJI[move];
 }
 
 function renderSparkline(values: number[], width: number, height: number, className?: string) {
@@ -339,8 +376,405 @@ function renderSparkline(values: number[], width: number, height: number, classN
   );
 }
 
+const BlendMeter: React.FC<{ snapshot: LiveInsightSnapshot | null }> = ({ snapshot }) => {
+  const realtimeWeightRaw = clampProbability(snapshot?.realtimeWeight ?? 0);
+  const historyWeightRaw = clampProbability(snapshot?.historyWeight ?? 0);
+  const totalWeight = realtimeWeightRaw + historyWeightRaw;
+  const realtimeShare = totalWeight > 0 ? realtimeWeightRaw / totalWeight : 0;
+  const historyShare = totalWeight > 0 ? historyWeightRaw / totalWeight : 0;
+
+  return (
+    <div className="rounded-xl bg-slate-50/90 px-4 py-3 shadow-inner">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Blend meter</div>
+        <div className="text-sm font-medium text-slate-700">
+          Now {formatPercent(realtimeShare, 0)} / History {formatPercent(historyShare, 0)}
+        </div>
+      </div>
+      <div
+        className="mt-2 flex items-center gap-3 text-xs text-slate-600"
+        title="We trust what you're doing now more."
+      >
+        <span className="hidden sm:inline">Realtime</span>
+        <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-slate-200" aria-hidden>
+          <div
+            className="absolute inset-y-0 left-0 bg-sky-500"
+            style={{ width: `${Math.min(100, Math.max(0, realtimeShare * 100))}%` }}
+          />
+        </div>
+        <span className="hidden sm:inline">History</span>
+      </div>
+    </div>
+  );
+};
+
+const SessionTimeline: React.FC<{ rounds: RoundLog[] }> = ({ rounds }) => {
+  const limited = rounds.slice(-MAX_ENTRIES_FOR_TIMELINES);
+  return (
+    <div>
+      <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
+        <span>Tiny timeline · Realtime</span>
+        <span className="normal-case text-[11px] text-slate-400">
+          {rounds.length ? `${rounds.length} round${rounds.length === 1 ? "" : "s"}` : "No rounds yet"}
+        </span>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-1">
+        {limited.length ? (
+          limited.map((round, index) => (
+            <span
+              key={round.id}
+              className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-900/80 text-[11px] font-semibold text-white"
+              title={`Round ${rounds.length - limited.length + index + 1}: You played ${formatMove(round.player)}; AI played ${formatMove(round.ai)}.`}
+            >
+              {getMoveEmoji(round.player)}
+            </span>
+          ))
+        ) : (
+          <span className="text-xs text-slate-500">Play a round to populate the timeline.</span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+interface PredictionSourcesProps {
+  snapshot: LiveInsightSnapshot | null;
+  realtimeRounds: number;
+}
+
+const PredictionSources: React.FC<PredictionSourcesProps> = ({ snapshot, realtimeRounds }) => {
+  const realtimeWeight = clampProbability(snapshot?.realtimeWeight ?? 0);
+  const historyWeight = clampProbability(snapshot?.historyWeight ?? 0);
+  const total = realtimeWeight + historyWeight;
+  const realtimeShare = total > 0 ? realtimeWeight / total : 0;
+  const historyShare = total > 0 ? historyWeight / total : 0;
+
+  const realtimeDistribution = normalizeDist(
+    (snapshot?.realtimeDistribution ?? {}) as Partial<Record<Move, number>>,
+  );
+  const historyDistribution = normalizeDist(
+    (snapshot?.historyDistribution ?? {}) as Partial<Record<Move, number>>,
+  );
+  const historyRounds = snapshot?.historyRounds ?? 0;
+
+  return (
+    <div className="space-y-3">
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Prediction sources</div>
+      <div className="space-y-3">
+        <PredictionSourceCard
+          title="Realtime (this match)"
+          subtitle="Dominant"
+          rounds={realtimeRounds}
+          weight={realtimeShare}
+          distribution={realtimeDistribution}
+          variant="realtime"
+        />
+        <PredictionSourceCard
+          title="Previous matches"
+          subtitle="Supporting"
+          rounds={historyRounds}
+          weight={historyShare}
+          distribution={historyDistribution}
+          variant="history"
+        />
+      </div>
+    </div>
+  );
+};
+
+type PredictionVariant = "realtime" | "history";
+
+interface PredictionSourceCardProps {
+  title: string;
+  subtitle: string;
+  rounds: number;
+  weight: number;
+  distribution: Distribution;
+  variant: PredictionVariant;
+}
+
+const PredictionSourceCard: React.FC<PredictionSourceCardProps> = ({
+  title,
+  subtitle,
+  rounds,
+  weight,
+  distribution,
+  variant,
+}) => {
+  const variantStyles =
+    variant === "realtime"
+      ? "border-sky-200 bg-sky-50/80 text-sky-900"
+      : "border-slate-200 bg-white/80 text-slate-900";
+  const barColor = variant === "realtime" ? "bg-sky-500" : "bg-slate-500";
+  const roundsLabel = rounds
+    ? `${rounds} round${rounds === 1 ? "" : "s"}`
+    : variant === "realtime"
+    ? "Play now"
+    : "Stored history";
+
+  return (
+    <div className={`rounded-xl border ${variantStyles} p-3`}>
+      <div className="flex items-start justify-between">
+        <div>
+          <div className="text-sm font-semibold text-slate-800">{title}</div>
+          <p className="text-xs text-slate-500">{subtitle}</p>
+        </div>
+        <div className="text-right text-xs text-slate-500">
+          <div className="font-semibold text-slate-700">{roundsLabel}</div>
+          <div>{formatPercent(weight, 0)} weight</div>
+        </div>
+      </div>
+      <DistributionList distribution={distribution} barColor={barColor} />
+    </div>
+  );
+};
+
+const DistributionList: React.FC<{ distribution: Distribution; barColor: string }> = ({
+  distribution,
+  barColor,
+}) => {
+  return (
+    <div className="mt-3 space-y-1">
+      {MOVES.map(move => {
+        const value = distribution[move] ?? 0;
+        return (
+          <div key={move} className="space-y-0.5">
+            <div className="flex justify-between text-xs text-slate-500">
+              <span>{formatMove(move)}</span>
+              <span>{formatPercent(value, 0)}</span>
+            </div>
+            <div className="h-2 rounded-full bg-slate-200/70">
+              <div className={`h-full rounded-full ${barColor}`} style={{ width: `${Math.min(100, Math.max(0, value * 100))}%` }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const ExpertChips: React.FC<{ snapshot: LiveInsightSnapshot | null }> = ({ snapshot }) => {
+  const realtimeExperts = snapshot?.realtimeExperts ?? [];
+  const historyExperts = snapshot?.historyExperts ?? [];
+  const hasSignals = realtimeExperts.length + historyExperts.length > 0;
+
+  return (
+    <div>
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Signals</div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {realtimeExperts.map(expert => (
+          <ExpertChip key={`realtime-${expert.name}`} expert={expert} variant="realtime" />
+        ))}
+        {historyExperts.map(expert => (
+          <ExpertChip key={`history-${expert.name}`} expert={expert} variant="history" />
+        ))}
+        {!hasSignals && (
+          <span className="text-xs text-slate-500">Play a few rounds to surface expert signals.</span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+type ExpertVariant = "realtime" | "history";
+
+interface ExpertChipProps {
+  expert: { name: string; weight: number; topMove: Move | null; probability: number };
+  variant: ExpertVariant;
+}
+
+const ExpertChip: React.FC<ExpertChipProps> = ({ expert, variant }) => {
+  const moveLabel = expert.topMove ? `${getMoveEmoji(expert.topMove)} ${formatMove(expert.topMove)}` : "No move yet";
+  const label = variant === "realtime" ? "Realtime" : "Previous";
+  const chipClass = variant === "realtime" ? "bg-sky-100 text-sky-800" : "bg-slate-100 text-slate-700";
+  const badgeClass =
+    variant === "realtime"
+      ? "bg-sky-200/90 text-sky-800"
+      : "bg-slate-200 text-slate-600";
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold ${chipClass}`}
+      title={`${expert.name} suggests ${formatMove(expert.topMove)} at ${formatPercent(expert.probability, 0)}.`}
+    >
+      <span>{expert.name}:</span>
+      <span>{moveLabel}</span>
+      <span className="text-[11px] font-normal text-slate-600">{formatPercent(expert.probability, 0)}</span>
+      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${badgeClass}`}>
+        {label}
+      </span>
+    </span>
+  );
+};
+
+interface HistoryPeekProps {
+  open: boolean;
+  onToggle: () => void;
+  favoriteMove: { move: Move; pct: number } | null;
+  topTransition: { from: Move; to: Move; pct: number } | null;
+  confidenceBand: { band: string; pct: number } | null;
+  updatedAt: string | null;
+  rounds: number;
+}
+
+const HistoryPeek: React.FC<HistoryPeekProps> = ({
+  open,
+  onToggle,
+  favoriteMove,
+  topTransition,
+  confidenceBand,
+  updatedAt,
+  rounds,
+}) => {
+  const updatedLabel = formatRelativeTime(updatedAt);
+
+  return (
+    <div className="rounded-xl border border-slate-200/80 bg-white/80 p-3">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center justify-between text-left text-sm font-medium text-slate-700"
+      >
+        <span>History peek</span>
+        <span className="text-xs text-slate-500">{open ? "Hide" : "Show"}</span>
+      </button>
+      {open && (
+        <div className="mt-3 space-y-3 text-xs text-slate-600">
+          <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-slate-500">
+            <span>From older games</span>
+            <span>
+              {rounds ? `${rounds} round${rounds === 1 ? "" : "s"}` : "No saved rounds"}
+            </span>
+            {updatedLabel && <span>updated {updatedLabel}</span>}
+          </div>
+          <dl className="grid gap-3 text-sm sm:grid-cols-3">
+            <HistoryStat
+              label="Favorite move"
+              value={
+                favoriteMove
+                  ? `${getMoveEmoji(favoriteMove.move)} ${formatMove(favoriteMove.move)}`
+                  : "No history yet"
+              }
+              detail={favoriteMove ? formatPercent(favoriteMove.pct, 0) : undefined}
+            />
+            <HistoryStat
+              label="Top transition"
+              value={
+                topTransition
+                  ? `${formatMove(topTransition.from)} → ${formatMove(topTransition.to)}`
+                  : "No transition yet"
+              }
+              detail={topTransition ? formatPercent(topTransition.pct, 0) : undefined}
+            />
+            <HistoryStat
+              label="Average confidence band"
+              value={confidenceBand ? formatConfidenceBucket(confidenceBand.band) : "No band yet"}
+              detail={confidenceBand ? formatPercent(confidenceBand.pct, 0) : undefined}
+            />
+          </dl>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const HistoryStat: React.FC<{ label: string; value: string; detail?: string }> = ({ label, value, detail }) => (
+  <div className="rounded-lg border border-slate-200/70 bg-slate-50/70 px-3 py-2">
+    <dt className="text-[11px] uppercase tracking-wide text-slate-500">{label}</dt>
+    <dd className="mt-1 text-sm font-medium text-slate-800">
+      {value}
+      {detail ? <span className="ml-1 text-xs font-normal text-slate-500">{detail}</span> : null}
+    </dd>
+  </div>
+);
+
+function formatConfidenceBucket(bucket: string): string {
+  switch (bucket) {
+    case "low":
+      return "Low confidence";
+    case "medium":
+      return "Medium confidence";
+    case "high":
+      return "High confidence";
+    case "unknown":
+      return "Mixed confidence";
+    default:
+      return bucket.charAt(0).toUpperCase() + bucket.slice(1);
+  }
+}
+
 const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, historicalRounds, titleRef, onClose }) => {
   const [threshold, setThreshold] = useState(0.7);
+  const [historyPeekOpen, setHistoryPeekOpen] = useState(false);
+
+  const timelineRounds = useMemo(() => sortRoundsChronologically(liveRounds), [liveRounds]);
+  const historyOnlyRounds = useMemo(() => {
+    if (!historicalRounds.length) return [] as RoundLog[];
+    const liveIds = new Set(liveRounds.map(round => round.id));
+    return historicalRounds.filter(round => !liveIds.has(round.id));
+  }, [historicalRounds, liveRounds]);
+
+  const historyFavoriteMove = useMemo(() => {
+    if (!historyOnlyRounds.length) return null;
+    const counts: Record<Move, number> = { rock: 0, paper: 0, scissors: 0 };
+    historyOnlyRounds.forEach(round => {
+      counts[round.player] = (counts[round.player] ?? 0) + 1;
+    });
+    const total = historyOnlyRounds.length;
+    const move = MOVES.reduce((best, candidate) => (counts[candidate] > counts[best] ? candidate : best), MOVES[0]);
+    return { move, pct: total ? counts[move] / total : 0 };
+  }, [historyOnlyRounds]);
+
+  const historyTopTransition = useMemo(() => {
+    if (historyOnlyRounds.length < 2) return null;
+    const sorted = sortRoundsChronologically(historyOnlyRounds);
+    const counts = new Map<string, { from: Move; to: Move; count: number }>();
+    for (let index = 1; index < sorted.length; index++) {
+      const prev = sorted[index - 1];
+      const current = sorted[index];
+      if (!prev || !current) continue;
+      const key = `${prev.player}->${current.player}`;
+      const existing = counts.get(key);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        counts.set(key, { from: prev.player, to: current.player, count: 1 });
+      }
+    }
+    let best: { from: Move; to: Move; count: number } | null = null;
+    for (const value of counts.values()) {
+      if (!best || value.count > best.count) {
+        best = value;
+      }
+    }
+    if (!best) return null;
+    const totalTransitions = Math.max(1, sorted.length - 1);
+    const bestTransition = best;
+    return {
+      from: bestTransition.from,
+      to: bestTransition.to,
+      count: bestTransition.count,
+      pct: bestTransition.count / totalTransitions,
+    };
+  }, [historyOnlyRounds]);
+
+  const historyConfidenceBand = useMemo(() => {
+    if (!historyOnlyRounds.length) return null;
+    const bandCounts = new Map<string, number>();
+    historyOnlyRounds.forEach(round => {
+      const key = round.confidenceBucket ?? "unknown";
+      bandCounts.set(key, (bandCounts.get(key) ?? 0) + 1);
+    });
+    let best: { band: string; count: number } | null = null;
+    for (const [band, count] of bandCounts.entries()) {
+      if (!best || count > best.count) {
+        best = { band, count };
+      }
+    }
+    if (!best) return null;
+    const bestBand = best;
+    return { band: bestBand.band, pct: bestBand.count / historyOnlyRounds.length };
+  }, [historyOnlyRounds]);
 
   const derived = useMemo(() => {
     const entries = computeDerivedEntries(historicalRounds);
@@ -415,11 +849,6 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
       .slice(0, 3);
   }, [derived.surpriseValues]);
 
-  const recentLiveRounds = useMemo(() => {
-    const sorted = sortRoundsChronologically(liveRounds);
-    return sorted.slice(-12);
-  }, [liveRounds]);
-
   const reliabilityPoints = useMemo(() => {
     const points = derived.bins
       .filter(bin => bin.total)
@@ -472,89 +901,56 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
         <div className="space-y-6">
           <section className="rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div>
+              <div className="space-y-2">
                 <h3 className="text-base font-semibold text-slate-800">Live AI Insight</h3>
-                <p className="text-xs text-slate-500">Confidence, probabilities, and expert blend for the next move.</p>
+                <p className="text-xs text-slate-500">
+                  I’m using what you just did now plus what I learned before. I trust now more.
+                </p>
+                <p className="text-xs text-slate-500">{snapshot?.reason || "Not enough signal yet."}</p>
               </div>
-              <div className="text-right text-sm text-slate-600">
+              <div className="flex flex-col items-end gap-2 text-right text-sm text-slate-600">
                 <div className="font-semibold text-slate-900">{formatPercent(snapshot?.confidence ?? null, 0)} confidence</div>
                 <div>{snapshot?.policy === "mixer" ? "Mixer" : "Heuristic"} policy</div>
-              </div>
-            </div>
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Predicted move</div>
-                <div className="text-2xl font-semibold text-slate-900">{formatMove(snapshot?.predictedMove ?? null)}</div>
-                <p className="text-xs text-slate-500">AI plans to counter with {formatMove(snapshot?.counterMove ?? null)}.</p>
-                <div className="mt-3 space-y-2">
-                  {MOVES.map(move => {
-                    const value = snapshot?.distribution?.[move] ?? 0;
-                    return (
-                      <div key={move} className="space-y-1">
-                        <div className="flex justify-between text-xs text-slate-500">
-                          <span>{formatMove(move)}</span>
-                          <span>{formatPercent(value, 0)}</span>
-                        </div>
-                        <div className="h-2 rounded-full bg-slate-200">
-                          <div
-                            className="h-full rounded-full bg-sky-500"
-                            style={{ width: `${Math.max(0, Math.min(1, value)) * 100}%` }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="space-y-3">
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Why</div>
-                  <p className="mt-1 text-sm text-slate-700">{snapshot?.reason || "Not enough signal yet."}</p>
-                </div>
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Top experts</div>
-                  <ul className="mt-1 space-y-1 text-sm text-slate-700">
-                    {snapshot?.topExperts.length ? (
-                      snapshot.topExperts.map(expert => (
-                        <li key={expert.name} className="rounded-lg bg-slate-50 px-3 py-2 shadow-inner">
-                          <div className="flex items-center justify-between text-xs text-slate-500">
-                            <span>{expert.name}</span>
-                            <span>{formatPercent(expert.weight, 0)} weight</span>
-                          </div>
-                          <div className="text-sm text-slate-700">
-                            Favours {formatMove(expert.topMove)} ({formatPercent(expert.probability, 0)})
-                          </div>
-                        </li>
-                      ))
-                    ) : (
-                      <li className="text-sm text-slate-500">No expert signal yet.</li>
-                    )}
-                  </ul>
-                </div>
-              </div>
-            </div>
-            <div className="mt-4">
-              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Recent rounds</div>
-              <div className="mt-2 grid gap-2 text-xs text-slate-600 sm:grid-cols-2 lg:grid-cols-3">
-                {recentLiveRounds.length ? (
-                  recentLiveRounds.map((round, index) => (
-                    <div key={round.id} className="rounded-lg border border-slate-200/70 bg-slate-50 px-3 py-2">
-                      <div className="flex items-center justify-between text-[11px] text-slate-500">
-                        <span>Round {recentLiveRounds.length - index}</span>
-                        <span>{formatPercent(round.confidence ?? 0, 0)}</span>
-                      </div>
-                      <div className="mt-1 text-sm font-semibold text-slate-800">
-                        You {formatMove(round.player)} vs AI {formatMove(round.ai)}
-                      </div>
-                      <div className="text-[11px] text-slate-500">{round.reason}</div>
+                {snapshot?.conflict &&
+                  snapshot.conflict.realtime &&
+                  snapshot.conflict.history &&
+                  snapshot.conflict.realtime !== snapshot.conflict.history && (
+                    <div className="flex items-center gap-1 rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">
+                      <span>Pattern shift</span>
+                      <span>
+                        {formatMove(snapshot.conflict.realtime)} ≠ {formatMove(snapshot.conflict.history)}
+                      </span>
                     </div>
-                  ))
-                ) : (
-                  <div className="rounded-lg border border-dashed border-slate-200 px-3 py-4 text-center text-sm text-slate-500">
-                    Play a few rounds to populate the live timeline.
-                  </div>
-                )}
+                  )}
               </div>
+            </div>
+            <div className="mt-4 space-y-6">
+              <BlendMeter snapshot={snapshot} />
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="space-y-4">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Next move plan</div>
+                    <div className="mt-1 text-2xl font-semibold text-slate-900">
+                      {formatMove(snapshot?.predictedMove ?? null)}
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      AI counters with {formatMove(snapshot?.counterMove ?? null)}.
+                    </p>
+                  </div>
+                  <SessionTimeline rounds={timelineRounds} />
+                </div>
+                <PredictionSources snapshot={snapshot} realtimeRounds={timelineRounds.length} />
+              </div>
+              <ExpertChips snapshot={snapshot} />
+              <HistoryPeek
+                open={historyPeekOpen}
+                onToggle={() => setHistoryPeekOpen(prev => !prev)}
+                favoriteMove={historyFavoriteMove}
+                topTransition={historyTopTransition}
+                confidenceBand={historyConfidenceBand}
+                updatedAt={snapshot?.historyUpdatedAt ?? null}
+                rounds={snapshot?.historyRounds ?? historyOnlyRounds.length}
+              />
             </div>
           </section>
 

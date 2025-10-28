@@ -2,6 +2,60 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { AIMode, BestOf, Mode, Move, Outcome } from "./gameTypes";
 import { usePlayers } from "./players";
 
+export type SerializedExpertState =
+  | { type: "FrequencyExpert"; window: number; alpha: number }
+  | { type: "RecencyExpert"; gamma: number; alpha: number }
+  | {
+      type: "MarkovExpert";
+      order: number;
+      alpha: number;
+      table: Array<[string, { rock: number; paper: number; scissors: number }]>;
+    }
+  | {
+      type: "OutcomeExpert";
+      alpha: number;
+      byOutcome: {
+        win: { rock: number; paper: number; scissors: number };
+        lose: { rock: number; paper: number; scissors: number };
+        tie: { rock: number; paper: number; scissors: number };
+      };
+    }
+  | {
+      type: "WinStayLoseShiftExpert";
+      alpha: number;
+      table: Array<[string, { rock: number; paper: number; scissors: number }]>;
+    }
+  | {
+      type: "PeriodicExpert";
+      maxPeriod: number;
+      minPeriod: number;
+      window: number;
+      confident: number;
+    }
+  | {
+      type: "BaitResponseExpert";
+      alpha: number;
+      table: {
+        rock: { rock: number; paper: number; scissors: number };
+        paper: { rock: number; paper: number; scissors: number };
+        scissors: { rock: number; paper: number; scissors: number };
+      };
+    };
+
+export interface HedgeMixerSerializedState {
+  eta: number;
+  weights: number[];
+  experts: SerializedExpertState[];
+}
+
+export interface StoredPredictorModelState {
+  profileId: string;
+  modelVersion: number;
+  updatedAt: string;
+  roundsSeen: number;
+  state: HedgeMixerSerializedState;
+}
+
 export type DecisionPolicy = "mixer" | "heuristic";
 
 export interface ExpertSample {
@@ -15,6 +69,13 @@ export interface MixerTrace {
   counter: Move;
   topExperts: ExpertSample[];
   confidence: number;
+  realtimeWeight?: number;
+  historyWeight?: number;
+  realtimeTopExperts?: ExpertSample[];
+  historyTopExperts?: ExpertSample[];
+  realtimeRounds?: number;
+  historyRounds?: number;
+  conflict?: { realtime: Move | null; history: Move | null } | null;
 }
 
 export interface HeuristicTrace {
@@ -115,6 +176,9 @@ interface StatsContextValue {
   updateProfile: (id: string, patch: StatsProfileUpdate) => void;
   forkProfileVersion: (id: string) => StatsProfile | null;
   exportRoundsCsv: () => string;
+  getModelStateForProfile: (profileId: string) => StoredPredictorModelState | null;
+  saveModelStateForProfile: (profileId: string, state: StoredPredictorModelState) => void;
+  clearModelStateForProfile: (profileId: string) => void;
   adminRounds: RoundLog[];
   adminMatches: MatchSummary[];
   adminProfiles: StatsProfile[];
@@ -130,6 +194,7 @@ const ROUND_KEY = "rps_stats_rounds_v1";
 const MATCH_KEY = "rps_stats_matches_v1";
 const PROFILE_KEY = "rps_stats_profiles_v1";
 const CURRENT_PROFILE_KEY = "rps_current_stats_profile_v1";
+const MODEL_STATE_KEY = "rps_predictor_models_v1";
 const MAX_ROUNDS = 1000;
 const PRIMARY_BASE = "primary";
 const PRACTICE_LEGACY_TYPE = "Practice Legacy" as const;
@@ -182,6 +247,55 @@ function saveToStorage(key: string, value: unknown) {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (err) {
     console.warn("Failed to persist stats", err);
+  }
+}
+
+function loadModelStates(): StoredPredictorModelState[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(MODEL_STATE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item: StoredPredictorModelState | any): StoredPredictorModelState | null => {
+        if (!item || typeof item !== "object") return null;
+        const profileId = typeof item.profileId === "string" ? item.profileId : null;
+        const modelVersion = Number.isFinite(item.modelVersion) ? Math.floor(item.modelVersion) : null;
+        const updatedAt = typeof item.updatedAt === "string" ? item.updatedAt : null;
+        const roundsSeen = Number.isFinite(item.roundsSeen) ? Number(item.roundsSeen) : 0;
+        const state = item.state && typeof item.state === "object" ? item.state : null;
+        if (!profileId || modelVersion == null || !state) return null;
+        const eta = Number.isFinite(state.eta) ? Number(state.eta) : 1.6;
+        const weights = Array.isArray(state.weights)
+          ? state.weights.map((value: unknown) => (Number.isFinite(value) ? Number(value) : 1))
+          : [];
+        const experts = Array.isArray(state.experts) ? state.experts : [];
+        return {
+          profileId,
+          modelVersion,
+          updatedAt: updatedAt ?? new Date(0).toISOString(),
+          roundsSeen,
+          state: {
+            eta,
+            weights,
+            experts: experts as SerializedExpertState[],
+          },
+        } satisfies StoredPredictorModelState;
+      })
+      .filter((entry): entry is StoredPredictorModelState => entry !== null);
+  } catch (err) {
+    console.warn("Failed to read predictor model state", err);
+    return [];
+  }
+}
+
+function saveModelStates(states: StoredPredictorModelState[]) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(MODEL_STATE_KEY, JSON.stringify(states));
+  } catch (err) {
+    console.warn("Failed to persist predictor model state", err);
   }
 }
 
@@ -297,6 +411,8 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   const [roundsDirty, setRoundsDirty] = useState(false);
   const [matchesDirty, setMatchesDirty] = useState(false);
   const [profilesDirty, setProfilesDirty] = useState(false);
+  const [modelStates, setModelStates] = useState<StoredPredictorModelState[]>(() => loadModelStates());
+  const [modelStatesDirty, setModelStatesDirty] = useState(false);
   const sessionIdRef = useRef<string>("");
   const { currentPlayerId, currentPlayer } = usePlayers();
 
@@ -406,6 +522,38 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   }, [profilesDirty, profiles]);
 
   useEffect(() => {
+    if (!modelStatesDirty) return;
+    const timer = window.setTimeout(() => {
+      saveModelStates(modelStates);
+      setModelStatesDirty(false);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [modelStatesDirty, modelStates]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const flush = () => {
+      if (!modelStatesDirty) return;
+      saveModelStates(modelStates);
+      setModelStatesDirty(false);
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        flush();
+      }
+    };
+    const handleBeforeUnload = () => {
+      flush();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [modelStatesDirty, modelStates]);
+
+  useEffect(() => {
     if (!currentPlayerId) return;
     const fallbackProfile = playerProfiles[0];
     if (!fallbackProfile) return;
@@ -434,6 +582,34 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     setCurrentProfileId(id);
     saveCurrentProfileId(id);
   }, [playerProfiles]);
+
+  const getModelStateForProfile = useCallback(
+    (profileId: string): StoredPredictorModelState | null => {
+      return modelStates.find(state => state.profileId === profileId) ?? null;
+    },
+    [modelStates],
+  );
+
+  const saveModelStateForProfile = useCallback(
+    (profileId: string, state: StoredPredictorModelState) => {
+      setModelStates(prev => {
+        const filtered = prev.filter(entry => entry.profileId !== profileId);
+        return filtered.concat({ ...state, profileId });
+      });
+      setModelStatesDirty(true);
+    },
+    [],
+  );
+
+  const clearModelStateForProfile = useCallback((profileId: string) => {
+    setModelStates(prev => {
+      const next = prev.filter(entry => entry.profileId !== profileId);
+      if (next.length !== prev.length) {
+        setModelStatesDirty(true);
+      }
+      return next;
+    });
+  }, []);
 
   const createProfile = useCallback(
     (playerIdOverride?: string) => {
@@ -671,6 +847,9 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     updateProfile,
     forkProfileVersion,
     exportRoundsCsv,
+    getModelStateForProfile,
+    saveModelStateForProfile,
+    clearModelStateForProfile,
     adminRounds: allRounds,
     adminMatches: allMatches,
     adminProfiles: profiles,
@@ -691,6 +870,9 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     updateProfile,
     forkProfileVersion,
     exportRoundsCsv,
+    getModelStateForProfile,
+    saveModelStateForProfile,
+    clearModelStateForProfile,
     allRounds,
     allMatches,
     profiles,

@@ -1,7 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence, type Transition, useReducedMotion } from "framer-motion";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
-import { StatsProvider, useStats, RoundLog, MixerTrace, HeuristicTrace, DecisionPolicy } from "./stats";
+import {
+  StatsProvider,
+  useStats,
+  RoundLog,
+  MixerTrace,
+  HeuristicTrace,
+  DecisionPolicy,
+  StoredPredictorModelState,
+  HedgeMixerSerializedState,
+  SerializedExpertState,
+} from "./stats";
 import { PlayersProvider, usePlayers, Grade, PlayerProfile, CONSENT_TEXT_VERSION, GRADE_OPTIONS } from "./players";
 import { DEV_MODE_ENABLED } from "./devMode";
 import { DeveloperConsole } from "./DeveloperConsole";
@@ -325,6 +335,12 @@ const UNIFORM: Dist = { rock: 1/3, paper: 1/3, scissors: 1/3 };
 function normalize(d: Dist): Dist { const s = d.rock + d.paper + d.scissors; return s>0? { rock: d.rock/s, paper: d.paper/s, scissors: d.scissors/s } : { ...UNIFORM }; }
 function fromCounts(c: Record<Move, number>, alpha=1): Dist { return normalize({ rock: (c.rock||0)+alpha, paper:(c.paper||0)+alpha, scissors:(c.scissors||0)+alpha }); }
 
+const MODEL_STATE_VERSION = 1;
+const HISTORY_BASE_WEIGHT = 0.3;
+const HISTORY_EARLY_WEIGHT = 0.6;
+const HISTORY_SWITCH_ROUNDS = 4;
+const HISTORY_DECAY_MS = 45 * 60 * 1000;
+
 // Context passed to experts
 interface Ctx { playerMoves: Move[]; aiMoves: Move[]; outcomes: Outcome[]; rng: ()=>number; }
 
@@ -340,6 +356,19 @@ class FrequencyExpert implements Expert{
     return fromCounts(counts, this.alpha);
   }
   update(){ /* stateless */ }
+  getState(): SerializedExpertState {
+    return { type: "FrequencyExpert", window: this.W, alpha: this.alpha };
+  }
+  setState(state: Extract<SerializedExpertState, { type: "FrequencyExpert" }>) {
+    if (!state) return;
+    if (Number.isFinite(state.window)) {
+      const next = Math.max(1, Math.floor(state.window));
+      this.W = next;
+    }
+    if (Number.isFinite(state.alpha)) {
+      this.alpha = Math.max(0, state.alpha);
+    }
+  }
 }
 
 // Recency-biased frequency (exponential decay)
@@ -351,6 +380,19 @@ class RecencyExpert implements Expert{
     return fromCounts(w, this.alpha);
   }
   update(){}
+  getState(): SerializedExpertState {
+    return { type: "RecencyExpert", gamma: this.gamma, alpha: this.alpha };
+  }
+  setState(state: Extract<SerializedExpertState, { type: "RecencyExpert" }>) {
+    if (!state) return;
+    if (Number.isFinite(state.gamma)) {
+      const next = Number(state.gamma);
+      this.gamma = Math.min(0.995, Math.max(0.01, next));
+    }
+    if (Number.isFinite(state.alpha)) {
+      this.alpha = Math.max(0, state.alpha);
+    }
+  }
 }
 
 // Markov n-gram with Laplace smoothing + online update
@@ -379,6 +421,37 @@ class MarkovExpert implements Expert{
     const entry = this.table.get(k) || {rock:0,paper:0,scissors:0};
     entry[actual]++; this.table.set(k, entry);
   }
+  getState(): SerializedExpertState {
+    return {
+      type: "MarkovExpert",
+      order: this.k,
+      alpha: this.alpha,
+      table: Array.from(this.table.entries()).map(([key, counts]) => [key, { ...counts }]),
+    };
+  }
+  setState(state: Extract<SerializedExpertState, { type: "MarkovExpert" }>) {
+    if (!state) return;
+    if (Number.isFinite(state.order)) {
+      this.k = Math.max(1, Math.floor(state.order));
+    }
+    if (Number.isFinite(state.alpha)) {
+      this.alpha = Math.max(0, state.alpha);
+    }
+    if (Array.isArray(state.table)) {
+      const next = new Map<string, { rock: number; paper: number; scissors: number }>();
+      state.table.forEach(entry => {
+        if (!Array.isArray(entry) || entry.length !== 2) return;
+        const [key, counts] = entry as [string, { rock: number; paper: number; scissors: number }];
+        if (typeof key !== "string" || !counts || typeof counts !== "object") return;
+        next.set(key, {
+          rock: Number.isFinite((counts as any).rock) ? Number((counts as any).rock) : 0,
+          paper: Number.isFinite((counts as any).paper) ? Number((counts as any).paper) : 0,
+          scissors: Number.isFinite((counts as any).scissors) ? Number((counts as any).scissors) : 0,
+        });
+      });
+      this.table = next;
+    }
+  }
 }
 
 // Outcome-conditioned next move
@@ -393,6 +466,36 @@ class OutcomeExpert implements Expert{
   update(ctx: Ctx, actual: Move){
     const last = ctx.outcomes[ctx.outcomes.length-1]; if (!last) return;
     this.byOutcome[last][actual]++;
+  }
+  getState(): SerializedExpertState {
+    return {
+      type: "OutcomeExpert",
+      alpha: this.alpha,
+      byOutcome: {
+        win: { ...this.byOutcome.win },
+        lose: { ...this.byOutcome.lose },
+        tie: { ...this.byOutcome.tie },
+      },
+    };
+  }
+  setState(state: Extract<SerializedExpertState, { type: "OutcomeExpert" }>) {
+    if (!state) return;
+    if (Number.isFinite(state.alpha)) {
+      this.alpha = Math.max(0, state.alpha);
+    }
+    if (state.byOutcome) {
+      const keys: Outcome[] = ["win", "lose", "tie"];
+      keys.forEach(key => {
+        const source = (state.byOutcome as any)[key];
+        if (source && typeof source === "object") {
+          this.byOutcome[key] = {
+            rock: Number.isFinite(source.rock) ? Number(source.rock) : 0,
+            paper: Number.isFinite(source.paper) ? Number(source.paper) : 0,
+            scissors: Number.isFinite(source.scissors) ? Number(source.scissors) : 0,
+          };
+        }
+      });
+    }
   }
 }
 
@@ -411,6 +514,33 @@ class WinStayLoseShiftExpert implements Expert{
     if (!lastM || !lastO) return;
     const key = `${lastO}|${lastM}`; const counts = this.table.get(key) || {rock:0,paper:0,scissors:0};
     counts[actual]++; this.table.set(key, counts);
+  }
+  getState(): SerializedExpertState {
+    return {
+      type: "WinStayLoseShiftExpert",
+      alpha: this.alpha,
+      table: Array.from(this.table.entries()).map(([key, counts]) => [key, { ...counts }]),
+    };
+  }
+  setState(state: Extract<SerializedExpertState, { type: "WinStayLoseShiftExpert" }>) {
+    if (!state) return;
+    if (Number.isFinite(state.alpha)) {
+      this.alpha = Math.max(0, state.alpha);
+    }
+    if (Array.isArray(state.table)) {
+      const next = new Map<string, { rock: number; paper: number; scissors: number }>();
+      state.table.forEach(entry => {
+        if (!Array.isArray(entry) || entry.length !== 2) return;
+        const [key, counts] = entry as [string, { rock: number; paper: number; scissors: number }];
+        if (typeof key !== "string" || !counts || typeof counts !== "object") return;
+        next.set(key, {
+          rock: Number.isFinite((counts as any).rock) ? Number((counts as any).rock) : 0,
+          paper: Number.isFinite((counts as any).paper) ? Number((counts as any).paper) : 0,
+          scissors: Number.isFinite((counts as any).scissors) ? Number((counts as any).scissors) : 0,
+        });
+      });
+      this.table = next;
+    }
   }
 }
 
@@ -432,6 +562,22 @@ class PeriodicExpert implements Expert{
     return normalize({...dist, rock:dist.rock+0.05, paper:dist.paper+0.05, scissors:dist.scissors+0.05});
   }
   update(){}
+  getState(): SerializedExpertState {
+    return {
+      type: "PeriodicExpert",
+      maxPeriod: this.maxPeriod,
+      minPeriod: this.minPeriod,
+      window: this.window,
+      confident: this.confident,
+    };
+  }
+  setState(state: Extract<SerializedExpertState, { type: "PeriodicExpert" }>) {
+    if (!state) return;
+    if (Number.isFinite(state.maxPeriod)) this.maxPeriod = Math.max(2, Math.floor(state.maxPeriod));
+    if (Number.isFinite(state.minPeriod)) this.minPeriod = Math.max(1, Math.floor(state.minPeriod));
+    if (Number.isFinite(state.window)) this.window = Math.max(3, Math.floor(state.window));
+    if (Number.isFinite(state.confident)) this.confident = Math.max(0, Math.min(1, state.confident));
+  }
 }
 
 // Response-to-our-last-move (bait detector)
@@ -445,6 +591,35 @@ class BaitResponseExpert implements Expert{
   update(ctx: Ctx, actual: Move){
     const lastAI = ctx.aiMoves[ctx.aiMoves.length-1]; if (!lastAI) return;
     this.table[lastAI][actual]++;
+  }
+  getState(): SerializedExpertState {
+    return {
+      type: "BaitResponseExpert",
+      alpha: this.alpha,
+      table: {
+        rock: { ...this.table.rock },
+        paper: { ...this.table.paper },
+        scissors: { ...this.table.scissors },
+      },
+    };
+  }
+  setState(state: Extract<SerializedExpertState, { type: "BaitResponseExpert" }>) {
+    if (!state) return;
+    if (Number.isFinite(state.alpha)) {
+      this.alpha = Math.max(0, state.alpha);
+    }
+    if (state.table) {
+      (Object.keys(this.table) as (keyof typeof this.table)[]).forEach(key => {
+        const source = (state.table as any)[key];
+        if (source && typeof source === "object") {
+          this.table[key] = {
+            rock: Number.isFinite(source.rock) ? Number(source.rock) : 0,
+            paper: Number.isFinite(source.paper) ? Number(source.paper) : 0,
+            scissors: Number.isFinite(source.scissors) ? Number(source.scissors) : 0,
+          };
+        }
+      });
+    }
   }
 }
 
@@ -489,6 +664,161 @@ class HedgeMixer{
       }))
     };
   }
+  getWeights(){
+    return [...this.w];
+  }
+  setWeights(weights: number[]){
+    if (!Array.isArray(weights)) return;
+    this.w = this.experts.map((_, index) => {
+      const value = weights[index];
+      if (Number.isFinite(value) && value > 0) {
+        return Number(value);
+      }
+      return 1;
+    });
+  }
+}
+
+function createDefaultExperts(): Expert[] {
+  return [
+    new FrequencyExpert(20, 1),
+    new RecencyExpert(0.85, 1),
+    new MarkovExpert(1, 1),
+    new MarkovExpert(2, 1),
+    new OutcomeExpert(1),
+    new WinStayLoseShiftExpert(1),
+    new PeriodicExpert(5, 2, 18, 0.65),
+    new BaitResponseExpert(1),
+  ];
+}
+
+function serializeExpertInstance(expert: Expert): SerializedExpertState {
+  if (expert instanceof FrequencyExpert) return expert.getState();
+  if (expert instanceof RecencyExpert) return expert.getState();
+  if (expert instanceof MarkovExpert) return expert.getState();
+  if (expert instanceof OutcomeExpert) return expert.getState();
+  if (expert instanceof WinStayLoseShiftExpert) return expert.getState();
+  if (expert instanceof PeriodicExpert) return expert.getState();
+  if (expert instanceof BaitResponseExpert) return expert.getState();
+  return { type: "FrequencyExpert", window: 20, alpha: 1 };
+}
+
+function instantiateExpertFromState(state: SerializedExpertState | null | undefined): Expert {
+  if (!state) {
+    return createDefaultExperts()[0];
+  }
+  switch (state.type) {
+    case "FrequencyExpert": {
+      const expert = new FrequencyExpert(state.window ?? 20, state.alpha ?? 1);
+      expert.setState(state);
+      return expert;
+    }
+    case "RecencyExpert": {
+      const expert = new RecencyExpert(state.gamma ?? 0.85, state.alpha ?? 1);
+      expert.setState(state);
+      return expert;
+    }
+    case "MarkovExpert": {
+      const expert = new MarkovExpert(state.order ?? 1, state.alpha ?? 1);
+      expert.setState(state);
+      return expert;
+    }
+    case "OutcomeExpert": {
+      const expert = new OutcomeExpert(state.alpha ?? 1);
+      expert.setState(state);
+      return expert;
+    }
+    case "WinStayLoseShiftExpert": {
+      const expert = new WinStayLoseShiftExpert(state.alpha ?? 1);
+      expert.setState(state);
+      return expert;
+    }
+    case "PeriodicExpert": {
+      const expert = new PeriodicExpert(
+        state.maxPeriod ?? 5,
+        state.minPeriod ?? 2,
+        state.window ?? 18,
+        state.confident ?? 0.65,
+      );
+      expert.setState(state);
+      return expert;
+    }
+    case "BaitResponseExpert": {
+      const expert = new BaitResponseExpert(state.alpha ?? 1);
+      expert.setState(state);
+      return expert;
+    }
+    default: {
+      const fallback = new FrequencyExpert(20, 1);
+      return fallback;
+    }
+  }
+}
+
+function serializeMixerInstance(mixer: HedgeMixer): HedgeMixerSerializedState {
+  return {
+    eta: mixer.eta,
+    weights: mixer.getWeights(),
+    experts: mixer.experts.map(serializeExpertInstance),
+  };
+}
+
+function instantiateMixerFromState(state: HedgeMixerSerializedState | null | undefined): HedgeMixer {
+  if (state && Array.isArray(state.experts) && state.experts.length) {
+    const experts = state.experts.map(instantiateExpertFromState);
+    const mixer = new HedgeMixer(experts, EXPERT_LABELS, Number.isFinite(state.eta) ? Number(state.eta) : 1.6);
+    if (Array.isArray(state.weights) && state.weights.length) {
+      mixer.setWeights(state.weights);
+    }
+    return mixer;
+  }
+  const experts = createDefaultExperts();
+  return new HedgeMixer(experts, EXPERT_LABELS, 1.6);
+}
+
+function blendDistributions(realtime: Dist, history: Dist, weights: { realtimeWeight: number; historyWeight: number }): Dist {
+  const combined: Dist = {
+    rock: realtime.rock * weights.realtimeWeight + history.rock * weights.historyWeight,
+    paper: realtime.paper * weights.realtimeWeight + history.paper * weights.historyWeight,
+    scissors: realtime.scissors * weights.realtimeWeight + history.scissors * weights.historyWeight,
+  };
+  if (combined.rock === 0 && combined.paper === 0 && combined.scissors === 0) {
+    return { ...UNIFORM };
+  }
+  return normalize(combined);
+}
+
+function computeBlendWeights(
+  sessionRounds: number,
+  persisted: StoredPredictorModelState | null,
+): { realtimeWeight: number; historyWeight: number } {
+  const hasHistory = Boolean(
+    persisted &&
+      persisted.roundsSeen > 0 &&
+      persisted.state &&
+      Array.isArray(persisted.state.experts) &&
+      persisted.state.experts.length,
+  );
+  if (!hasHistory) {
+    return { realtimeWeight: 1, historyWeight: 0 };
+  }
+  const progress = Math.max(0, Math.min(1, sessionRounds / HISTORY_SWITCH_ROUNDS));
+  const baseHistory = HISTORY_BASE_WEIGHT;
+  const earlyHistory = Math.max(baseHistory, HISTORY_EARLY_WEIGHT);
+  let historyWeight = earlyHistory + (baseHistory - earlyHistory) * progress;
+  const updatedAt = persisted?.updatedAt ? Date.parse(persisted.updatedAt) : NaN;
+  if (Number.isFinite(updatedAt)) {
+    const ageMs = Math.max(0, Date.now() - updatedAt);
+    const decay = Math.exp(-ageMs / HISTORY_DECAY_MS);
+    historyWeight *= Number.isFinite(decay) ? decay : 1;
+  }
+  historyWeight = Math.max(0, Math.min(0.8, historyWeight));
+  const realtimeWeight = Math.max(0, 1 - historyWeight);
+  const total = historyWeight + realtimeWeight;
+  if (total <= 0) {
+    return { realtimeWeight: 1, historyWeight: 0 };
+  }
+  return { realtimeWeight: realtimeWeight / total, historyWeight: historyWeight / total };
 }
 
 type RoundFilterMode = Mode | "all";
@@ -499,9 +829,18 @@ interface PendingDecision {
   policy: DecisionPolicy;
   mixer?: {
     dist: Dist;
-    experts: { name: string; weight: number; dist: Dist }[];
+    experts: { name: string; weight: number; dist: Dist; source?: "realtime" | "history" }[];
     counter: Move;
     confidence: number;
+    realtimeDist: Dist;
+    historyDist: Dist;
+    realtimeWeight: number;
+    historyWeight: number;
+    realtimeExperts: { name: string; weight: number; dist: Dist }[];
+    historyExperts: { name: string; weight: number; dist: Dist }[];
+    realtimeRounds: number;
+    historyRounds: number;
+    conflict?: { realtime: Move | null; history: Move | null } | null;
   };
   heuristic?: HeuristicTrace;
   confidence: number;
@@ -1148,6 +1487,9 @@ function RPSDoodleAppInner(){
     selectProfile,
     updateProfile: updateStatsProfile,
     forkProfileVersion,
+    getModelStateForProfile,
+    saveModelStateForProfile,
+    clearModelStateForProfile,
     adminMatches,
     adminRounds,
   } = useStats();
@@ -1189,6 +1531,14 @@ function RPSDoodleAppInner(){
   const roundStartRef = useRef<number | null>(null);
   const lastDecisionMsRef = useRef<number | null>(null);
   const currentMatchRoundsRef = useRef<RoundLog[]>([]);
+  const historyMixerRef = useRef<HedgeMixer | null>(null);
+  const sessionMixerRef = useRef<HedgeMixer | null>(null);
+  const historyDisplayMixerRef = useRef<HedgeMixer | null>(null);
+  const persistedModelRef = useRef<StoredPredictorModelState | null>(null);
+  const roundsSeenRef = useRef<number>(0);
+  const modelPersistTimeoutRef = useRef<number | null>(null);
+  const modelPersistPendingRef = useRef(false);
+  const prevTrainingActiveRef = useRef(trainingActive);
   const [roundFilters, setRoundFilters] = useState<{ mode: RoundFilterMode; difficulty: RoundFilterDifficulty; outcome: RoundFilterOutcome; from: string; to: string }>({ mode: "all", difficulty: "all", outcome: "all", from: "", to: "" });
   useEffect(() => {
     setRoundPage(0);
@@ -1198,6 +1548,144 @@ function RPSDoodleAppInner(){
       window.sessionStorage.setItem("rps_rounds_view_v1", roundsViewMode);
     }
   }, [roundsViewMode]);
+  function resetSessionMixer() {
+    sessionMixerRef.current = instantiateMixerFromState(null);
+  }
+
+  function loadPersistedModel(state: StoredPredictorModelState | null) {
+    persistedModelRef.current = state;
+    historyMixerRef.current = instantiateMixerFromState(state?.state);
+    historyDisplayMixerRef.current = state ? instantiateMixerFromState(state.state) : null;
+    roundsSeenRef.current = state?.roundsSeen ?? 0;
+  }
+
+  function ensureHistoryMixer(): HedgeMixer {
+    if (!historyMixerRef.current) {
+      historyMixerRef.current = instantiateMixerFromState(persistedModelRef.current?.state);
+    }
+    return historyMixerRef.current;
+  }
+
+  function ensureSessionMixer(): HedgeMixer {
+    if (!sessionMixerRef.current) {
+      resetSessionMixer();
+    }
+    return sessionMixerRef.current!;
+  }
+
+  function ensureHistoryDisplayMixer(): HedgeMixer | null {
+    if (!persistedModelRef.current) {
+      return null;
+    }
+    if (!historyDisplayMixerRef.current) {
+      historyDisplayMixerRef.current = instantiateMixerFromState(persistedModelRef.current.state);
+    }
+    return historyDisplayMixerRef.current;
+  }
+
+  const buildPersistedModelSnapshot = useCallback((): StoredPredictorModelState | null => {
+    if (!currentProfile?.id) return null;
+    if (!historyMixerRef.current) return null;
+    return {
+      profileId: currentProfile.id,
+      modelVersion: MODEL_STATE_VERSION,
+      updatedAt: new Date().toISOString(),
+      roundsSeen: roundsSeenRef.current,
+      state: serializeMixerInstance(historyMixerRef.current),
+    };
+  }, [currentProfile?.id]);
+
+  const persistModelStateNow = useCallback(() => {
+    if (!currentProfile?.id) return;
+    const snapshot = buildPersistedModelSnapshot();
+    if (!snapshot) return;
+    saveModelStateForProfile(currentProfile.id, snapshot);
+    persistedModelRef.current = snapshot;
+    modelPersistPendingRef.current = false;
+  }, [buildPersistedModelSnapshot, currentProfile?.id, saveModelStateForProfile]);
+
+  const scheduleModelPersist = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (!currentProfile?.id) return;
+    if (modelPersistTimeoutRef.current !== null) {
+      window.clearTimeout(modelPersistTimeoutRef.current);
+    }
+    modelPersistPendingRef.current = true;
+    modelPersistTimeoutRef.current = window.setTimeout(() => {
+      modelPersistTimeoutRef.current = null;
+      persistModelStateNow();
+    }, 250);
+  }, [currentProfile?.id, persistModelStateNow]);
+
+  useEffect(() => {
+    if (typeof document === "undefined" || typeof window === "undefined") return;
+    const flush = () => {
+      if (modelPersistTimeoutRef.current !== null) {
+        window.clearTimeout(modelPersistTimeoutRef.current);
+        modelPersistTimeoutRef.current = null;
+      }
+      if (modelPersistPendingRef.current) {
+        persistModelStateNow();
+      }
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        flush();
+      }
+    };
+    const handleBeforeUnload = () => {
+      flush();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      flush();
+    };
+  }, [persistModelStateNow]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && modelPersistTimeoutRef.current !== null) {
+      window.clearTimeout(modelPersistTimeoutRef.current);
+      modelPersistTimeoutRef.current = null;
+    }
+    modelPersistPendingRef.current = false;
+    if (!currentProfile?.id) {
+      loadPersistedModel(null);
+      resetSessionMixer();
+      return;
+    }
+    const stored = getModelStateForProfile(currentProfile.id);
+    loadPersistedModel(stored ?? null);
+    resetSessionMixer();
+  }, [currentProfile?.id, getModelStateForProfile]);
+
+  useEffect(() => {
+    const previous = prevTrainingActiveRef.current;
+    if (!previous && trainingActive) {
+      if (typeof window !== "undefined" && modelPersistTimeoutRef.current !== null) {
+        window.clearTimeout(modelPersistTimeoutRef.current);
+        modelPersistTimeoutRef.current = null;
+      }
+      modelPersistPendingRef.current = false;
+      loadPersistedModel(null);
+      resetSessionMixer();
+    } else if (previous && !trainingActive) {
+      if (modelPersistPendingRef.current) {
+        persistModelStateNow();
+      }
+      if (currentProfile?.id) {
+        const stored = getModelStateForProfile(currentProfile.id) ?? persistedModelRef.current;
+        loadPersistedModel(stored ?? null);
+      } else {
+        loadPersistedModel(null);
+      }
+      resetSessionMixer();
+    }
+    prevTrainingActiveRef.current = trainingActive;
+  }, [trainingActive, currentProfile?.id, getModelStateForProfile, persistModelStateNow]);
+
   const rounds = useMemo(() => profileRounds, [profileRounds]);
   const matches = useMemo(() => profileMatches, [profileMatches]);
   const leaderboardPlayersById = useMemo(() => {
@@ -1344,16 +1832,19 @@ function RPSDoodleAppInner(){
 
   const buildLiveSnapshot = useCallback(
     (trace: PendingDecision, aiMove: Move): LiveInsightSnapshot => {
-      let distribution: Record<Move, number> = { rock: 1 / 3, paper: 1 / 3, scissors: 1 / 3 };
-      let predicted: Move | null = null;
-      let counter: Move | null = aiMove;
-      let reason: string | null = trace.heuristic?.reason ?? null;
-      let topExperts: Array<{ name: string; weight: number; topMove: Move | null; probability: number }> = [];
       if (trace.policy === "mixer" && trace.mixer) {
-        distribution = normalize(trace.mixer.dist);
-        predicted = MOVES.reduce((best, move) => (distribution[move] > distribution[best] ? move : best), MOVES[0]);
-        counter = trace.mixer.counter;
-        topExperts = [...trace.mixer.experts]
+        const distribution = normalize(trace.mixer.dist);
+        const predicted = MOVES.reduce((best, move) => (distribution[move] > distribution[best] ? move : best), MOVES[0]);
+        const counter = trace.mixer.counter;
+        const realtimeDist = normalize(trace.mixer.realtimeDist);
+        const historyDist = normalize(trace.mixer.historyDist);
+        const realtimeWeight = clamp01(trace.mixer.realtimeWeight ?? 0);
+        const historyWeight = clamp01(trace.mixer.historyWeight ?? 0);
+        const realtimeMove = MOVES.reduce((best, move) => (realtimeDist[move] > realtimeDist[best] ? move : best), MOVES[0]);
+        const historyMove = trace.mixer.historyExperts.length
+          ? MOVES.reduce((best, move) => (historyDist[move] > historyDist[best] ? move : best), MOVES[0])
+          : null;
+        const topExperts = [...trace.mixer.experts]
           .map(expert => {
             const expertDist = normalize(expert.dist ?? { rock: 1 / 3, paper: 1 / 3, scissors: 1 / 3 });
             const expertTop = MOVES.reduce(
@@ -1369,6 +1860,33 @@ function RPSDoodleAppInner(){
           })
           .sort((a, b) => b.weight - a.weight)
           .slice(0, 3);
+        const realtimeExperts = trace.mixer.realtimeExperts.map(expert => {
+          const expertDist = normalize(expert.dist);
+          const expertTop = MOVES.reduce(
+            (best, move) => (expertDist[move] > expertDist[best] ? move : best),
+            MOVES[0],
+          );
+          return {
+            name: expert.name,
+            weight: clamp01(expert.weight),
+            topMove: expertTop,
+            probability: clamp01(expertDist[expertTop]),
+          };
+        });
+        const historyExperts = trace.mixer.historyExperts.map(expert => {
+          const expertDist = normalize(expert.dist);
+          const expertTop = MOVES.reduce(
+            (best, move) => (expertDist[move] > expertDist[best] ? move : best),
+            MOVES[0],
+          );
+          return {
+            name: expert.name,
+            weight: clamp01(expert.weight),
+            topMove: expertTop,
+            probability: clamp01(expertDist[expertTop]),
+          };
+        });
+        let reason: string | null = null;
         if (topExperts[0] && predicted) {
           reason = expertReasonText(topExperts[0].name, predicted, topExperts[0].probability);
         } else if (predicted) {
@@ -1376,37 +1894,70 @@ function RPSDoodleAppInner(){
         } else {
           reason = "Mixer blending experts for a balanced counter.";
         }
-      } else {
-        predicted = trace.heuristic?.predicted ?? expectedPlayerMoveFromAi(aiMove);
-        const confidence = clamp01(trace.heuristic?.conf ?? trace.confidence ?? 0.34);
-        let base: Record<Move, number>;
-        if (predicted) {
-          const remainder = Math.max(0, 1 - confidence);
-          const others = MOVES.filter(move => move !== predicted);
-          const share = others.length ? remainder / others.length : 0;
-          base = { rock: share, paper: share, scissors: share };
-          base[predicted] = confidence;
-        } else {
-          base = { rock: 1 / 3, paper: 1 / 3, scissors: 1 / 3 };
-        }
-        distribution = normalize(base);
-        if (!reason) {
-          reason = predicted
-            ? `Heuristic leans toward ${prettyMove(predicted)} (${Math.round(confidence * 100)}%).`
-            : "Low confidence – exploring for new patterns.";
-        }
+        return {
+          policy: trace.policy,
+          confidence: trace.confidence,
+          predictedMove: predicted,
+          counterMove: counter,
+          distribution,
+          topExperts,
+          reason,
+          realtimeDistribution: realtimeDist,
+          historyDistribution: historyDist,
+          realtimeWeight,
+          historyWeight,
+          realtimeExperts,
+          historyExperts,
+          realtimeRounds: trace.mixer.realtimeRounds ?? lastMoves.length,
+          historyRounds: trace.mixer.historyRounds ?? (persistedModelRef.current?.roundsSeen ?? 0),
+          historyUpdatedAt: persistedModelRef.current?.updatedAt ?? null,
+          conflict: trace.mixer.conflict ?? null,
+          realtimeMove,
+          historyMove,
+        } satisfies LiveInsightSnapshot;
       }
+
+      const predicted = trace.heuristic?.predicted ?? expectedPlayerMoveFromAi(aiMove);
+      const confidence = clamp01(trace.heuristic?.conf ?? trace.confidence ?? 0.34);
+      let base: Record<Move, number>;
+      if (predicted) {
+        const remainder = Math.max(0, 1 - confidence);
+        const others = MOVES.filter(move => move !== predicted);
+        const share = others.length ? remainder / others.length : 0;
+        base = { rock: share, paper: share, scissors: share };
+        base[predicted] = confidence;
+      } else {
+        base = { rock: 1 / 3, paper: 1 / 3, scissors: 1 / 3 };
+      }
+      const distribution = normalize(base);
+      const reason = trace.heuristic?.reason
+        ? trace.heuristic.reason
+        : predicted
+          ? `Heuristic leans toward ${prettyMove(predicted)} (${Math.round(confidence * 100)}%).`
+          : "Low confidence – exploring for new patterns.";
       return {
         policy: trace.policy,
         confidence: trace.confidence,
         predictedMove: predicted,
-        counterMove: counter,
+        counterMove: aiMove,
         distribution,
-        topExperts,
+        topExperts: [],
         reason,
-      };
+        realtimeDistribution: distribution,
+        historyDistribution: { ...UNIFORM },
+        realtimeWeight: 1,
+        historyWeight: 0,
+        realtimeExperts: [],
+        historyExperts: [],
+        realtimeRounds: lastMoves.length,
+        historyRounds: persistedModelRef.current?.roundsSeen ?? 0,
+        historyUpdatedAt: persistedModelRef.current?.updatedAt ?? null,
+        conflict: null,
+        realtimeMove: predicted,
+        historyMove: null,
+      } satisfies LiveInsightSnapshot;
     },
-    [],
+    [lastMoves.length],
   );
 
   const openInsightPanel = useCallback(
@@ -2477,6 +3028,27 @@ function RPSDoodleAppInner(){
             .sort((a, b) => b.weight - a.weight)
             .slice(0, 3),
           confidence: trace.mixer.confidence,
+          realtimeWeight: trace.mixer.realtimeWeight,
+          historyWeight: trace.mixer.historyWeight,
+          realtimeTopExperts: trace.mixer.realtimeExperts
+            .map(expert => ({
+              name: expert.name,
+              weight: expert.weight * (trace.mixer.realtimeWeight ?? 1),
+              pActual: expert.dist[playerMove] ?? 0,
+            }))
+            .sort((a, b) => b.weight - a.weight)
+            .slice(0, 3),
+          historyTopExperts: trace.mixer.historyExperts
+            .map(expert => ({
+              name: expert.name,
+              weight: expert.weight * (trace.mixer.historyWeight ?? 1),
+              pActual: expert.dist[playerMove] ?? 0,
+            }))
+            .sort((a, b) => b.weight - a.weight)
+            .slice(0, 3),
+          realtimeRounds: trace.mixer.realtimeRounds,
+          historyRounds: trace.mixer.historyRounds,
+          conflict: trace.mixer.conflict ?? null,
         }
       : undefined;
     const heuristicTrace = trace?.heuristic;
@@ -3418,22 +3990,22 @@ function RPSDoodleAppInner(){
     decisionTraceRef.current = null;
     // Practice mode uses soft/none exploit unless user enabled predictorMode
     const useMix = isTrained && !trainingActive && predictorMode && aiMode !== "fair";
-    if (!useMix || lastMoves.length === 0){
+    if (!useMix){
       // fallback to light heuristics until we have signal
       const heur = predictNext(lastMoves, rng);
       if (!heur.move || (heur.conf ?? 0) < 0.34) {
         const fallbackMove = MOVES[Math.floor(rng()*3)] as Move;
-      const trace: PendingDecision = {
-        policy: "heuristic",
-        heuristic: { predicted: heur.move, conf: heur.conf, reason: heur.reason || "Low confidence – random choice" },
-        confidence: heur.conf ?? 0.33,
-      };
-      decisionTraceRef.current = trace;
-      setLiveDecisionSnapshot(buildLiveSnapshot(trace, fallbackMove));
-      const confValue = typeof heur.conf === "number" ? heur.conf : 0;
-      fireAnalyticsEvent("ai_confidence_updated", { value: Math.round(confValue * 100) });
-      return fallbackMove;
-    }
+        const trace: PendingDecision = {
+          policy: "heuristic",
+          heuristic: { predicted: heur.move, conf: heur.conf, reason: heur.reason || "Low confidence – random choice" },
+          confidence: heur.conf ?? 0.33,
+        };
+        decisionTraceRef.current = trace;
+        setLiveDecisionSnapshot(buildLiveSnapshot(trace, fallbackMove));
+        const confValue = typeof heur.conf === "number" ? heur.conf : 0;
+        fireAnalyticsEvent("ai_confidence_updated", { value: Math.round(confValue * 100) });
+        return fallbackMove;
+      }
       const predicted = heur.move as Move;
       const heuristicDist: Dist = { rock:0, paper:0, scissors:0 };
       heuristicDist[predicted] = 1;
@@ -3450,17 +4022,75 @@ function RPSDoodleAppInner(){
       return move;
     }
     const ctx: Ctx = { playerMoves: lastMoves, aiMoves: aiHistory, outcomes: outcomesHist, rng };
-    const dist = getMixer().predict(ctx);
-    const snapshot = getMixer().snapshot();
-    const move = policyCounterFromDist(dist, aiMode);
-    const confidence = Math.max(dist.rock, dist.paper, dist.scissors);
+    const sessionMixer = ensureSessionMixer();
+    const realtimeDist = sessionMixer.predict(ctx);
+    const realtimeSnapshot = sessionMixer.snapshot();
+    const realtimeExperts = realtimeSnapshot.experts.map(expert => ({
+      name: expert.name,
+      weight: clamp01(expert.weight),
+      dist: normalize(expert.dist),
+    }));
+
+    const historyDisplay = ensureHistoryDisplayMixer();
+    let historyDist: Dist = { ...UNIFORM };
+    let historySnapshot: ReturnType<HedgeMixer["snapshot"]> | null = null;
+    if (historyDisplay) {
+      historyDist = historyDisplay.predict(ctx);
+      historySnapshot = historyDisplay.snapshot();
+    }
+    const historyExperts = historySnapshot
+      ? historySnapshot.experts.map(expert => ({
+          name: expert.name,
+          weight: clamp01(expert.weight),
+          dist: normalize(expert.dist),
+        }))
+      : [];
+
+    const blendWeights = computeBlendWeights(lastMoves.length, persistedModelRef.current);
+    const blendedDist = blendDistributions(realtimeDist, historyDist, blendWeights);
+    const move = policyCounterFromDist(blendedDist, aiMode);
+    const confidence = Math.max(blendedDist.rock, blendedDist.paper, blendedDist.scissors);
+
+    const realtimeTop = MOVES.reduce((best, m) => (realtimeDist[m] > realtimeDist[best] ? m : best), MOVES[0]);
+    const historyTop = historyExperts.length
+      ? MOVES.reduce((best, m) => (historyDist[m] > historyDist[best] ? m : best), MOVES[0])
+      : null;
+    const blendedTop = MOVES.reduce((best, m) => (blendedDist[m] > blendedDist[best] ? m : best), MOVES[0]);
+
+    const combinedExperts = [
+      ...realtimeExperts.map(expert => ({
+        name: expert.name,
+        weight: expert.weight * blendWeights.realtimeWeight,
+        dist: expert.dist,
+        source: "realtime" as const,
+      })),
+      ...historyExperts.map(expert => ({
+        name: expert.name,
+        weight: expert.weight * blendWeights.historyWeight,
+        dist: expert.dist,
+        source: "history" as const,
+      })),
+    ];
+
     const trace: PendingDecision = {
       policy: "mixer",
       mixer: {
-        dist,
-        experts: snapshot.experts,
+        dist: blendedDist,
+        experts: combinedExperts,
         counter: move,
         confidence,
+        realtimeDist,
+        historyDist,
+        realtimeWeight: blendWeights.realtimeWeight,
+        historyWeight: blendWeights.historyWeight,
+        realtimeExperts,
+        historyExperts,
+        realtimeRounds: lastMoves.length,
+        historyRounds: persistedModelRef.current?.roundsSeen ?? 0,
+        conflict:
+          historyTop && blendedTop && historyTop !== blendedTop
+            ? { realtime: realtimeTop, history: historyTop }
+            : null,
       },
       confidence,
     };
@@ -3495,6 +4125,7 @@ function RPSDoodleAppInner(){
     roundStartRef.current = performance.now();
     setLiveDecisionSnapshot(null);
     setLiveInsightRounds([]);
+    resetSessionMixer();
   }
 
   function startMatch(mode?: Mode, opts: { silent?: boolean } = {}){
@@ -3553,7 +4184,15 @@ function RPSDoodleAppInner(){
       } else {
         updateStatsProfile(currentProfile.id, { trainingCount: 0, trained: false });
       }
+      clearModelStateForProfile(currentProfile.id);
     }
+    if (typeof window !== "undefined" && modelPersistTimeoutRef.current !== null) {
+      window.clearTimeout(modelPersistTimeoutRef.current);
+      modelPersistTimeoutRef.current = null;
+    }
+    modelPersistPendingRef.current = false;
+    loadPersistedModel(null);
+    resetSessionMixer();
     setPredictorMode(false);
     setAiMode("fair");
     setTrainingActive(false);
@@ -3600,7 +4239,18 @@ function RPSDoodleAppInner(){
       const res = resolveOutcome(player, ai); setOutcome(res); setPhase("resolve");
       // Online update mixer with context prior to adding current move
       const ctx: Ctx = { playerMoves: lastMoves, aiMoves: aiHistory, outcomes: outcomesHist, rng };
-      if (predictorMode && aiMode !== "fair") getMixer().update(ctx, player);
+      const shouldUpdateHistory = trainingActive || (predictorMode && aiMode !== "fair");
+      const shouldUpdateSession = isTrained && !trainingActive && predictorMode && aiMode !== "fair";
+      if (shouldUpdateHistory) {
+        const historyMixer = ensureHistoryMixer();
+        historyMixer.update(ctx, player);
+        roundsSeenRef.current += 1;
+        scheduleModelPersist();
+      }
+      if (shouldUpdateSession) {
+        const sessionMixer = ensureSessionMixer();
+        sessionMixer.update(ctx, player);
+      }
       setOutcomesHist(o=>[...o, res]);
       setLive(`AI chose ${ai}. ${res === 'win' ? 'You win this round.' : res === 'lose' ? 'You lose this round.' : 'Tie.'}`);
       if (res === "win") audio.thud(); else if (res === "lose") audio.snare(); else audio.tie();
