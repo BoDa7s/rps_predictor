@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import type { Move } from "./gameTypes";
 import type { DecisionPolicy, RoundLog } from "./stats";
+import { MoveIcon, MoveLabel } from "./moveIcons";
 
 export interface LiveInsightSnapshot {
   policy: DecisionPolicy;
@@ -33,7 +34,6 @@ interface InsightPanelProps {
 }
 
 const MOVES: Move[] = ["rock", "paper", "scissors"];
-const MOVE_EMOJI: Record<Move, string> = { rock: "🪨", paper: "📄", scissors: "✂️" };
 
 type Distribution = Record<Move, number>;
 
@@ -362,9 +362,23 @@ function formatMove(move: Move | null): string {
   return move.charAt(0).toUpperCase() + move.slice(1);
 }
 
-function getMoveEmoji(move: Move | null): string {
-  if (!move) return "•";
-  return MOVE_EMOJI[move];
+function renderMoveGlyph(move: Move | null, size = 16): React.ReactNode {
+  if (!move) {
+    return <span className="text-xs text-slate-400">•</span>;
+  }
+  return <MoveIcon move={move} size={size} />;
+}
+
+function renderMoveLabel(move: Move | null, options?: { iconSize?: number | string; textClassName?: string }) {
+  if (!move) return <span className="text-slate-400">—</span>;
+  return (
+    <MoveLabel
+      move={move}
+      iconSize={options?.iconSize ?? 16}
+      textClassName={options?.textClassName}
+      className="gap-1"
+    />
+  );
 }
 
 function renderSparkline(values: number[], width: number, height: number, className?: string) {
@@ -426,7 +440,7 @@ const SessionTimeline: React.FC<{ rounds: RoundLog[] }> = ({ rounds }) => {
               className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-900/80 text-[11px] font-semibold text-white"
               title={`Round ${rounds.length - limited.length + index + 1}: You played ${formatMove(round.player)}; AI played ${formatMove(round.ai)}.`}
             >
-              {getMoveEmoji(round.player)}
+              {renderMoveGlyph(round.player, 18)}
             </span>
           ))
         ) : (
@@ -616,7 +630,16 @@ interface ExpertChipProps {
 }
 
 const ExpertChip: React.FC<ExpertChipProps> = ({ expert, variant }) => {
-  const moveLabel = expert.topMove ? `${getMoveEmoji(expert.topMove)} ${formatMove(expert.topMove)}` : "No move yet";
+  const moveLabel = expert.topMove ? (
+    <MoveLabel
+      move={expert.topMove}
+      iconSize={16}
+      textClassName="text-xs font-semibold text-slate-700"
+      className="gap-1"
+    />
+  ) : (
+    <span className="text-slate-400">No move yet</span>
+  );
   const label = variant === "realtime" ? "Realtime" : "Previous";
   const chipClass = variant === "realtime" ? "bg-sky-100 text-sky-800" : "bg-slate-100 text-slate-700";
   const badgeClass =
@@ -630,7 +653,7 @@ const ExpertChip: React.FC<ExpertChipProps> = ({ expert, variant }) => {
       title={`${expert.name} suggests ${formatMove(expert.topMove)} at ${formatPercent(expert.probability, 0)}.`}
     >
       <span>{expert.name}:</span>
-      <span>{moveLabel}</span>
+      <span className="inline-flex items-center gap-1">{moveLabel}</span>
       <span className="text-[11px] font-normal text-slate-600">{formatPercent(expert.probability, 0)}</span>
       <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${badgeClass}`}>
         {label}
@@ -682,18 +705,20 @@ const HistoryPeek: React.FC<HistoryPeekProps> = ({
           <dl className="grid gap-3 text-sm sm:grid-cols-3">
             <HistoryStat
               label="Favorite move"
-              value={
-                favoriteMove
-                  ? `${getMoveEmoji(favoriteMove.move)} ${formatMove(favoriteMove.move)}`
-                  : "No history yet"
-              }
+              value={favoriteMove ? renderMoveLabel(favoriteMove.move, { iconSize: 18 }) : "No history yet"}
               detail={favoriteMove ? formatPercent(favoriteMove.pct, 0) : undefined}
             />
             <HistoryStat
               label="Top transition"
               value={
                 topTransition
-                  ? `${formatMove(topTransition.from)} → ${formatMove(topTransition.to)}`
+                  ? (
+                      <span className="inline-flex items-center gap-2">
+                        {renderMoveLabel(topTransition.from, { iconSize: 16 })}
+                        <span className="text-slate-400">→</span>
+                        {renderMoveLabel(topTransition.to, { iconSize: 16 })}
+                      </span>
+                    )
                   : "No transition yet"
               }
               detail={topTransition ? formatPercent(topTransition.pct, 0) : undefined}
@@ -710,7 +735,7 @@ const HistoryPeek: React.FC<HistoryPeekProps> = ({
   );
 };
 
-const HistoryStat: React.FC<{ label: string; value: string; detail?: string }> = ({ label, value, detail }) => (
+const HistoryStat: React.FC<{ label: string; value: React.ReactNode; detail?: React.ReactNode }> = ({ label, value, detail }) => (
   <div className="rounded-lg border border-slate-200/70 bg-slate-50/70 px-3 py-2">
     <dt className="text-[11px] uppercase tracking-wide text-slate-500">{label}</dt>
     <dd className="mt-1 text-sm font-medium text-slate-800">

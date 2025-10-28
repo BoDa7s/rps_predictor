@@ -34,6 +34,7 @@ import {
   groupRoundsByMatch,
   type LeaderboardPlayerInfo,
 } from "./leaderboardData";
+import { MoveIcon, MoveLabel } from "./moveIcons";
 import botIdle48 from "./assets/mascot/bot-idle-48.svg";
 import botIdle64 from "./assets/mascot/bot-idle-64.svg";
 import botIdle96 from "./assets/mascot/bot-idle-96.svg";
@@ -72,9 +73,6 @@ function mulberry32(a:number){
 // Types
 const MOVES: Move[] = ["rock", "paper", "scissors"];
 const MODES: Mode[] = ["challenge","practice"];
-
-// Icons (emoji fallback)
-const moveEmoji: Record<Move, string> = { rock: "\u270A", paper: "\u270B", scissors: "\u270C\uFE0F" };
 
 const DIFFICULTY_INFO: Record<AIMode, { label: string; helper: string }> = {
   fair: { label: "Fair", helper: "Gentle counterplay tuned for learning." },
@@ -850,8 +848,15 @@ function prettyMove(move: Move){
   return move.charAt(0).toUpperCase() + move.slice(1);
 }
 
-function moveEmojiLabel(move: Move){
-  return `${moveEmoji[move]} ${prettyMove(move)}`;
+function moveLabelNode(move: Move, options?: { className?: string; iconSize?: number | string; textClassName?: string }){
+  return (
+    <MoveLabel
+      move={move}
+      className={options?.className}
+      iconSize={options?.iconSize ?? 18}
+      textClassName={options?.textClassName}
+    />
+  );
 }
 
 function makeReasonChips(reason?: string | null): string[] {
@@ -3391,11 +3396,18 @@ function RPSDoodleAppInner(){
     const sorted = [...map.entries()].sort((a,b)=> b[1]-a[1]);
     return sorted.length ? { pair: sorted[0][0], count: sorted[0][1] } : null;
   }, [rounds]);
-  const topTransitionDisplay = useMemo(() => {
+  const topTransitionDisplay = useMemo<React.ReactNode>(() => {
     if (!topTransition) return null;
     const [from, to] = topTransition.pair.split("→") as [Move, Move];
     if (!from || !to) return null;
-    return `${moveEmoji[from]} ${prettyMove(from)} → ${moveEmoji[to]} ${prettyMove(to)} (${topTransition.count})`;
+    return (
+      <span className="inline-flex flex-wrap items-center gap-2">
+        {moveLabelNode(from, { iconSize: 22, textClassName: "font-semibold" })}
+        <span className="text-slate-400">→</span>
+        {moveLabelNode(to, { iconSize: 22, textClassName: "font-semibold" })}
+        <span className="text-sm font-medium text-slate-500">({topTransition.count})</span>
+      </span>
+    );
   }, [topTransition]);
 
   const recentTrendDots = useMemo(() => {
@@ -3559,22 +3571,47 @@ function RPSDoodleAppInner(){
     return null;
   }, [rounds]);
 
-  const periodPatternLabel = useMemo(() => {
+  const periodPatternLabel = useMemo<React.ReactNode>(() => {
     if (!patternInfo) return "No strong cycle yet";
-    const labelMove = moveEmojiLabel(patternInfo.move);
+    const moveNode = moveLabelNode(patternInfo.move, { iconSize: 20, textClassName: "font-semibold" });
     if (patternInfo.reason.includes("three-beat")) {
-      return `Every 3 moves: often ${labelMove}`;
+      return (
+        <span className="inline-flex flex-wrap items-center gap-2">
+          Every 3 moves: often
+          {moveNode}
+        </span>
+      );
     }
     if (patternInfo.reason.includes("Alternating")) {
-      return `Every other move: ${labelMove}`;
+      return (
+        <span className="inline-flex flex-wrap items-center gap-2">
+          Every other move:
+          {moveNode}
+        </span>
+      );
     }
     if (patternInfo.reason.includes("triple repeat")) {
-      return `Hot streak: ${labelMove}`;
+      return (
+        <span className="inline-flex flex-wrap items-center gap-2">
+          Hot streak:
+          {moveNode}
+        </span>
+      );
     }
-    return `Leans toward ${labelMove}`;
+    return (
+      <span className="inline-flex flex-wrap items-center gap-2">
+        Leans toward
+        {moveNode}
+      </span>
+    );
   }, [patternInfo]);
 
-  const habitCards = [
+  const habitCards: Array<{
+    key: "repeat" | "switch" | "transition" | "pattern";
+    title: string;
+    value: React.ReactNode;
+    blurb: string;
+  }> = [
     {
       key: "repeat" as const,
       title: "Repeat after win",
@@ -3601,7 +3638,14 @@ function RPSDoodleAppInner(){
     },
   ];
 
-  const habitDrawerContent = useMemo(() => {
+  const habitDrawerContent = useMemo<
+    | {
+        title: string;
+        copy: React.ReactNode;
+        visual: React.ReactNode;
+      }
+    | null
+  >(() => {
     if (!habitDrawer) return null;
     if (habitDrawer === "repeat") {
       const stayedPct = totalRounds ? repeatAfterWinPct : 0;
@@ -3655,18 +3699,33 @@ function RPSDoodleAppInner(){
       const count = topTransition?.count ?? 0;
       return {
         title: "Top transition",
-        copy: topTransition
-          ? `Your most common next step is ${moveEmojiLabel(from!)} → ${moveEmojiLabel(to!)} (${count} times).`
-          : "Your most common next step is waiting for more rounds.",
+        copy: topTransition ? (
+          <span>
+            Your most common next step is {" "}
+            {moveLabelNode(from!, { textClassName: "font-semibold" })}
+            <span className="mx-1 text-slate-500" aria-hidden>
+              →
+            </span>
+            {moveLabelNode(to!, { textClassName: "font-semibold" })} ({count} times).
+          </span>
+        ) : (
+          "Your most common next step is waiting for more rounds."
+        ),
         visual: (
           <div className="space-y-2 text-center text-sm">
-            <div className="flex items-center justify-center gap-3 text-3xl">
-              <span aria-hidden="true">{from ? moveEmoji[from] : "🔍"}</span>
+            <div className="flex items-center justify-center gap-4">
+              <span className="inline-flex h-14 w-14 items-center justify-center rounded-full bg-slate-900/80" aria-hidden="true">
+                {from ? <MoveIcon move={from} size={36} /> : <span className="text-2xl">🔍</span>}
+              </span>
               <span className="text-slate-500">→</span>
-              <span aria-hidden="true">{to ? moveEmoji[to] : ""}</span>
+              <span className="inline-flex h-14 w-14 items-center justify-center rounded-full bg-slate-900/80" aria-hidden="true">
+                {to ? <MoveIcon move={to} size={36} /> : null}
+              </span>
             </div>
             <div className="text-xs text-slate-500">
-              {topTransition ? `${prettyMove(from!)} to ${prettyMove(to!)} pops up often.` : "Keep playing to reveal your go-to hop."}
+              {topTransition
+                ? `${prettyMove(from!)} to ${prettyMove(to!)} pops up often.`
+                : "Keep playing to reveal your go-to hop."}
             </div>
           </div>
         ),
@@ -3676,12 +3735,18 @@ function RPSDoodleAppInner(){
       return {
         title: "Period pattern",
         copy: patternInfo
-          ? `We spotted a rhythm: ${periodPatternLabel}.`
+          ? (
+              <span>
+                We spotted a rhythm: {periodPatternLabel}.
+              </span>
+            )
           : "No strong rhythm yet. If we spot one (like every 3 moves), we’ll show it.",
         visual: (
           <div className="space-y-2 text-center text-sm">
-            <div className="flex items-center justify-center gap-3 text-3xl">
-              <span aria-hidden="true">{patternInfo?.move ? moveEmoji[patternInfo.move] : "🌀"}</span>
+            <div className="flex items-center justify-center gap-4">
+              <span className="inline-flex h-14 w-14 items-center justify-center rounded-full bg-slate-900/80" aria-hidden="true">
+                {patternInfo?.move ? <MoveIcon move={patternInfo.move} size={36} /> : <span className="text-2xl">🌀</span>}
+              </span>
               {patternInfo?.move ? <span className="text-2xl text-slate-400">↻</span> : null}
             </div>
             <div className="text-xs text-slate-500">
@@ -6141,19 +6206,32 @@ function RPSDoodleAppInner(){
                     <div className="flex">
                       <motion.div layout className="relative flex w-full flex-col rounded-3xl bg-white/80 p-5 shadow-lg">
                         <div className="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">You</div>
-                        <motion.div layout className="flex flex-1 items-center justify-center text-6xl" aria-label="Your hand" role="img">
-                          <AnimatePresence mode="popLayout">
-                            {playerPick ? (
-                              <motion.span key={playerPick} initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
-                                {moveEmoji[playerPick]}
-                              </motion.span>
-                            ) : (
-                              <motion.span key="you-placeholder" initial={{ opacity: 0 }} animate={{ opacity: 0.6 }} exit={{ opacity: 0 }} className="text-4xl text-slate-300">
-                                ?
-                              </motion.span>
-                            )}
-                          </AnimatePresence>
-                        </motion.div>
+                          <motion.div layout className="flex flex-1 items-center justify-center" aria-label="Your hand" role="img">
+                            <AnimatePresence mode="popLayout">
+                              {playerPick ? (
+                                <motion.span
+                                  key={playerPick}
+                                  initial={{ scale: 0.9, opacity: 0 }}
+                                  animate={{ scale: 1, opacity: 1 }}
+                                  exit={{ opacity: 0 }}
+                                  transition={{ duration: .2 }}
+                                  className="flex items-center justify-center"
+                                >
+                                  <MoveIcon move={playerPick} size={80} />
+                                </motion.span>
+                              ) : (
+                                <motion.span
+                                  key="you-placeholder"
+                                  initial={{ opacity: 0 }}
+                                  animate={{ opacity: 0.6 }}
+                                  exit={{ opacity: 0 }}
+                                  className="text-4xl text-slate-300"
+                                >
+                                  ?
+                                </motion.span>
+                              )}
+                            </AnimatePresence>
+                          </motion.div>
                       </motion.div>
                     </div>
 
@@ -6177,19 +6255,32 @@ function RPSDoodleAppInner(){
                     <div className="flex">
                       <motion.div layout className="relative flex w-full flex-col rounded-3xl bg-white/80 p-5 shadow-lg">
                         <div className="text-right text-xs font-semibold uppercase tracking-wide text-slate-500">AI</div>
-                        <motion.div layout className="flex flex-1 items-center justify-center text-6xl" aria-label="AI hand" role="img">
-                          <AnimatePresence mode="popLayout">
-                            {aiPick ? (
-                              <motion.span key={aiPick} initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .2 }}>
-                                {moveEmoji[aiPick]}
-                              </motion.span>
-                            ) : (
-                              <motion.span key="ai-placeholder" initial={{ opacity: 0 }} animate={{ opacity: 0.6 }} exit={{ opacity: 0 }} className="text-4xl text-slate-300">
-                                ?
-                              </motion.span>
-                            )}
-                          </AnimatePresence>
-                        </motion.div>
+                          <motion.div layout className="flex flex-1 items-center justify-center" aria-label="AI hand" role="img">
+                            <AnimatePresence mode="popLayout">
+                              {aiPick ? (
+                                <motion.span
+                                  key={aiPick}
+                                  initial={{ scale: 0.9, opacity: 0 }}
+                                  animate={{ scale: 1, opacity: 1 }}
+                                  exit={{ opacity: 0 }}
+                                  transition={{ duration: .2 }}
+                                  className="flex items-center justify-center"
+                                >
+                                  <MoveIcon move={aiPick} size={80} />
+                                </motion.span>
+                              ) : (
+                                <motion.span
+                                  key="ai-placeholder"
+                                  initial={{ opacity: 0 }}
+                                  animate={{ opacity: 0.6 }}
+                                  exit={{ opacity: 0 }}
+                                  className="text-4xl text-slate-300"
+                                >
+                                  ?
+                                </motion.span>
+                              )}
+                            </AnimatePresence>
+                          </motion.div>
                       </motion.div>
                     </div>
 
@@ -6204,7 +6295,9 @@ function RPSDoodleAppInner(){
                           className={["group relative px-4 py-4 bg-white rounded-2xl shadow hover:shadow-md transition active:scale-95", phase!=="idle"?"opacity-60 cursor-default":"", selected?"ring-4 ring-sky-300":""].join(" ")}
                           data-dev-label={`hand.${m}`}
                           aria-pressed={selected} aria-label={`Choose ${m}`}>
-                          <div className="text-4xl">{moveEmoji[m]}</div>
+                          <div className="flex items-center justify-center">
+                            <MoveIcon move={m} size={56} />
+                          </div>
                           <div className="mt-1 text-sm text-slate-600 capitalize">{m}</div>
                           <span className="pointer-events-none absolute inset-0 rounded-2xl opacity-0 group-active:opacity-100 group-active:scale-105 transition bg-sky-100"/>
                         </button>
@@ -6444,10 +6537,10 @@ function RPSDoodleAppInner(){
                       </div>
                       <div className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm">
                         <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Favorite move</div>
-                        <div className="mt-2 flex items-baseline gap-2 text-slate-900">
-                          <span className="text-3xl" aria-hidden="true">
-                            {behaviorStats.favoriteMove ? moveEmoji[behaviorStats.favoriteMove] : "🎲"}
-                          </span>
+                          <div className="mt-2 flex items-baseline gap-2 text-slate-900">
+                            <span className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-slate-900/80" aria-hidden="true">
+                              {behaviorStats.favoriteMove ? <MoveIcon move={behaviorStats.favoriteMove} size={40} /> : <span className="text-xl">🎲</span>}
+                            </span>
                           <span className="text-lg font-bold">
                             {behaviorStats.favoriteMove ? prettyMove(behaviorStats.favoriteMove) : "None yet"}
                           </span>
@@ -6708,14 +6801,14 @@ function RPSDoodleAppInner(){
                                 className={`rounded-2xl border ${outcomeStyle.border} bg-white p-4 shadow-sm transition hover:shadow-md`}
                               >
                                 <div className="flex items-start justify-between gap-3">
-                                  <div className="flex items-center gap-3 text-3xl">
-                                    <span aria-label={`You played ${prettyMove(round.player)}`}>
-                                      {moveEmoji[round.player]}
-                                    </span>
-                                    <span className="text-base font-semibold text-slate-500">vs</span>
-                                    <span aria-label={`AI played ${prettyMove(round.ai)}`}>
-                                      {moveEmoji[round.ai]}
-                                    </span>
+                                    <div className="flex items-center gap-3 text-3xl">
+                                      <span aria-label={`You played ${prettyMove(round.player)}`} className="inline-flex items-center justify-center">
+                                        <MoveIcon move={round.player} size={40} />
+                                      </span>
+                                      <span className="text-base font-semibold text-slate-500">vs</span>
+                                      <span aria-label={`AI played ${prettyMove(round.ai)}`} className="inline-flex items-center justify-center">
+                                        <MoveIcon move={round.ai} size={40} />
+                                      </span>
                                   </div>
                                   <span
                                     className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold ${badgeInfo.className}`}
@@ -6771,8 +6864,8 @@ function RPSDoodleAppInner(){
                                           />
                                         </div>
                                         <div className="relative flex flex-col items-center justify-end gap-1">
-                                          <span className="text-xl" aria-hidden="true">
-                                            {moveEmoji[move]}
+                                          <span className="inline-flex items-center justify-center" aria-hidden="true">
+                                            <MoveIcon move={move} size={28} />
                                           </span>
                                           <span className="text-[0.65rem] font-semibold text-slate-600">
                                             {Math.round(normalized[move])}%
