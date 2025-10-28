@@ -3709,12 +3709,12 @@ function RPSDoodleAppInner(){
   );
 
   const handleOpenSettings = useCallback(() => {
-    if (postTrainingLockActive) {
-      setLive("Finish choosing a mode or dismiss the banner before opening Settings.");
-      return;
-    }
     setSettingsOpen(true);
-    setLive("Settings opened. Press Escape to close.");
+    setLive(
+      postTrainingLockActive
+        ? "Settings opened. Training celebration stays visible while you make changes."
+        : "Settings opened. Press Escape to close."
+    );
   }, [postTrainingLockActive, setLive]);
 
   const showChallengeNeedsPredictorPrompt = useCallback(() => {
