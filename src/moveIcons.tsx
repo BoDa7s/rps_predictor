@@ -19,22 +19,22 @@ function resolveSize(size: number | string | undefined): string | undefined {
 const RockShape = (
   <>
     <path
-      d="M18 12.5L29.5 6l13 5 8.5 13.5-3.2 18-15 9-15-5.5L12 32.5 18 12.5Z"
+      d="M22 14.5 31.8 8.6 40.7 9l4.5 3.6-2.9 4.9 4.2 2.8 3.5 4.6-4.1 2.2 6.1 5.7 2 6-3.8 11-7.6 7.3-10.8 4-10-3.3-6.5-9.6-1.1-8.7 3.6-7.9 5.2-3.7 2.8-6.4Z"
       fill="#475569"
       stroke="#0f172a"
       strokeWidth={3}
       strokeLinejoin="round"
     />
     <path
-      d="M26 12l7.8 2.4 6.7 7.8-1.6 13-9.9 6.4-10.4-3.8-2.6-11.7 3.5-10.4 6.5-3.7Z"
-      fill="#64748b"
+      d="M28.8 18.3 36.6 16l6.5 5.7 1.7 8.4-3.7 8.6-8.7 6.1-9.2-2.5-4.6-7.6.8-7.3 8.4-8.1Z"
+      fill="#5c6676"
       stroke="#0f172a"
-      strokeWidth={1.6}
+      strokeWidth={1.8}
       strokeLinejoin="round"
     />
     <path
-      d="M23.2 21.5c1.8-2.3 4.7-3.6 7.7-3.2 3 .4 5.6 2.5 6.5 5.4"
-      stroke="#cbd5f5"
+      d="M27.5 25.8c2-2.4 5.2-3.5 8.4-2.6 3.2.9 5.6 3.5 6.3 6.6"
+      stroke="#e2e8f0"
       strokeWidth={2.2}
       strokeLinecap="round"
     />
@@ -44,17 +44,23 @@ const RockShape = (
 const PaperShape = (
   <>
     <path
-      d="M19 7h21l9 9v34H19V7Z"
+      d="M18.5 8.5h22.5l9 9v35H18.5V8.5Z"
       fill="#f8fafc"
       stroke="#0f172a"
       strokeWidth={3}
       strokeLinejoin="round"
     />
-    <path d="M40 7v9h9" fill="none" stroke="#94a3b8" strokeWidth={2} strokeLinejoin="round" />
     <path
-      d="M24 23.5h19M24 31.5h19M24 39.5h12"
+      d="M41 8.5v9h9"
+      fill="none"
+      stroke="#94a3b8"
+      strokeWidth={2.2}
+      strokeLinejoin="round"
+    />
+    <path
+      d="M24 26h19M24 33.5h19M24 41h15"
       stroke="#cbd5f5"
-      strokeWidth={3}
+      strokeWidth={2.2}
       strokeLinecap="round"
     />
   </>
@@ -63,38 +69,36 @@ const PaperShape = (
 const ScissorsShape = (
   <>
     <path
-      d="M18.5 19.5 34 29.5l11.5-7.5"
-      stroke="#0f172a"
-      strokeWidth={3.4}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      fill="none"
-    />
-    <path
-      d="M18 34c4.4 0 8 3.6 8 8s-3.6 8-8 8-8-3.6-8-8 3.6-8 8-8Zm32-6c4.4 0 8 3.6 8 8s-3.6 8-8 8-8-3.6-8-8 3.6-8 8-8Z"
-      fill="#fbbf24"
+      d="M32 28 18.2 12.8l7.2-5.7 16.4 13Z"
+      fill="#bae6fd"
       stroke="#0f172a"
       strokeWidth={3}
+      strokeLinejoin="round"
     />
     <path
-      d="M26 42c0 4.4-3.6 8-8 8"
-      stroke="#f59e0b"
-      strokeWidth={2}
-      strokeLinecap="round"
+      d="M32 28 50.8 13.8 55.5 20l-19 12Z"
+      fill="#38bdf8"
+      stroke="#0f172a"
+      strokeWidth={3}
+      strokeLinejoin="round"
     />
     <path
-      d="M50 36c0 4.4-3.6 8-8 8"
-      stroke="#f59e0b"
-      strokeWidth={2}
-      strokeLinecap="round"
-    />
-    <path
-      d="M33 31.5 42 37"
-      stroke="#38bdf8"
-      strokeWidth={2.6}
+      d="M32 32 24 39.5"
+      stroke="#0f172a"
+      strokeWidth={3}
       strokeLinecap="round"
       strokeLinejoin="round"
     />
+    <path
+      d="M32 32l8 7.5"
+      stroke="#0f172a"
+      strokeWidth={3}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <circle cx={22} cy={44} r={8.5} fill="#fbbf24" stroke="#0f172a" strokeWidth={3} />
+    <circle cx={42} cy={44} r={8.5} fill="#fbbf24" stroke="#0f172a" strokeWidth={3} />
+    <circle cx={32} cy={28} r={2.6} fill="#0f172a" />
   </>
 );
 
