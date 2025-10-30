@@ -15,6 +15,12 @@ Players can experiment with different strategies, view live prediction confidenc
 
 * Player profiles and downloadable gameplay data
 
+# Website
+**You can try the RPS AI Predictor [here.](https://rps-predictor.pages.dev/)**
+
+> This is the latest deployed version of the game
+
+
 # Project Background
 This project was developed as part of the University of Texas at San Antonio (UTSA) College of AI, Cyber, and Computing, under the guidance of **Dr. Fred Martin**.
 
