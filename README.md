@@ -22,9 +22,57 @@ This project was developed as part of the University of Texas at San Antonio (UT
 
 * [Adam Ali](https://github.com/BoDa7s) – Lead Developer, AI logic & architecture
 
-* [John Weaver](https://github.com/John-N-Weaver) – Partner & Contributor: background transitions, launchers, and interface refinements
+* [John Weaver](https://github.com/John-N-Weaver) – Partner & Contributor: background transitions, launchers, and interface refinements.
 
-# Installation guides
+# Data & Privacy
+
+RPS Predictor is an educational game that shows how simple AIs learn patterns from Rock–Paper–Scissors. We keep the experience transparent, safe, and in the student’s control.
+
+## Storage modes
+
+* This device only (no cloud): All data stays in the browser (localStorage/IndexedDB). Nothing is sent to our servers. Clear browser data to erase everything.
+
+* Cloud account: If a player signs up or logs in, their profile, gameplay, and AI learning state can sync across devices in real time. Players can still export/delete their own data.
+
+## What we collect (and why)
+
+| Category          | Examples                                                                 | Why we collect it                                                         | Where it's stored                                      |
+|-------------------|--------------------------------------------------------------------------|----------------------------------------------------------------------------|--------------------------------------------------------|
+| **Gameplay**       | Player move, AI prediction, outcome, confidence, round time             | Teach how prediction works; show stats & patterns                          | Browser only (local mode) • Supabase (cloud mode)      |
+| **Profile (optional)** | First name/nickname, grade, age range, prior experience                 | Personalize UI; support class/group analysis                               | Browser only • Supabase (cloud)                        |
+| **AI State**       | N-gram/Markov counts, last moves, simple model settings                 | Make the AI adaptive and explainable                                       | Browser only • Supabase (cloud)                        |
+| **Exports (optional)** | CSV with rounds, timestamps, confidence, (optional) profile fields       | Student/researcher analysis; class activities                              | Downloaded file on the user’s device                   |
+
+> We **never** collect IP addresses, device identifiers, or third-party analytics.  
+> **No ads. No tracking pixels.**
+
+## Consent & use
+
+* The game is designed for transparency, autonomy, and confidentiality in K–12 contexts.
+
+* Players can run local-only if preferred; And may optionally sign in to enable sync.
+
+* Player can export a CSV of results for reflection, math activities, or science-fair style analysis.
+
+## Compliance notes (plain language)
+
+* Built to align with FERPA expectations for student data minimization, UTSA data-governance principles, and the ACM Code of Ethics spirit for responsible computing.
+
+* By default, the app collects only what’s needed to make the AI work and to show learning outcomes.
+
+## Delete / reset
+
+* Local-only: Clear site data or use the in-app “Reset data” to remove everything.
+
+* Cloud: Use “Delete account & data” to remove cloud records (profiles, rounds, AI state, stats, device shadows).
+> **Note:** Some **gameplay** data **will be retained for a short period of time** to improve analysis and reliability, and **then it is discarded**. We do **not** keep it longer than needed.
+
+## Research & sharing
+
+* Nothing is shared automatically. If a CSV is downloaded, the file is under the user control.
+
+
+# Local Installation Guides
 
 ## Docker (Recommended)
 
