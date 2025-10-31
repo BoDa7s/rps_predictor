@@ -2426,6 +2426,17 @@ function RPSDoodleAppInner(){
       bootAdvancingRef.current = false;
       return;
     }
+    if (welcomeActive) {
+      if (bootAnimationRef.current !== null) {
+        window.cancelAnimationFrame(bootAnimationRef.current);
+        bootAnimationRef.current = null;
+      }
+      bootStartRef.current = null;
+      setBootProgress(0);
+      setBootReady(false);
+      bootAdvancingRef.current = false;
+      return;
+    }
     bootAdvancingRef.current = false;
     setBootProgress(0);
     setBootReady(false);
@@ -2455,7 +2466,7 @@ function RPSDoodleAppInner(){
         bootAnimationRef.current = null;
       }
     };
-  }, [scene]);
+  }, [scene, welcomeActive]);
 
   const [predictorMode, setPredictorMode] = useState<boolean>(currentProfile?.predictorDefault ?? false);
   const [aiMode, setAiMode] = useState<AIMode>("normal");
@@ -3134,6 +3145,7 @@ function RPSDoodleAppInner(){
 
   useEffect(() => {
     if (scene !== "BOOT") return;
+    if (welcomeActive) return;
     if (!bootReady) return;
     if (bootAdvancingRef.current) return;
     bootAdvancingRef.current = true;
@@ -3160,6 +3172,7 @@ function RPSDoodleAppInner(){
     hasConsented,
     trainingActive,
     forceTrainingPrompt,
+    welcomeActive,
     setWelcomeOrigin,
     setWelcomeSeen,
     setWelcomeStage,
@@ -3172,16 +3185,9 @@ function RPSDoodleAppInner(){
       return;
     }
     if (reason !== "dismiss" && needsTraining && currentProfile && hasConsented) {
-      if (reason === "setup") {
-        if (trainingActive) {
-          setTrainingActive(false);
-        }
-      } else if (!trainingActive) {
-        setTrainingActive(true);
-      }
-      startMatch("practice", { silent: true });
+      setForceTrainingPrompt(true);
     } else {
-      setScene("MODE");
+      setForceTrainingPrompt(false);
     }
     setPendingWelcomeExit(null);
   }, [
@@ -3189,11 +3195,8 @@ function RPSDoodleAppInner(){
     needsTraining,
     currentProfile,
     hasConsented,
-    trainingActive,
     setPendingWelcomeExit,
-    setScene,
-    setTrainingActive,
-    startMatch,
+    setForceTrainingPrompt,
   ]);
 
   const statsTabs = [
