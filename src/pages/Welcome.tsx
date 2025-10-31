@@ -15,14 +15,18 @@ import {
   signup as signupThroughEdge,
   setEdgeSession,
 } from "../lib/edgeFunctions";
-import { LOCAL_ACCOUNTS_KEY, LOCAL_ACTIVE_ACCOUNT_KEY, clearWelcomeStorage } from "../welcomeStorage";
+import {
+  LOCAL_ACCOUNTS_KEY,
+  LOCAL_ACTIVE_ACCOUNT_KEY,
+  PLAYERS_STORAGE_KEY,
+  CURRENT_PLAYER_STORAGE_KEY,
+  STATS_PROFILES_KEY,
+  STATS_CURRENT_PROFILE_KEY,
+  clearWelcomeStorage,
+} from "../welcomeStorage";
 
 const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => String(5 + index));
 
-const PLAYERS_STORAGE_KEY = "rps_players_v1";
-const CURRENT_PLAYER_STORAGE_KEY = "rps_current_player_v1";
-const STATS_PROFILES_KEY = "rps_stats_profiles_v1";
-const STATS_CURRENT_PROFILE_KEY = "rps_current_stats_profile_v1";
 const TRAINING_ROUNDS_REQUIRED = 10;
 const TRAINING_ROUTE_PATH = "/training";
 

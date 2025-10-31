@@ -49,7 +49,7 @@ import botSad48 from "./assets/mascot/bot-sad-48.svg";
 import botSad64 from "./assets/mascot/bot-sad-64.svg";
 import botSad96 from "./assets/mascot/bot-sad-96.svg";
 import HelpCenter, { type HelpQuestion } from "./HelpCenter";
-import { clearWelcomeStorage } from "./welcomeStorage";
+import { clearWelcomeStorage, LEGACY_WELCOME_SEEN_KEY, WELCOME_PREF_KEY } from "./welcomeStorage";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -84,8 +84,6 @@ const DIFFICULTY_INFO: Record<AIMode, { label: string; helper: string }> = {
 
 const DIFFICULTY_SEQUENCE: AIMode[] = ["fair", "normal", "ruthless"];
 const BEST_OF_OPTIONS: BestOf[] = [3, 5, 7];
-const LEGACY_WELCOME_SEEN_KEY = "rps_welcome_seen_v1";
-const WELCOME_PREF_KEY = "rps_welcome_pref_v1";
 const INSIGHT_PANEL_STATE_KEY = "rps_insight_panel_open_v1";
 type WelcomePreference = "show" | "skip";
 
@@ -2880,6 +2878,7 @@ function RPSDoodleAppInner(){
       currentMatchRoundsRef.current = [];
       setTrainingActive(false);
       setTrainingCalloutQueue([]);
+      setForceTrainingPrompt(false);
       trainingAnnouncementsRef.current.clear();
       setPostTrainingCtaOpen(false);
       clearRobotReactionTimers();
@@ -2966,6 +2965,7 @@ function RPSDoodleAppInner(){
       setToastReaderOpen,
       setTrainingActive,
       setTrainingCalloutQueue,
+      setForceTrainingPrompt,
       setWelcomeActive,
       setWelcomeSeen,
       setWelcomeSlide,
@@ -2999,10 +2999,24 @@ function RPSDoodleAppInner(){
           window.clearInterval(signOutProgressIntervalRef.current);
           signOutProgressIntervalRef.current = null;
         }
+        if (bootAnimationRef.current !== null) {
+          window.cancelAnimationFrame(bootAnimationRef.current);
+          bootAnimationRef.current = null;
+        }
+        bootStartRef.current = null;
+        bootAdvancingRef.current = false;
+        setBootProgress(0);
+        setBootReady(false);
+        rebootResumeRef.current = null;
         resetStats();
         resetPlayers();
         resetMatchTimings();
-        clearWelcomeStorage({ clearAccounts: true });
+        clearWelcomeStorage({
+          clearAccounts: true,
+          clearPreferences: true,
+          clearPlayers: true,
+          clearStats: true,
+        });
         lockSecureStore();
         setWelcomePreference("show");
         openWelcome({
@@ -3043,6 +3057,8 @@ function RPSDoodleAppInner(){
     resetPlayers,
     resetStats,
     setWelcomePreference,
+    setBootProgress,
+    setBootReady,
     clearWelcomeStorage,
   ]);
 
