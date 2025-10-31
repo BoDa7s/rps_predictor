@@ -49,6 +49,7 @@ import botSad48 from "./assets/mascot/bot-sad-48.svg";
 import botSad64 from "./assets/mascot/bot-sad-64.svg";
 import botSad96 from "./assets/mascot/bot-sad-96.svg";
 import HelpCenter, { type HelpQuestion } from "./HelpCenter";
+import { clearWelcomeStorage } from "./welcomeStorage";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -3001,6 +3002,7 @@ function RPSDoodleAppInner(){
         resetStats();
         resetPlayers();
         resetMatchTimings();
+        clearWelcomeStorage({ clearAccounts: true });
         lockSecureStore();
         setWelcomePreference("show");
         openWelcome({
@@ -3034,7 +3036,15 @@ function RPSDoodleAppInner(){
         signOutCompletionTimeoutRef.current = null;
       }
     };
-  }, [signOutActive, openWelcome, resetMatchTimings, resetPlayers, resetStats, setWelcomePreference]);
+  }, [
+    signOutActive,
+    openWelcome,
+    resetMatchTimings,
+    resetPlayers,
+    resetStats,
+    setWelcomePreference,
+    clearWelcomeStorage,
+  ]);
 
   const finishWelcomeFlow = useCallback(
     (reason: "setup" | "restore" | "dismiss") => {

@@ -15,11 +15,10 @@ import {
   signup as signupThroughEdge,
   setEdgeSession,
 } from "../lib/edgeFunctions";
+import { LOCAL_ACCOUNTS_KEY, LOCAL_ACTIVE_ACCOUNT_KEY, clearWelcomeStorage } from "../welcomeStorage";
 
 const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => String(5 + index));
 
-const LOCAL_ACCOUNTS_KEY = "rps_local_accounts_v1";
-const LOCAL_ACTIVE_ACCOUNT_KEY = "rps_local_active_account_v1";
 const PLAYERS_STORAGE_KEY = "rps_players_v1";
 const CURRENT_PLAYER_STORAGE_KEY = "rps_current_player_v1";
 const STATS_PROFILES_KEY = "rps_stats_profiles_v1";
@@ -228,7 +227,7 @@ function loadActiveLocalSession(): LocalSession | null {
 
 function clearActiveLocalSession(profileId?: string) {
   if (!isBrowser()) return;
-  window.localStorage.removeItem(LOCAL_ACTIVE_ACCOUNT_KEY);
+  clearWelcomeStorage();
   if (!profileId) return;
   const currentId = window.localStorage.getItem(CURRENT_PLAYER_STORAGE_KEY);
   if (currentId === profileId) {
