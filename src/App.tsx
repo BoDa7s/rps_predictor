@@ -1742,13 +1742,28 @@ function RPSDoodleAppInner(){
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [restoreSelectedPlayerId, setRestoreSelectedPlayerId] = useState<string | null>(null);
   type Scene = "BOOT"|"MODE"|"MATCH"|"RESULTS";
+  type BootNext = "AUTO" | "RESTORE";
+  interface RebootResumeState {
+    scene: Scene;
+    mode: Mode | null;
+    trainingActive: boolean;
+    statsOpen: boolean;
+    leaderboardOpen: boolean;
+    settingsOpen: boolean;
+    helpGuideOpen: boolean;
+    helpCenterOpen: boolean;
+    postTrainingCtaOpen: boolean;
+    insightPanelOpen: boolean;
+    resultBanner: "Victory" | "Defeat" | "Tie" | null;
+  }
   const [scene, setScene] = useState<Scene>("BOOT");
-  const [bootNext, setBootNext] = useState<"AUTO">("AUTO");
+  const [bootNext, setBootNext] = useState<BootNext>("AUTO");
   const [bootProgress, setBootProgress] = useState(0);
   const [bootReady, setBootReady] = useState(false);
   const bootStartRef = useRef<number | null>(null);
   const bootAnimationRef = useRef<number | null>(null);
   const bootAdvancingRef = useRef(false);
+  const rebootResumeRef = useRef<RebootResumeState | null>(null);
   const [pendingWelcomeExit, setPendingWelcomeExit] = useState<
     null | { reason: "setup" | "restore" | "dismiss" }
   >(null);
@@ -1849,6 +1864,7 @@ function RPSDoodleAppInner(){
     }
     return 360;
   }, []);
+
 
   const buildLiveSnapshot = useCallback(
     (trace: PendingDecision, aiMove: Move): LiveInsightSnapshot => {
@@ -2723,6 +2739,40 @@ function RPSDoodleAppInner(){
   };
 
   const [selectedMode, setSelectedMode] = useState<Mode|null>(null);
+  const applyRebootResumeState = useCallback(
+    (state: RebootResumeState) => {
+      const needsMode = state.scene === "MATCH" || state.scene === "RESULTS";
+      const resolvedMode = needsMode ? state.mode ?? "practice" : state.mode;
+      setTrainingActive(state.trainingActive);
+      setPostTrainingCtaOpen(state.postTrainingCtaOpen);
+      setSelectedMode(resolvedMode ?? null);
+      setResultBanner(state.scene === "RESULTS" ? state.resultBanner : null);
+      setScene(state.scene);
+      requestAnimationFrame(() => {
+        setStatsOpen(state.statsOpen);
+        setLeaderboardOpen(state.leaderboardOpen);
+        setSettingsOpen(state.settingsOpen);
+        setHelpGuideOpen(state.helpGuideOpen);
+        setHelpCenterOpen(state.helpCenterOpen);
+        setInsightPanelOpen(state.insightPanelOpen);
+      });
+      setLive("Reboot complete. Returning to your previous screen.");
+    },
+    [
+      setHelpCenterOpen,
+      setHelpGuideOpen,
+      setInsightPanelOpen,
+      setLeaderboardOpen,
+      setLive,
+      setPostTrainingCtaOpen,
+      setResultBanner,
+      setScene,
+      setSelectedMode,
+      setSettingsOpen,
+      setStatsOpen,
+      setTrainingActive,
+    ],
+  );
   const showMatchScoreBadge = !trainingActive && (selectedMode ?? "practice") === "challenge";
   const hudInsightDisabled = (selectedMode ?? "practice") === "practice" && !predictorMode;
   const showResultsScoreBadge = showMatchScoreBadge && matchScoreTotal !== null;
@@ -2781,7 +2831,15 @@ function RPSDoodleAppInner(){
   );
 
   const openWelcome = useCallback(
-    (options: { announce?: string; resetPlayer?: boolean; bootFirst?: boolean; origin?: "launch" | "settings" } = {}) => {
+    (
+      options: {
+        announce?: string;
+        resetPlayer?: boolean;
+        bootFirst?: boolean;
+        origin?: "launch" | "settings";
+        bootNext?: BootNext;
+      } = {},
+    ) => {
       clearCountdown();
       setPhase("idle");
       setCount(3);
@@ -2834,7 +2892,7 @@ function RPSDoodleAppInner(){
       setPendingWelcomeExit(null);
       setWelcomeOrigin(options.origin ?? null);
       setWelcomeActive(false);
-      setBootNext("AUTO");
+      setBootNext(options.bootNext ?? "AUTO");
       setScene("BOOT");
       welcomeToastShownRef.current = false;
       welcomeFinalToastShownRef.current = false;
@@ -3149,6 +3207,15 @@ function RPSDoodleAppInner(){
     if (!bootReady) return;
     if (bootAdvancingRef.current) return;
     bootAdvancingRef.current = true;
+    if (bootNext === "RESTORE") {
+      const resumeState = rebootResumeRef.current;
+      rebootResumeRef.current = null;
+      setBootNext("AUTO");
+      if (resumeState) {
+        applyRebootResumeState(resumeState);
+        return;
+      }
+    }
     if (needsTraining && currentProfile && hasConsented) {
       if (forceTrainingPrompt) {
         if (trainingActive) {
@@ -3176,6 +3243,8 @@ function RPSDoodleAppInner(){
     setWelcomeOrigin,
     setWelcomeSeen,
     setWelcomeStage,
+    applyRebootResumeState,
+    setBootNext,
   ]);
 
   useEffect(() => {
@@ -3751,19 +3820,50 @@ function RPSDoodleAppInner(){
       confirmLabel: "Reboot now",
       cancelLabel: "Cancel",
       onConfirm: () => {
+        rebootResumeRef.current = {
+          scene,
+          mode: selectedMode,
+          trainingActive,
+          statsOpen,
+          leaderboardOpen,
+          settingsOpen,
+          helpGuideOpen,
+          helpCenterOpen,
+          postTrainingCtaOpen,
+          insightPanelOpen,
+          resultBanner,
+        };
         setToastConfirm(null);
         setToastMessage(null);
         handleCloseSettings(false);
         openWelcome({
           announce: "Rebooting. Boot sequence starting for the welcome intro.",
-          resetPlayer: true,
+          resetPlayer: false,
           bootFirst: true,
           origin: "launch",
+          bootNext: "RESTORE",
         });
       },
     });
     setLive("Reboot requested. Confirm via toast to restart.");
-  }, [handleCloseSettings, openWelcome, setLive, setToastConfirm, setToastMessage]);
+  }, [
+    handleCloseSettings,
+    openWelcome,
+    scene,
+    selectedMode,
+    trainingActive,
+    statsOpen,
+    leaderboardOpen,
+    settingsOpen,
+    helpGuideOpen,
+    helpCenterOpen,
+    postTrainingCtaOpen,
+    insightPanelOpen,
+    resultBanner,
+    setLive,
+    setToastConfirm,
+    setToastMessage,
+  ]);
 
   const handleCreateProfile = useCallback(() => {
     if (settingsOpen) {
