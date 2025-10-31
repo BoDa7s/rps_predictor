@@ -1,0 +1,13 @@
+project_id = "izoaomqwycmgczuzkhgw"
+
+[functions.auth_signup]
+verify_jwt = false
+
+[functions.auth_login]
+verify_jwt = false
+
+[functions.auth_recover_username]
+verify_jwt = false
+
+[functions.auth_reset_password]
+verify_jwt = false
