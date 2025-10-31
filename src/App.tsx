@@ -49,7 +49,7 @@ import botSad48 from "./assets/mascot/bot-sad-48.svg";
 import botSad64 from "./assets/mascot/bot-sad-64.svg";
 import botSad96 from "./assets/mascot/bot-sad-96.svg";
 import HelpCenter, { type HelpQuestion } from "./HelpCenter";
-import { clearWelcomeStorage, LEGACY_WELCOME_SEEN_KEY, WELCOME_PREF_KEY } from "./welcomeStorage";
+import { clearWelcomeStorage } from "./welcomeStorage";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -84,6 +84,8 @@ const DIFFICULTY_INFO: Record<AIMode, { label: string; helper: string }> = {
 
 const DIFFICULTY_SEQUENCE: AIMode[] = ["fair", "normal", "ruthless"];
 const BEST_OF_OPTIONS: BestOf[] = [3, 5, 7];
+const LEGACY_WELCOME_SEEN_KEY = "rps_welcome_seen_v1";
+const WELCOME_PREF_KEY = "rps_welcome_pref_v1";
 const INSIGHT_PANEL_STATE_KEY = "rps_insight_panel_open_v1";
 type WelcomePreference = "show" | "skip";
 
@@ -1752,7 +1754,6 @@ function RPSDoodleAppInner(){
   const [restoreSelectedPlayerId, setRestoreSelectedPlayerId] = useState<string | null>(null);
   type Scene = "BOOT"|"MODE"|"MATCH"|"RESULTS";
   type BootNext = "AUTO" | "RESTORE";
-  const BOOT_SEQUENCE_ENABLED = false as const;
   interface RebootResumeState {
     scene: Scene;
     mode: Mode | null;
@@ -1766,7 +1767,7 @@ function RPSDoodleAppInner(){
     insightPanelOpen: boolean;
     resultBanner: "Victory" | "Defeat" | "Tie" | null;
   }
-  const [scene, setScene] = useState<Scene>(BOOT_SEQUENCE_ENABLED ? "BOOT" : "MODE");
+  const [scene, setScene] = useState<Scene>("BOOT");
   const [bootNext, setBootNext] = useState<BootNext>("AUTO");
   const [bootProgress, setBootProgress] = useState(0);
   const [bootReady, setBootReady] = useState(false);
@@ -2450,24 +2451,7 @@ function RPSDoodleAppInner(){
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      if (!BOOT_SEQUENCE_ENABLED) {
-        setBootProgress(100);
-        setBootReady(true);
-      }
-      return;
-    }
-    if (!BOOT_SEQUENCE_ENABLED) {
-      if (bootAnimationRef.current !== null) {
-        window.cancelAnimationFrame(bootAnimationRef.current);
-        bootAnimationRef.current = null;
-      }
-      bootStartRef.current = null;
-      bootAdvancingRef.current = false;
-      setBootProgress(100);
-      setBootReady(true);
-      return;
-    }
+    if (typeof window === "undefined") return;
     if (scene !== "BOOT") {
       if (bootAnimationRef.current !== null) {
         window.cancelAnimationFrame(bootAnimationRef.current);
@@ -2896,7 +2880,6 @@ function RPSDoodleAppInner(){
       currentMatchRoundsRef.current = [];
       setTrainingActive(false);
       setTrainingCalloutQueue([]);
-      setForceTrainingPrompt(false);
       trainingAnnouncementsRef.current.clear();
       setPostTrainingCtaOpen(false);
       clearRobotReactionTimers();
@@ -2983,7 +2966,6 @@ function RPSDoodleAppInner(){
       setToastReaderOpen,
       setTrainingActive,
       setTrainingCalloutQueue,
-      setForceTrainingPrompt,
       setWelcomeActive,
       setWelcomeSeen,
       setWelcomeSlide,
@@ -3017,24 +2999,10 @@ function RPSDoodleAppInner(){
           window.clearInterval(signOutProgressIntervalRef.current);
           signOutProgressIntervalRef.current = null;
         }
-        if (bootAnimationRef.current !== null) {
-          window.cancelAnimationFrame(bootAnimationRef.current);
-          bootAnimationRef.current = null;
-        }
-        bootStartRef.current = null;
-        bootAdvancingRef.current = false;
-        setBootProgress(0);
-        setBootReady(false);
-        rebootResumeRef.current = null;
         resetStats();
         resetPlayers();
         resetMatchTimings();
-        clearWelcomeStorage({
-          clearAccounts: true,
-          clearPreferences: true,
-          clearPlayers: true,
-          clearStats: true,
-        });
+        clearWelcomeStorage({ clearAccounts: true });
         lockSecureStore();
         setWelcomePreference("show");
         openWelcome({
@@ -3075,8 +3043,6 @@ function RPSDoodleAppInner(){
     resetPlayers,
     resetStats,
     setWelcomePreference,
-    setBootProgress,
-    setBootReady,
     clearWelcomeStorage,
   ]);
 
@@ -3944,7 +3910,7 @@ function RPSDoodleAppInner(){
   );
 
   const handleReboot = useCallback(() => {
-    setToastMessage("Confirm reboot? This will replay the welcome intro.");
+    setToastMessage("Confirm reboot? This will replay the welcome intro after the boot sequence.");
     setToastConfirm({
       confirmLabel: "Reboot now",
       cancelLabel: "Cancel",
@@ -3966,7 +3932,7 @@ function RPSDoodleAppInner(){
         setToastMessage(null);
         handleCloseSettings(false);
         openWelcome({
-          announce: "Rebooting. Returning to the welcome intro.",
+          announce: "Rebooting. Boot sequence starting for the welcome intro.",
           resetPlayer: false,
           bootFirst: true,
           origin: "launch",
@@ -5981,7 +5947,7 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
 
       <AnimatePresence mode="wait">
-        {scene === "BOOT" && BOOT_SEQUENCE_ENABLED && (
+        {scene === "BOOT" && (
           <motion.div
             key="boot"
             initial={{ opacity: 0 }}
@@ -7306,13 +7272,13 @@ function RPSDoodleAppInner(){
                     openWelcome({
                       bootFirst: true,
                       origin: "settings",
-                      announce: "New player saved. Preparing training setup.",
+                      announce: "New player saved. Booting into training setup.",
                     });
                     setBootNext("AUTO");
                     setWelcomeOrigin(null);
                     setWelcomeSeen(true);
-                    setToastMessage("New player saved. Preparing to start training.");
-                    setLive("New player saved. Starting training setup.");
+                    setToastMessage("New player saved. Booting up to start training.");
+                    setLive("New player saved. Boot sequence initiated to start training.");
                     return;
                   }
                   if (result.action === "create") {
