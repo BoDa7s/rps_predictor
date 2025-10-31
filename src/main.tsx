@@ -12,6 +12,7 @@ if (postAuthPath && postAuthPath !== "/") {
   appPaths.add(postAuthPath);
 }
 appPaths.add("/modes");
+appPaths.add("/training");
 
 const routes = [
   { path: "/", element: <Welcome /> },

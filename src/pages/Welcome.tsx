@@ -22,6 +22,10 @@ const LOCAL_ACCOUNTS_KEY = "rps_local_accounts_v1";
 const LOCAL_ACTIVE_ACCOUNT_KEY = "rps_local_active_account_v1";
 const PLAYERS_STORAGE_KEY = "rps_players_v1";
 const CURRENT_PLAYER_STORAGE_KEY = "rps_current_player_v1";
+const STATS_PROFILES_KEY = "rps_stats_profiles_v1";
+const STATS_CURRENT_PROFILE_KEY = "rps_current_stats_profile_v1";
+const TRAINING_ROUNDS_REQUIRED = 10;
+const TRAINING_ROUTE_PATH = "/training";
 
 type AuthTab = "signIn" | "signUp";
 type AuthMode = "local" | "cloud";
@@ -44,6 +48,13 @@ interface LocalAccountRecord {
 
 interface LocalSession {
   profile: PlayerProfile;
+}
+
+interface StoredStatsProfileSnapshot {
+  id: string;
+  playerId: string;
+  trainingCount?: number;
+  trained?: boolean;
 }
 
 const initialSignUpForm: SignUpFormState = {
@@ -206,6 +217,86 @@ function clearActiveLocalSession(profileId?: string) {
   }
 }
 
+function loadStoredStatsProfiles(): StoredStatsProfileSnapshot[] {
+  if (!isBrowser()) return [];
+  try {
+    const raw = window.localStorage.getItem(STATS_PROFILES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const sanitized: StoredStatsProfileSnapshot[] = [];
+    parsed.forEach(item => {
+      if (!item || typeof item !== "object") {
+        return;
+      }
+      const snapshot = item as StoredStatsProfileSnapshot & { id?: unknown; playerId?: unknown };
+      const id = typeof snapshot.id === "string" ? snapshot.id : null;
+      const playerId = typeof snapshot.playerId === "string" ? snapshot.playerId : null;
+      if (!id || !playerId) {
+        return;
+      }
+      const trainingCount =
+        typeof snapshot.trainingCount === "number" && Number.isFinite(snapshot.trainingCount)
+          ? snapshot.trainingCount
+          : undefined;
+      const trained = snapshot.trained === true ? true : snapshot.trained === false ? false : undefined;
+      sanitized.push({ id, playerId, trainingCount, trained });
+    });
+    return sanitized;
+  } catch {
+    return [];
+  }
+}
+
+function getStoredCurrentStatsProfileId(): string | null {
+  if (!isBrowser()) return null;
+  try {
+    return window.localStorage.getItem(STATS_CURRENT_PROFILE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function resolveStatsProfileForPlayer(playerId: string | null | undefined): StoredStatsProfileSnapshot | null {
+  if (!playerId) return null;
+  const profiles = loadStoredStatsProfiles();
+  if (profiles.length === 0) return null;
+  const candidates = profiles.filter(profile => profile.playerId === playerId);
+  if (candidates.length === 0) return null;
+  const currentProfileId = getStoredCurrentStatsProfileId();
+  if (currentProfileId) {
+    const preferred = candidates.find(profile => profile.id === currentProfileId);
+    if (preferred) {
+      return preferred;
+    }
+  }
+  return candidates[0] ?? null;
+}
+
+function shouldStartTrainingAfterAuth(playerIdHint?: string | null): boolean {
+  if (!isBrowser()) return false;
+  const activePlayerId = playerIdHint ?? window.localStorage.getItem(CURRENT_PLAYER_STORAGE_KEY);
+  if (!activePlayerId) {
+    return false;
+  }
+  const profile = resolveStatsProfileForPlayer(activePlayerId);
+  if (!profile) {
+    return true;
+  }
+  const trainingCount =
+    typeof profile.trainingCount === "number" && Number.isFinite(profile.trainingCount)
+      ? profile.trainingCount
+      : 0;
+  const trained = profile.trained === true;
+  return !trained && trainingCount < TRAINING_ROUNDS_REQUIRED;
+}
+
+function resolvePostAuthDestination(playerIdHint?: string | null): string {
+  const defaultPath = getPostAuthPath();
+  const requireTraining = shouldStartTrainingAfterAuth(playerIdHint ?? null);
+  return requireTraining ? TRAINING_ROUTE_PATH : defaultPath;
+}
+
 function buildPlayerProfileFromForm(form: SignUpFormState): PlayerProfile {
   const first = form.firstName.trim();
   const initial = form.lastInitial.trim().charAt(0).toUpperCase();
@@ -230,12 +321,13 @@ const defaultAuthMode: AuthMode = isSupabaseConfigured && DEPLOY_ENV === "cloud"
 
 function usePostAuthNavigation() {
   const navigate = useNavigate();
-  const postAuthPath = useMemo(() => getPostAuthPath(), []);
-
-  return useCallback(() => {
-    if (!postAuthPath) return;
-    navigate(postAuthPath, { replace: true });
-  }, [navigate, postAuthPath]);
+  return useCallback(
+    (options?: { playerId?: string | null }) => {
+      const destination = resolvePostAuthDestination(options?.playerId ?? null);
+      navigate(destination, { replace: true });
+    },
+    [navigate],
+  );
 }
 
 export default function Welcome(): JSX.Element {
@@ -530,7 +622,7 @@ export default function Welcome(): JSX.Element {
         setActiveLocalAccount(nextAccount);
         setLocalSession({ profile: nextAccount.profile });
         setLocalSignUpForm(initialSignUpForm);
-        navigateToPostAuth();
+        navigateToPostAuth({ playerId: nextAccount.profile.id });
       } catch (error) {
         setLocalSignUpError(error instanceof Error ? error.message : "Unable to sign up. Try again.");
       } finally {

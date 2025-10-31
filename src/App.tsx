@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { motion, AnimatePresence, type Transition, useReducedMotion } from "framer-motion";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import {
@@ -1499,6 +1500,7 @@ function RPSDoodleAppInner(){
     adminRounds,
   } = useStats();
   const { players, currentPlayer, hasConsented, createPlayer, updatePlayer, setCurrentPlayer } = usePlayers();
+  const location = useLocation();
   const initialWelcomePreferenceRef = useRef<WelcomePreference | null>(null);
   if (initialWelcomePreferenceRef.current === null) {
     initialWelcomePreferenceRef.current = getInitialWelcomePreference();
@@ -1546,6 +1548,18 @@ function RPSDoodleAppInner(){
   const modelPersistPendingRef = useRef(false);
   const [trainingActive, setTrainingActive] = useState<boolean>(false);
   const [forceTrainingPrompt, setForceTrainingPrompt] = useState(false);
+  const trainingRouteHandledRef = useRef(false);
+  useEffect(() => {
+    const trainingRouteActive = location.pathname === "/training";
+    if (trainingRouteActive) {
+      if (!trainingRouteHandledRef.current) {
+        trainingRouteHandledRef.current = true;
+        setForceTrainingPrompt(true);
+      }
+    } else {
+      trainingRouteHandledRef.current = false;
+    }
+  }, [location.pathname]);
   const prevTrainingActiveRef = useRef(trainingActive);
   const [roundFilters, setRoundFilters] = useState<{ mode: RoundFilterMode; difficulty: RoundFilterDifficulty; outcome: RoundFilterOutcome; from: string; to: string }>({ mode: "all", difficulty: "all", outcome: "all", from: "", to: "" });
   useEffect(() => {
