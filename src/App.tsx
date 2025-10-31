@@ -1792,6 +1792,11 @@ function RPSDoodleAppInner(){
   const [helpToast, setHelpToast] = useState<{ title: string; message: string } | null>(null);
   const [modernToast, setModernToast] = useState<ModernToast | null>(null);
   const modernToastTimeoutRef = useRef<number | null>(null);
+  const [signOutConfirmOpen, setSignOutConfirmOpen] = useState(false);
+  const [signOutActive, setSignOutActive] = useState(false);
+  const [signOutProgress, setSignOutProgress] = useState(0);
+  const signOutProgressIntervalRef = useRef<number | null>(null);
+  const signOutCompletionTimeoutRef = useRef<number | null>(null);
   const [helpGuideOpen, setHelpGuideOpen] = useState(false);
   const helpButtonRef = useRef<HTMLButtonElement | null>(null);
   const [helpCenterOpen, setHelpCenterOpen] = useState(false);
@@ -2251,6 +2256,11 @@ function RPSDoodleAppInner(){
     if (toastMessage) return;
     setToastConfirm(null);
   }, [toastMessage]);
+  useEffect(() => {
+    if (!settingsOpen) {
+      setSignOutConfirmOpen(false);
+    }
+  }, [settingsOpen]);
   useEffect(() => {
     if (!toastReaderOpen) return;
     requestAnimationFrame(() => toastReaderCloseRef.current?.focus());
@@ -2950,6 +2960,60 @@ function RPSDoodleAppInner(){
       setLive,
     ],
   );
+
+  useEffect(() => {
+    if (!signOutActive) {
+      if (signOutProgressIntervalRef.current !== null) {
+        window.clearInterval(signOutProgressIntervalRef.current);
+        signOutProgressIntervalRef.current = null;
+      }
+      if (signOutCompletionTimeoutRef.current !== null) {
+        window.clearTimeout(signOutCompletionTimeoutRef.current);
+        signOutCompletionTimeoutRef.current = null;
+      }
+      return;
+    }
+    let progress = 0;
+    setSignOutProgress(0);
+    const step = () => {
+      progress = Math.min(100, progress + 8);
+      setSignOutProgress(progress);
+      if (progress >= 100) {
+        if (signOutProgressIntervalRef.current !== null) {
+          window.clearInterval(signOutProgressIntervalRef.current);
+          signOutProgressIntervalRef.current = null;
+        }
+        openWelcome({
+          announce: "Signing out complete. Returning to the welcome screen.",
+          resetPlayer: true,
+          origin: "settings",
+        });
+        if (signOutCompletionTimeoutRef.current !== null) {
+          window.clearTimeout(signOutCompletionTimeoutRef.current);
+        }
+        signOutCompletionTimeoutRef.current = window.setTimeout(() => {
+          setSignOutActive(false);
+          setSignOutProgress(0);
+          if (signOutCompletionTimeoutRef.current !== null) {
+            window.clearTimeout(signOutCompletionTimeoutRef.current);
+            signOutCompletionTimeoutRef.current = null;
+          }
+        }, 400);
+      }
+    };
+    signOutProgressIntervalRef.current = window.setInterval(step, 140);
+    step();
+    return () => {
+      if (signOutProgressIntervalRef.current !== null) {
+        window.clearInterval(signOutProgressIntervalRef.current);
+        signOutProgressIntervalRef.current = null;
+      }
+      if (signOutCompletionTimeoutRef.current !== null) {
+        window.clearTimeout(signOutCompletionTimeoutRef.current);
+        signOutCompletionTimeoutRef.current = null;
+      }
+    };
+  }, [signOutActive, openWelcome]);
 
   const finishWelcomeFlow = useCallback(
     (reason: "setup" | "restore" | "dismiss") => {
@@ -3864,6 +3928,24 @@ function RPSDoodleAppInner(){
     setToastConfirm,
     setToastMessage,
   ]);
+
+  const handleSignOutRequest = useCallback(() => {
+    if (signOutActive) return;
+    setSignOutConfirmOpen(true);
+    setLive("Sign out requested. Confirm to continue.");
+  }, [signOutActive, setLive]);
+
+  const handleSignOutCancel = useCallback(() => {
+    setSignOutConfirmOpen(false);
+    setLive("Sign out cancelled.");
+  }, [setLive]);
+
+  const handleSignOutConfirm = useCallback(() => {
+    if (signOutActive) return;
+    setSignOutConfirmOpen(false);
+    setSignOutActive(true);
+    setLive("Signing out. Progress indicator running.");
+  }, [signOutActive, setLive]);
 
   const handleCreateProfile = useCallback(() => {
     if (settingsOpen) {
@@ -4843,6 +4925,100 @@ function RPSDoodleAppInner(){
         )
       )}
 
+      <AnimatePresence>
+        {signOutConfirmOpen && (
+          <motion.div
+            key="signOutConfirm"
+            className="fixed inset-0 z-[97] flex items-center justify-center bg-slate-900/40 px-4 backdrop-blur-sm"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={handleSignOutCancel}
+          >
+            <motion.div
+              role="dialog"
+              aria-modal="true"
+              initial={{ opacity: 0, scale: 0.94 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              transition={{ duration: 0.22, ease: [0.22, 0.61, 0.36, 1] }}
+              className="w-full max-w-md rounded-3xl bg-white/95 p-6 text-slate-800 shadow-[0_28px_80px_rgba(15,23,42,0.32)] ring-1 ring-rose-100/70"
+              onClick={event => event.stopPropagation()}
+            >
+              <div className="flex items-start gap-4">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-rose-100 text-2xl" aria-hidden="true">
+                  🚪
+                </div>
+                <div className="space-y-2">
+                  <h2 className="text-lg font-semibold text-slate-900">Sign out?</h2>
+                  <p className="text-sm leading-relaxed text-slate-600">
+                    You’ll return to the welcome screen and need to pick a player to continue.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-200 px-4 py-1.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-100"
+                  onClick={handleSignOutCancel}
+                >
+                  Stay here
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full bg-rose-600 px-4 py-1.5 text-sm font-semibold text-white shadow transition hover:bg-rose-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500"
+                  onClick={handleSignOutConfirm}
+                >
+                  Yes, sign out
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {signOutActive && (
+          <motion.div
+            key="signOutProgress"
+            className="fixed inset-0 z-[98] flex items-center justify-center bg-slate-900/40 px-6 backdrop-blur-sm"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              role="status"
+              aria-live="assertive"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 12 }}
+              transition={{ duration: 0.28, ease: [0.22, 0.61, 0.36, 1] }}
+              className="w-full max-w-sm rounded-3xl bg-white/95 p-6 text-slate-800 shadow-[0_28px_80px_rgba(15,23,42,0.32)] ring-1 ring-rose-100/70"
+            >
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <div className="text-base font-semibold text-slate-900">Signing you out…</div>
+                  <p className="text-sm text-slate-500">Wrapping things up and returning to the welcome screen.</p>
+                </div>
+                <div className="space-y-2">
+                  <div className="h-3 w-full rounded-full bg-rose-100/70">
+                    <motion.div
+                      className="h-full rounded-full bg-rose-500"
+                      initial={false}
+                      animate={{ width: `${Math.min(100, Math.max(6, signOutProgress))}%` }}
+                      transition={{ duration: 0.18, ease: [0.22, 0.61, 0.36, 1] }}
+                    />
+                  </div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.28em] text-rose-500/80">
+                    {Math.min(100, Math.round(signOutProgress))}%
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {helpToast && (
         <div className="fixed bottom-6 right-4 z-[94]">
           <div
@@ -5718,16 +5894,17 @@ function RPSDoodleAppInner(){
                     </div>
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <div className="text-sm font-semibold text-slate-800">Reboot</div>
-                        <p className="text-xs text-slate-500">Restart with the boot animation and welcome intro.</p>
+                        <div className="text-sm font-semibold text-slate-800">Sign out</div>
+                        <p className="text-xs text-slate-500">Leave this session and return to the welcome screen.</p>
                       </div>
                       <button
                         type="button"
-                        onClick={handleReboot}
-                        className="rounded-full bg-slate-900/90 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-slate-900"
-                        data-dev-label="set.reboot"
+                        onClick={handleSignOutRequest}
+                        disabled={signOutActive}
+                        className="rounded-full bg-rose-600 px-4 py-2 text-xs font-semibold text-white shadow transition hover:bg-rose-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-500 disabled:cursor-not-allowed disabled:bg-rose-300 disabled:text-white/80"
+                        data-dev-label="set.signOut"
                       >
-                        Reboot
+                        Sign out
                       </button>
                     </div>
                   </div>
