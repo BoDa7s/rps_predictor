@@ -1,0 +1,6 @@
+# Ignore everything by default
+*
+
+# Allow the app folder and the ignore file itself
+!old-app-archive/**
+!.cfignore
