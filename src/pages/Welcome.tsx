@@ -10,6 +10,11 @@ import {
   type PlayerProfile,
 } from "../players";
 import { useNavigate } from "react-router-dom";
+import {
+  login as loginThroughEdge,
+  signup as signupThroughEdge,
+  setEdgeSession,
+} from "../lib/edgeFunctions";
 
 const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => String(5 + index));
 
@@ -334,18 +339,27 @@ export default function Welcome(): JSX.Element {
       setCloudSignInError(null);
       setCloudSignInPending(true);
       try {
-        const { data, error } = await supabaseClient.auth.signInWithPassword({
-          email: cloudSignInUsername.trim(),
+        const trimmedUsername = cloudSignInUsername.trim();
+        const result = await loginThroughEdge({
+          username: trimmedUsername,
           password: cloudSignInPassword,
         });
-        if (error) {
-          throw error;
-        }
-        if (!data.session) {
-          setCloudSignInError("Sign-in succeeded, but no session was returned.");
+        if (result.error || !result.data) {
+          setCloudSignInError(result.error ?? result.data?.message ?? "Unable to sign in. Try again.");
           return;
         }
-        setSession(data.session);
+        if (!result.data.session) {
+          setCloudSignInError(
+            result.data.message ?? "Sign-in succeeded, but no session was returned. Check your email to continue.",
+          );
+          return;
+        }
+        const nextSession = await setEdgeSession(result.data.session);
+        if (!nextSession) {
+          setCloudSignInError("Sign-in succeeded, but we could not establish a session. Try again.");
+          return;
+        }
+        setSession(nextSession);
         navigateToPostAuth();
       } catch (error) {
         setCloudSignInError(error instanceof Error ? error.message : "Unable to sign in. Try again.");
@@ -404,18 +418,32 @@ export default function Welcome(): JSX.Element {
         prior_experience: priorExperience.trim() || null,
       };
       try {
-        const { data, error } = await supabaseClient.auth.signUp({
-          email: trimmedUsername,
+        const result = await signupThroughEdge({
+          firstName: profileMetadata.first_name,
+          lastInitial: profileMetadata.last_initial,
+          grade,
+          age,
+          username: trimmedUsername,
           password,
-          options: {
-            data: profileMetadata,
-          },
+          school: profileMetadata.school ?? undefined,
+          priorExperience: profileMetadata.prior_experience ?? undefined,
         });
-        if (error) {
-          throw error;
+        if (result.error || !result.data) {
+          setCloudSignUpError(result.error ?? result.data?.message ?? "Unable to sign up. Try again.");
+          return;
         }
-        const nextSession = data.session;
-        const userId = data.user?.id;
+        if (!result.data.session) {
+          setCloudSignUpError(
+            result.data.message ?? "Sign-up succeeded. Check your email to confirm before continuing.",
+          );
+          return;
+        }
+        const nextSession = await setEdgeSession(result.data.session);
+        if (!nextSession) {
+          setCloudSignUpError("Sign-up succeeded, but we could not establish a session. Try again.");
+          return;
+        }
+        const userId = nextSession.user?.id ?? result.data.user?.id;
         if (userId) {
           try {
             const { error: profileError } = await supabaseClient
@@ -439,10 +467,6 @@ export default function Welcome(): JSX.Element {
           } catch (upsertError) {
             console.warn("demographics_profiles upsert threw", upsertError);
           }
-        }
-        if (!nextSession) {
-          setCloudSignUpError("Sign-up succeeded. Check your email to confirm before continuing.");
-          return;
         }
         setSession(nextSession);
         navigateToPostAuth();
