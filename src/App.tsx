@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence, type Transition, useReducedMotion } from "framer-motion";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import {
@@ -1501,6 +1501,7 @@ function RPSDoodleAppInner(){
   } = useStats();
   const { players, currentPlayer, hasConsented, createPlayer, updatePlayer, setCurrentPlayer } = usePlayers();
   const location = useLocation();
+  const navigate = useNavigate();
   const initialWelcomePreferenceRef = useRef<WelcomePreference | null>(null);
   if (initialWelcomePreferenceRef.current === null) {
     initialWelcomePreferenceRef.current = getInitialWelcomePreference();
@@ -2848,6 +2849,7 @@ function RPSDoodleAppInner(){
         bootFirst?: boolean;
         origin?: "launch" | "settings";
         bootNext?: BootNext;
+        redirectToWelcome?: boolean;
       } = {},
     ) => {
       clearCountdown();
@@ -2909,8 +2911,12 @@ function RPSDoodleAppInner(){
       if (options.announce) {
         setLive(options.announce);
       }
+      if (options.redirectToWelcome) {
+        navigate("/", { replace: true });
+      }
     },
     [
+      navigate,
       clearCountdown,
       clearRobotReactionTimers,
       setAiHistory,
@@ -2987,6 +2993,7 @@ function RPSDoodleAppInner(){
           announce: "Signing out complete. Returning to the welcome screen.",
           resetPlayer: true,
           origin: "settings",
+          redirectToWelcome: true,
         });
         if (signOutCompletionTimeoutRef.current !== null) {
           window.clearTimeout(signOutCompletionTimeoutRef.current);
