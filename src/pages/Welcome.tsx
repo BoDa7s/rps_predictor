@@ -38,14 +38,11 @@ type SignUpFormState = {
 };
 
 interface LocalAccountRecord {
-  username: string;
-  passwordHash: string;
   profile: PlayerProfile;
   createdAt: string;
 }
 
 interface LocalSession {
-  username: string;
   profile: PlayerProfile;
 }
 
@@ -156,15 +153,13 @@ function loadLocalAccounts(): LocalAccountRecord[] {
     return parsed
       .map(item => {
         if (!item || typeof item !== "object") return null;
-        const username = typeof item.username === "string" ? item.username : null;
-        const passwordHash = typeof item.passwordHash === "string" ? item.passwordHash : null;
-        if (!username || !passwordHash) return null;
         const profile = normalizeStoredProfile((item as any).profile);
         return {
-          username,
-          passwordHash,
           profile,
-          createdAt: typeof (item as any).createdAt === "string" ? (item as any).createdAt : new Date().toISOString(),
+          createdAt:
+            typeof (item as any).createdAt === "string"
+              ? (item as any).createdAt
+              : new Date().toISOString(),
         } as LocalAccountRecord;
       })
       .filter((account): account is LocalAccountRecord => account !== null);
@@ -181,18 +176,24 @@ function saveLocalAccounts(accounts: LocalAccountRecord[]) {
 function setActiveLocalAccount(account: LocalAccountRecord) {
   if (!isBrowser()) return;
   ensurePlayerStored(account.profile);
-  window.localStorage.setItem(LOCAL_ACTIVE_ACCOUNT_KEY, account.username);
+  window.localStorage.setItem(LOCAL_ACTIVE_ACCOUNT_KEY, account.profile.id);
 }
 
 function loadActiveLocalSession(): LocalSession | null {
   if (!isBrowser()) return null;
-  const username = window.localStorage.getItem(LOCAL_ACTIVE_ACCOUNT_KEY);
-  if (!username) return null;
+  const profileId = window.localStorage.getItem(LOCAL_ACTIVE_ACCOUNT_KEY);
+  if (!profileId) return null;
   const accounts = loadLocalAccounts();
-  const account = accounts.find(candidate => candidate.username === username);
-  if (!account) return null;
-  ensurePlayerStored(account.profile);
-  return { username: account.username, profile: account.profile };
+  const account = accounts.find(candidate => candidate.profile.id === profileId);
+  if (account) {
+    ensurePlayerStored(account.profile);
+    return { profile: account.profile };
+  }
+  const storedPlayers = loadStoredPlayers();
+  const fallbackProfile = storedPlayers.find(player => player.id === profileId);
+  if (!fallbackProfile) return null;
+  ensurePlayerStored(fallbackProfile);
+  return { profile: fallbackProfile };
 }
 
 function clearActiveLocalSession(profileId?: string) {
@@ -203,18 +204,6 @@ function clearActiveLocalSession(profileId?: string) {
   if (currentId === profileId) {
     window.localStorage.removeItem(CURRENT_PLAYER_STORAGE_KEY);
   }
-}
-
-async function hashPassword(password: string): Promise<string> {
-  if (typeof window !== "undefined" && window.crypto?.subtle) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(password);
-    const digest = await window.crypto.subtle.digest("SHA-256", data);
-    return Array.from(new Uint8Array(digest))
-      .map(byte => byte.toString(16).padStart(2, "0"))
-      .join("");
-  }
-  return password;
 }
 
 function buildPlayerProfileFromForm(form: SignUpFormState): PlayerProfile {
@@ -270,10 +259,6 @@ export default function Welcome(): JSX.Element {
   const [cloudSignOutPending, setCloudSignOutPending] = useState(false);
 
   const [localSession, setLocalSession] = useState<LocalSession | null>(null);
-  const [localSignInUsername, setLocalSignInUsername] = useState("");
-  const [localSignInPassword, setLocalSignInPassword] = useState("");
-  const [localSignInError, setLocalSignInError] = useState<string | null>(null);
-  const [localSignInPending, setLocalSignInPending] = useState(false);
 
   const [localSignUpForm, setLocalSignUpForm] = useState<SignUpFormState>(initialSignUpForm);
   const [localSignUpError, setLocalSignUpError] = useState<string | null>(null);
@@ -319,13 +304,17 @@ export default function Welcome(): JSX.Element {
     }
   }, []);
 
+  useEffect(() => {
+    if (authMode === "local") {
+      setActiveTab("signUp");
+    }
+  }, [authMode]);
+
   const handleAuthModeChange = useCallback((mode: AuthMode) => {
     setAuthMode(mode);
-    setActiveTab("signIn");
+    setActiveTab(mode === "cloud" ? "signIn" : "signUp");
     if (mode === "cloud") {
       setCloudSignInError(null);
-    } else {
-      setLocalSignInError(null);
     }
   }, []);
 
@@ -499,40 +488,6 @@ export default function Welcome(): JSX.Element {
     }
   }, []);
 
-  const handleLocalSignIn = useCallback(
-    async (event: React.FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
-      if (!isBrowser()) {
-        setLocalSignInError("Local storage is not available.");
-        return;
-      }
-      setLocalSignInError(null);
-      setLocalSignInPending(true);
-      try {
-        const accounts = loadLocalAccounts();
-        const normalizedUsername = localSignInUsername.trim().toLowerCase();
-        const account = accounts.find(candidate => candidate.username.toLowerCase() === normalizedUsername);
-        if (!account) {
-          setLocalSignInError("Account not found. Check the username and try again.");
-          return;
-        }
-        const hashed = await hashPassword(localSignInPassword);
-        if (account.passwordHash !== hashed) {
-          setLocalSignInError("Password incorrect.");
-          return;
-        }
-        setActiveLocalAccount(account);
-        setLocalSession({ username: account.username, profile: account.profile });
-        navigateToPostAuth();
-      } catch (error) {
-        setLocalSignInError(error instanceof Error ? error.message : "Unable to sign in. Try again.");
-      } finally {
-        setLocalSignInPending(false);
-      }
-    },
-    [localSignInPassword, localSignInUsername, navigateToPostAuth],
-  );
-
   const handleLocalSignUpInputChange = useCallback(<K extends keyof SignUpFormState>(key: K, value: SignUpFormState[K]) => {
     setLocalSignUpForm(prev => ({ ...prev, [key]: value }));
   }, []);
@@ -544,7 +499,7 @@ export default function Welcome(): JSX.Element {
         setLocalSignUpError("Local storage is not available.");
         return;
       }
-      const { firstName, lastInitial, grade, age, school, priorExperience, username, password } = localSignUpForm;
+      const { firstName, lastInitial, grade, age, school, priorExperience } = localSignUpForm;
       if (!firstName.trim()) {
         setLocalSignUpError("Enter a first name.");
         return;
@@ -561,35 +516,19 @@ export default function Welcome(): JSX.Element {
         setLocalSignUpError("Select an age.");
         return;
       }
-      if (!username.trim()) {
-        setLocalSignUpError("Enter a username.");
-        return;
-      }
-      if (!password) {
-        setLocalSignUpError("Create a password.");
-        return;
-      }
       setLocalSignUpError(null);
       setLocalSignUpPending(true);
       try {
         const accounts = loadLocalAccounts();
-        const normalizedUsername = username.trim().toLowerCase();
-        const usernameTaken = accounts.some(candidate => candidate.username.toLowerCase() === normalizedUsername);
-        if (usernameTaken) {
-          setLocalSignUpError("That username is taken—try another.");
-          return;
-        }
         const profile = buildPlayerProfileFromForm(localSignUpForm);
-        const passwordHash = await hashPassword(password);
-        const account: LocalAccountRecord = {
-          username: username.trim(),
-          passwordHash,
+        const nextAccount: LocalAccountRecord = {
           profile,
           createdAt: new Date().toISOString(),
         };
-        saveLocalAccounts(accounts.concat(account));
-        setActiveLocalAccount(account);
-        setLocalSession({ username: account.username, profile: account.profile });
+        const existingWithoutProfile = accounts.filter(candidate => candidate.profile.id !== profile.id);
+        saveLocalAccounts(existingWithoutProfile.concat(nextAccount));
+        setActiveLocalAccount(nextAccount);
+        setLocalSession({ profile: nextAccount.profile });
         setLocalSignUpForm(initialSignUpForm);
         navigateToPostAuth();
       } catch (error) {
@@ -675,24 +614,36 @@ export default function Welcome(): JSX.Element {
               </button>
             </div>
             <div className="flex w-full justify-between gap-1 rounded-3xl bg-slate-900/60 p-1">
-              <button
-                type="button"
-                onClick={() => setActiveTab("signIn")}
-                className={`flex-1 rounded-3xl px-5 py-3 text-sm font-semibold transition ${
-                  activeTab === "signIn" ? "bg-white text-slate-900 shadow" : "text-slate-300 hover:text-white"
-                }`}
-              >
-                Sign In
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab("signUp")}
-                className={`flex-1 rounded-3xl px-5 py-3 text-sm font-semibold transition ${
-                  activeTab === "signUp" ? "bg-white text-slate-900 shadow" : "text-slate-300 hover:text-white"
-                }`}
-              >
-                Sign Up
-              </button>
+              {authMode === "cloud" ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("signIn")}
+                    className={`flex-1 rounded-3xl px-5 py-3 text-sm font-semibold transition ${
+                      activeTab === "signIn" ? "bg-white text-slate-900 shadow" : "text-slate-300 hover:text-white"
+                    }`}
+                  >
+                    Sign In
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("signUp")}
+                    className={`flex-1 rounded-3xl px-5 py-3 text-sm font-semibold transition ${
+                      activeTab === "signUp" ? "bg-white text-slate-900 shadow" : "text-slate-300 hover:text-white"
+                    }`}
+                  >
+                    Sign Up
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="flex-1 rounded-3xl bg-white px-5 py-3 text-sm font-semibold text-slate-900 shadow"
+                  onClick={() => setActiveTab("signUp")}
+                >
+                  Sign Up
+                </button>
+              )}
             </div>
           </div>
           <div className="grid gap-8 p-8 lg:grid-cols-[1.2fr_1fr]">
@@ -705,9 +656,7 @@ export default function Welcome(): JSX.Element {
                   ? activeTab === "signIn"
                     ? "Use the username and password associated with your Supabase account."
                     : "Fill out the same information as the local profile setup so we can save your progress to the cloud."
-                  : activeTab === "signIn"
-                    ? "Use the username and password saved on this device to pick up where you left off."
-                    : "Create a local-only profile. Everything stays on this browser unless you export it."}
+                  : "Create a local-only profile. Everything stays on this browser unless you export it."}
               </p>
               {activeTab === "signIn" ? (
                 authMode === "cloud" ? (
@@ -755,52 +704,7 @@ export default function Welcome(): JSX.Element {
                       {cloudSignInPending ? "Signing in…" : "Sign In"}
                     </button>
                   </form>
-                ) : (
-                  <form className="mt-6 space-y-4" onSubmit={handleLocalSignIn}>
-                    <div>
-                      <label htmlFor="local-sign-in-username" className="text-sm font-medium text-slate-200">
-                        Username
-                      </label>
-                      <input
-                        id="local-sign-in-username"
-                        type="text"
-                        autoComplete="username"
-                        value={localSignInUsername}
-                        onChange={event => setLocalSignInUsername(event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                        placeholder="yourname"
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="local-sign-in-password" className="text-sm font-medium text-slate-200">
-                        Password
-                      </label>
-                      <input
-                        id="local-sign-in-password"
-                        type="password"
-                        autoComplete="current-password"
-                        value={localSignInPassword}
-                        onChange={event => setLocalSignInPassword(event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                        placeholder="••••••••"
-                      />
-                    </div>
-                    {localSignInError ? (
-                      <p className="text-sm font-semibold text-rose-300">{localSignInError}</p>
-                    ) : null}
-                    <button
-                      type="submit"
-                      disabled={localSignInPending}
-                      className={`w-full rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                        localSignInPending
-                          ? "cursor-not-allowed bg-slate-600 text-slate-300"
-                          : "bg-emerald-500 text-white hover:bg-emerald-400"
-                      }`}
-                    >
-                      {localSignInPending ? "Signing in…" : "Sign In"}
-                    </button>
-                  </form>
-                )
+                ) : null
               ) : authMode === "cloud" ? (
                 <form className="mt-6 grid gap-4" onSubmit={handleCloudSignUp}>
                   <div className="grid gap-4 sm:grid-cols-2">
@@ -1033,36 +937,6 @@ export default function Welcome(): JSX.Element {
                       className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
                       placeholder="Tell us about your RPS or AI experience"
                     />
-                  </div>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label htmlFor="local-sign-up-username" className="text-sm font-medium text-slate-200">
-                        Username
-                      </label>
-                      <input
-                        id="local-sign-up-username"
-                        type="text"
-                        autoComplete="username"
-                        value={localSignUpForm.username}
-                        onChange={event => handleLocalSignUpInputChange("username", event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                        placeholder="yourname"
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="local-sign-up-password" className="text-sm font-medium text-slate-200">
-                        Password
-                      </label>
-                      <input
-                        id="local-sign-up-password"
-                        type="password"
-                        autoComplete="new-password"
-                        value={localSignUpForm.password}
-                        onChange={event => handleLocalSignUpInputChange("password", event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                        placeholder="Create a password"
-                      />
-                    </div>
                   </div>
                   {localSignUpError ? <p className="text-sm font-semibold text-rose-300">{localSignUpError}</p> : null}
                   <button

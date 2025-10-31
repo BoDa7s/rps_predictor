@@ -1727,11 +1727,9 @@ function RPSDoodleAppInner(){
   const isPlayerModalOpen = playerModalMode !== "hidden";
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [restoreSelectedPlayerId, setRestoreSelectedPlayerId] = useState<string | null>(null);
-  type Scene = "WELCOME"|"BOOT"|"MODE"|"MATCH"|"RESULTS";
+  type Scene = "BOOT"|"MODE"|"MATCH"|"RESULTS";
   const [scene, setScene] = useState<Scene>("BOOT");
-  const [bootNext, setBootNext] = useState<"WELCOME" | "AUTO">(
-    initialWelcomePreference === "show" ? "WELCOME" : "AUTO"
-  );
+  const [bootNext, setBootNext] = useState<"AUTO">("AUTO");
   const [bootProgress, setBootProgress] = useState(0);
   const [bootReady, setBootReady] = useState(false);
   const bootStartRef = useRef<number | null>(null);
@@ -2457,23 +2455,8 @@ function RPSDoodleAppInner(){
   const [postTrainingCtaAcknowledged, setPostTrainingCtaAcknowledged] = useState(
     currentProfile?.seenPostTrainingCTA ?? false,
   );
-  const welcomeSlides = useMemo(
-    () => [
-      {
-        title: "Welcome to RPS AI Lab",
-        body: `You’ll train for ${TRAIN_ROUNDS} rounds, then choose a Mode: Challenge (Smarter AI prediction) or Practice (Experiment and learn).`,
-      },
-      {
-        title: "Your data",
-        body: "We collect gameplay for learning. Exports will include your data and demographics.",
-      },
-    ],
-    [TRAIN_ROUNDS],
-  );
-  const welcomeSlideCount = welcomeSlides.length;
-  const welcomeProgress = welcomeSlideCount ? ((welcomeSlide + 1) / welcomeSlideCount) * 100 : 100;
-  const isWelcomeLastSlide = welcomeSlide >= welcomeSlideCount - 1;
-  const showMainUi = !welcomeActive && scene !== "WELCOME" && scene !== "BOOT";
+  const welcomeSlideCount = 0;
+  const showMainUi = !welcomeActive && scene !== "BOOT";
   const trainingComplete = trainingCount >= TRAIN_ROUNDS;
   const needsTraining = !isTrained && !trainingComplete;
   const shouldGateTraining = needsTraining && !trainingActive;
@@ -2772,27 +2755,6 @@ function RPSDoodleAppInner(){
     [currentProfile, scene, selectedMode, showModernToast, updateStatsProfile],
   );
 
-  const goToWelcomeSlide = useCallback(
-    (delta: number) => {
-      setWelcomeSlide(prev => {
-        const next = Math.min(Math.max(0, prev + delta), Math.max(0, welcomeSlideCount - 1));
-        if (next !== prev) {
-          setLive(`Intro slide ${next + 1} of ${welcomeSlideCount}.`);
-        }
-        return next;
-      });
-    },
-    [welcomeSlideCount, setLive],
-  );
-
-  const handleWelcomeNext = useCallback(() => {
-    goToWelcomeSlide(1);
-  }, [goToWelcomeSlide]);
-
-  const handleWelcomePrevious = useCallback(() => {
-    goToWelcomeSlide(-1);
-  }, [goToWelcomeSlide]);
-
   const openWelcome = useCallback(
     (options: { announce?: string; resetPlayer?: boolean; bootFirst?: boolean; origin?: "launch" | "settings" } = {}) => {
       clearCountdown();
@@ -2845,16 +2807,10 @@ function RPSDoodleAppInner(){
       setWelcomeSlide(0);
       setWelcomeStage("intro");
       setPendingWelcomeExit(null);
-      setWelcomeOrigin(options.origin ?? (options.bootFirst ? "launch" : "settings"));
-      if (options.bootFirst) {
-        setWelcomeActive(false);
-        setBootNext("WELCOME");
-        setScene("BOOT");
-      } else {
-        setScene("WELCOME");
-        setBootNext("AUTO");
-        setWelcomeActive(true);
-      }
+      setWelcomeOrigin(options.origin ?? null);
+      setWelcomeActive(false);
+      setBootNext("AUTO");
+      setScene("BOOT");
       welcomeToastShownRef.current = false;
       welcomeFinalToastShownRef.current = false;
       if (options.announce) {
@@ -2932,49 +2888,6 @@ function RPSDoodleAppInner(){
       setWelcomeSeen,
       setWelcomeSlide,
       setWelcomeStage,
-    ],
-  );
-
-  const handleWelcomeAction = useCallback(
-    (mode: "setup" | "restore" | "dismiss") => {
-      if (mode === "setup") {
-        setWelcomeStage("create");
-        setPlayerModalOrigin("welcome");
-        setPlayerModalMode("create");
-        setToastMessage("Let’s set up your player profile.");
-        setLive("Opening player setup from welcome intro.");
-        return;
-      }
-      if (mode === "restore") {
-        if (players.length > 0) {
-          setWelcomeStage("restore");
-          setRestoreDialogOpen(true);
-          setToastMessage("Pick your saved player to continue.");
-          setLive("Opening saved player picker.");
-        } else {
-          setWelcomeStage("intro");
-          setToastMessage("No saved data found on this device.");
-          setLive("No saved player profiles available.");
-        }
-        return;
-      }
-      if (welcomeOrigin === "launch") {
-        return;
-      }
-      finishWelcomeFlow("dismiss");
-      setToastMessage("Welcome dismissed. You can replay it from Settings → Help.");
-      setLive("Welcome intro dismissed.");
-    },
-    [
-      finishWelcomeFlow,
-      players.length,
-      setLive,
-      setPlayerModalMode,
-      setPlayerModalOrigin,
-      setRestoreDialogOpen,
-      setToastMessage,
-      setWelcomeStage,
-      welcomeOrigin,
     ],
   );
 
@@ -3210,15 +3123,6 @@ function RPSDoodleAppInner(){
     if (!bootReady) return;
     if (bootAdvancingRef.current) return;
     bootAdvancingRef.current = true;
-    if (bootNext === "WELCOME") {
-      setWelcomeOrigin("launch");
-      setWelcomeStage("intro");
-      setWelcomeSeen(false);
-      setWelcomeActive(true);
-      setScene("WELCOME");
-      setBootNext("AUTO");
-      return;
-    }
     if (needsTraining && currentProfile && hasConsented) {
       if (forceTrainingPrompt) {
         if (trainingActive) {
@@ -5718,97 +5622,6 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
 
       <AnimatePresence mode="wait">
-        {scene === "WELCOME" && (
-          <motion.main
-            key="welcome"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.3, ease: [0.22, 0.61, 0.36, 1] }}
-            className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-sky-100 px-6 py-12 text-slate-800"
-          >
-            <div className="mx-auto flex w-[min(560px,100%)] max-w-full flex-col gap-8 rounded-3xl bg-white/90 p-8 shadow-2xl ring-1 ring-slate-200">
-              <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-400">
-                <span>Intro</span>
-                <span>
-                  {welcomeSlide + 1} / {welcomeSlideCount}
-                </span>
-              </div>
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200" role="progressbar" aria-valuemin={1} aria-valuemax={welcomeSlideCount} aria-valuenow={welcomeSlide + 1}>
-                <motion.div
-                  className="h-full rounded-full bg-sky-500"
-                  initial={false}
-                  animate={{ width: `${welcomeProgress}%` }}
-                  transition={{ duration: 0.25 }}
-                />
-              </div>
-              <AnimatePresence mode="wait">
-                <motion.div
-                  key={welcomeSlide}
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -12 }}
-                  transition={{ duration: 0.25, ease: [0.22, 0.61, 0.36, 1] }}
-                  className="space-y-4"
-                >
-                  <h2 className="text-3xl font-bold text-slate-900">{welcomeSlides[welcomeSlide]?.title}</h2>
-                  <p className="text-base leading-relaxed text-slate-700">{welcomeSlides[welcomeSlide]?.body}</p>
-                </motion.div>
-              </AnimatePresence>
-              {isWelcomeLastSlide ? (
-                <div className="space-y-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <button
-                      type="button"
-                      onClick={handleWelcomePrevious}
-                      className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100"
-                    >
-                      Back
-                    </button>
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <button
-                        type="button"
-                        className="rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-700"
-                        onClick={() => handleWelcomeAction("setup")}
-                      >
-                        Get started
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        onClick={() => handleWelcomeAction("restore")}
-                        disabled={!hasLocalProfiles}
-                      >
-                        Already played? Load my data
-                      </button>
-                    </div>
-                  </div>
-                  {!hasLocalProfiles && (
-                    <p className="text-xs text-slate-500">No saved profiles detected on this device.</p>
-                  )}
-                </div>
-              ) : (
-                <div className="flex items-center justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={handleWelcomePrevious}
-                    disabled={welcomeSlide === 0}
-                    className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    Back
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleWelcomeNext}
-                    className="rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-700"
-                  >
-                    Next
-                  </button>
-                </div>
-              )}
-            </div>
-          </motion.main>
-        )}
         {scene === "BOOT" && (
           <motion.div
             key="boot"
