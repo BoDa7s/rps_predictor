@@ -9,6 +9,7 @@ import {
   type Grade,
   type PlayerProfile,
 } from "../players";
+import { useNavigate } from "react-router-dom";
 
 const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => String(5 + index));
 
@@ -234,13 +235,13 @@ function buildPlayerProfileFromForm(form: SignUpFormState): PlayerProfile {
 const defaultAuthMode: AuthMode = isSupabaseConfigured && DEPLOY_ENV === "cloud" ? "cloud" : "local";
 
 function usePostAuthNavigation() {
+  const navigate = useNavigate();
   const postAuthPath = useMemo(() => getPostAuthPath(), []);
 
   return useCallback(() => {
-    if (typeof window === "undefined") return;
     if (!postAuthPath) return;
-    window.location.assign(postAuthPath);
-  }, [postAuthPath]);
+    navigate(postAuthPath, { replace: true });
+  }, [navigate, postAuthPath]);
 }
 
 export default function Welcome(): JSX.Element {
