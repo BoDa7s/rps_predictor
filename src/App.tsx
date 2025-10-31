@@ -1752,6 +1752,7 @@ function RPSDoodleAppInner(){
   const [restoreSelectedPlayerId, setRestoreSelectedPlayerId] = useState<string | null>(null);
   type Scene = "BOOT"|"MODE"|"MATCH"|"RESULTS";
   type BootNext = "AUTO" | "RESTORE";
+  const BOOT_SEQUENCE_ENABLED = false as const;
   interface RebootResumeState {
     scene: Scene;
     mode: Mode | null;
@@ -1765,7 +1766,7 @@ function RPSDoodleAppInner(){
     insightPanelOpen: boolean;
     resultBanner: "Victory" | "Defeat" | "Tie" | null;
   }
-  const [scene, setScene] = useState<Scene>("BOOT");
+  const [scene, setScene] = useState<Scene>(BOOT_SEQUENCE_ENABLED ? "BOOT" : "MODE");
   const [bootNext, setBootNext] = useState<BootNext>("AUTO");
   const [bootProgress, setBootProgress] = useState(0);
   const [bootReady, setBootReady] = useState(false);
@@ -2449,7 +2450,24 @@ function RPSDoodleAppInner(){
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined") {
+      if (!BOOT_SEQUENCE_ENABLED) {
+        setBootProgress(100);
+        setBootReady(true);
+      }
+      return;
+    }
+    if (!BOOT_SEQUENCE_ENABLED) {
+      if (bootAnimationRef.current !== null) {
+        window.cancelAnimationFrame(bootAnimationRef.current);
+        bootAnimationRef.current = null;
+      }
+      bootStartRef.current = null;
+      bootAdvancingRef.current = false;
+      setBootProgress(100);
+      setBootReady(true);
+      return;
+    }
     if (scene !== "BOOT") {
       if (bootAnimationRef.current !== null) {
         window.cancelAnimationFrame(bootAnimationRef.current);
@@ -3926,7 +3944,7 @@ function RPSDoodleAppInner(){
   );
 
   const handleReboot = useCallback(() => {
-    setToastMessage("Confirm reboot? This will replay the welcome intro after the boot sequence.");
+    setToastMessage("Confirm reboot? This will replay the welcome intro.");
     setToastConfirm({
       confirmLabel: "Reboot now",
       cancelLabel: "Cancel",
@@ -3948,7 +3966,7 @@ function RPSDoodleAppInner(){
         setToastMessage(null);
         handleCloseSettings(false);
         openWelcome({
-          announce: "Rebooting. Boot sequence starting for the welcome intro.",
+          announce: "Rebooting. Returning to the welcome intro.",
           resetPlayer: false,
           bootFirst: true,
           origin: "launch",
@@ -5963,7 +5981,7 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
 
       <AnimatePresence mode="wait">
-        {scene === "BOOT" && (
+        {scene === "BOOT" && BOOT_SEQUENCE_ENABLED && (
           <motion.div
             key="boot"
             initial={{ opacity: 0 }}
@@ -7288,13 +7306,13 @@ function RPSDoodleAppInner(){
                     openWelcome({
                       bootFirst: true,
                       origin: "settings",
-                      announce: "New player saved. Booting into training setup.",
+                      announce: "New player saved. Preparing training setup.",
                     });
                     setBootNext("AUTO");
                     setWelcomeOrigin(null);
                     setWelcomeSeen(true);
-                    setToastMessage("New player saved. Booting up to start training.");
-                    setLive("New player saved. Boot sequence initiated to start training.");
+                    setToastMessage("New player saved. Preparing to start training.");
+                    setLive("New player saved. Starting training setup.");
                     return;
                   }
                   if (result.action === "create") {
