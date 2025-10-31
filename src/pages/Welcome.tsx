@@ -2,21 +2,23 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabaseClient, isSupabaseConfigured } from "../lib/supabaseClient";
 import { getPostAuthPath, DEPLOY_ENV } from "../lib/env";
-import { GRADE_OPTIONS } from "../players";
+import {
+  CONSENT_TEXT_VERSION,
+  GRADE_OPTIONS,
+  sanitizeAge,
+  type Grade,
+  type PlayerProfile,
+} from "../players";
 
 const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => String(5 + index));
 
-function usePostAuthNavigation() {
-  const postAuthPath = useMemo(() => getPostAuthPath(), []);
-
-  return useCallback(() => {
-    if (typeof window === "undefined") return;
-    if (!postAuthPath) return;
-    window.location.assign(postAuthPath);
-  }, [postAuthPath]);
-}
+const LOCAL_ACCOUNTS_KEY = "rps_local_accounts_v1";
+const LOCAL_ACTIVE_ACCOUNT_KEY = "rps_local_active_account_v1";
+const PLAYERS_STORAGE_KEY = "rps_players_v1";
+const CURRENT_PLAYER_STORAGE_KEY = "rps_current_player_v1";
 
 type AuthTab = "signIn" | "signUp";
+type AuthMode = "local" | "cloud";
 
 type SignUpFormState = {
   firstName: string;
@@ -29,6 +31,18 @@ type SignUpFormState = {
   password: string;
 };
 
+interface LocalAccountRecord {
+  username: string;
+  passwordHash: string;
+  profile: PlayerProfile;
+  createdAt: string;
+}
+
+interface LocalSession {
+  username: string;
+  profile: PlayerProfile;
+}
+
 const initialSignUpForm: SignUpFormState = {
   firstName: "",
   lastInitial: "",
@@ -40,23 +54,227 @@ const initialSignUpForm: SignUpFormState = {
   password: "",
 };
 
+function isBrowser(): boolean {
+  return typeof window !== "undefined";
+}
+
+function createProfileId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `plr-${crypto.randomUUID()}`;
+  }
+  return `plr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function isGradeValue(value: unknown): value is Grade {
+  return typeof value === "string" && GRADE_OPTIONS.includes(value as Grade);
+}
+
+function normalizeStoredProfile(raw: any): PlayerProfile {
+  const id = typeof raw?.id === "string" ? raw.id : createProfileId();
+  const playerNameValue = typeof raw?.playerName === "string" ? raw.playerName.trim() : "";
+  const playerName = playerNameValue || "Player";
+  const grade = isGradeValue(raw?.grade) ? raw.grade : "Not applicable";
+  const age = sanitizeAge(raw?.age);
+  const school = typeof raw?.school === "string" && raw.school.trim() ? raw.school.trim() : undefined;
+  const priorExperience =
+    typeof raw?.priorExperience === "string" && raw.priorExperience.trim()
+      ? raw.priorExperience.trim()
+      : undefined;
+  const consent = raw?.consent && typeof raw.consent === "object"
+    ? {
+        agreed: true,
+        consentTextVersion:
+          typeof raw.consent.consentTextVersion === "string"
+            ? raw.consent.consentTextVersion
+            : CONSENT_TEXT_VERSION,
+        timestamp:
+          typeof raw.consent.timestamp === "string"
+            ? raw.consent.timestamp
+            : new Date().toISOString(),
+      }
+    : {
+        agreed: true,
+        consentTextVersion: CONSENT_TEXT_VERSION,
+        timestamp: new Date().toISOString(),
+      };
+
+  return {
+    id,
+    playerName,
+    grade,
+    age,
+    school,
+    priorExperience,
+    consent,
+    needsReview: Boolean(raw?.needsReview),
+  };
+}
+
+function loadStoredPlayers(): PlayerProfile[] {
+  if (!isBrowser()) return [];
+  try {
+    const raw = window.localStorage.getItem(PLAYERS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(normalizeStoredProfile);
+  } catch {
+    return [];
+  }
+}
+
+function saveStoredPlayers(players: PlayerProfile[]) {
+  if (!isBrowser()) return;
+  window.localStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(players));
+}
+
+function ensurePlayerStored(profile: PlayerProfile) {
+  if (!isBrowser()) return;
+  const players = loadStoredPlayers();
+  const existingIndex = players.findIndex(player => player.id === profile.id);
+  const nextPlayers = existingIndex >= 0 ? [...players] : players.concat(profile);
+  if (existingIndex >= 0) {
+    nextPlayers[existingIndex] = { ...nextPlayers[existingIndex], ...profile };
+  }
+  saveStoredPlayers(nextPlayers);
+  window.localStorage.setItem(CURRENT_PLAYER_STORAGE_KEY, profile.id);
+}
+
+function loadLocalAccounts(): LocalAccountRecord[] {
+  if (!isBrowser()) return [];
+  try {
+    const raw = window.localStorage.getItem(LOCAL_ACCOUNTS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map(item => {
+        if (!item || typeof item !== "object") return null;
+        const username = typeof item.username === "string" ? item.username : null;
+        const passwordHash = typeof item.passwordHash === "string" ? item.passwordHash : null;
+        if (!username || !passwordHash) return null;
+        const profile = normalizeStoredProfile((item as any).profile);
+        return {
+          username,
+          passwordHash,
+          profile,
+          createdAt: typeof (item as any).createdAt === "string" ? (item as any).createdAt : new Date().toISOString(),
+        } as LocalAccountRecord;
+      })
+      .filter((account): account is LocalAccountRecord => account !== null);
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalAccounts(accounts: LocalAccountRecord[]) {
+  if (!isBrowser()) return;
+  window.localStorage.setItem(LOCAL_ACCOUNTS_KEY, JSON.stringify(accounts));
+}
+
+function setActiveLocalAccount(account: LocalAccountRecord) {
+  if (!isBrowser()) return;
+  ensurePlayerStored(account.profile);
+  window.localStorage.setItem(LOCAL_ACTIVE_ACCOUNT_KEY, account.username);
+}
+
+function loadActiveLocalSession(): LocalSession | null {
+  if (!isBrowser()) return null;
+  const username = window.localStorage.getItem(LOCAL_ACTIVE_ACCOUNT_KEY);
+  if (!username) return null;
+  const accounts = loadLocalAccounts();
+  const account = accounts.find(candidate => candidate.username === username);
+  if (!account) return null;
+  ensurePlayerStored(account.profile);
+  return { username: account.username, profile: account.profile };
+}
+
+function clearActiveLocalSession(profileId?: string) {
+  if (!isBrowser()) return;
+  window.localStorage.removeItem(LOCAL_ACTIVE_ACCOUNT_KEY);
+  if (!profileId) return;
+  const currentId = window.localStorage.getItem(CURRENT_PLAYER_STORAGE_KEY);
+  if (currentId === profileId) {
+    window.localStorage.removeItem(CURRENT_PLAYER_STORAGE_KEY);
+  }
+}
+
+async function hashPassword(password: string): Promise<string> {
+  if (typeof window !== "undefined" && window.crypto?.subtle) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(password);
+    const digest = await window.crypto.subtle.digest("SHA-256", data);
+    return Array.from(new Uint8Array(digest))
+      .map(byte => byte.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  return password;
+}
+
+function buildPlayerProfileFromForm(form: SignUpFormState): PlayerProfile {
+  const first = form.firstName.trim();
+  const initial = form.lastInitial.trim().charAt(0).toUpperCase();
+  const playerName = initial ? `${first} ${initial}.` : first || "Player";
+  return {
+    id: createProfileId(),
+    playerName,
+    grade: isGradeValue(form.grade) ? form.grade : "Not applicable",
+    age: sanitizeAge(form.age),
+    school: form.school.trim() || undefined,
+    priorExperience: form.priorExperience.trim() || undefined,
+    consent: {
+      agreed: true,
+      consentTextVersion: CONSENT_TEXT_VERSION,
+      timestamp: new Date().toISOString(),
+    },
+    needsReview: false,
+  };
+}
+
+const defaultAuthMode: AuthMode = isSupabaseConfigured && DEPLOY_ENV === "cloud" ? "cloud" : "local";
+
+function usePostAuthNavigation() {
+  const postAuthPath = useMemo(() => getPostAuthPath(), []);
+
+  return useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (!postAuthPath) return;
+    window.location.assign(postAuthPath);
+  }, [postAuthPath]);
+}
+
 export default function Welcome(): JSX.Element {
   const navigateToPostAuth = usePostAuthNavigation();
+  const [authMode, setAuthMode] = useState<AuthMode>(defaultAuthMode);
   const [activeTab, setActiveTab] = useState<AuthTab>("signIn");
+
   const [session, setSession] = useState<Session | null>(null);
   const [initializing, setInitializing] = useState(true);
 
-  const [signInUsername, setSignInUsername] = useState("");
-  const [signInPassword, setSignInPassword] = useState("");
-  const [signInError, setSignInError] = useState<string | null>(null);
-  const [signInPending, setSignInPending] = useState(false);
+  const [cloudSignInUsername, setCloudSignInUsername] = useState("");
+  const [cloudSignInPassword, setCloudSignInPassword] = useState("");
+  const [cloudSignInError, setCloudSignInError] = useState<string | null>(null);
+  const [cloudSignInPending, setCloudSignInPending] = useState(false);
 
-  const [signUpForm, setSignUpForm] = useState<SignUpFormState>(initialSignUpForm);
-  const [signUpError, setSignUpError] = useState<string | null>(null);
-  const [signUpPending, setSignUpPending] = useState(false);
+  const [cloudSignUpForm, setCloudSignUpForm] = useState<SignUpFormState>(initialSignUpForm);
+  const [cloudSignUpError, setCloudSignUpError] = useState<string | null>(null);
+  const [cloudSignUpPending, setCloudSignUpPending] = useState(false);
 
-  const [signOutError, setSignOutError] = useState<string | null>(null);
-  const [signOutPending, setSignOutPending] = useState(false);
+  const [cloudSignOutError, setCloudSignOutError] = useState<string | null>(null);
+  const [cloudSignOutPending, setCloudSignOutPending] = useState(false);
+
+  const [localSession, setLocalSession] = useState<LocalSession | null>(null);
+  const [localSignInUsername, setLocalSignInUsername] = useState("");
+  const [localSignInPassword, setLocalSignInPassword] = useState("");
+  const [localSignInError, setLocalSignInError] = useState<string | null>(null);
+  const [localSignInPending, setLocalSignInPending] = useState(false);
+
+  const [localSignUpForm, setLocalSignUpForm] = useState<SignUpFormState>(initialSignUpForm);
+  const [localSignUpError, setLocalSignUpError] = useState<string | null>(null);
+  const [localSignUpPending, setLocalSignUpPending] = useState(false);
+
+  const [localSignOutError, setLocalSignOutError] = useState<string | null>(null);
+  const [localSignOutPending, setLocalSignOutPending] = useState(false);
 
   const supabaseReady = isSupabaseConfigured && Boolean(supabaseClient);
 
@@ -88,78 +306,95 @@ export default function Welcome(): JSX.Element {
     };
   }, [navigateToPostAuth]);
 
-  const handleSignIn = useCallback(
+  useEffect(() => {
+    const existing = loadActiveLocalSession();
+    if (existing) {
+      setLocalSession(existing);
+    }
+  }, []);
+
+  const handleAuthModeChange = useCallback((mode: AuthMode) => {
+    setAuthMode(mode);
+    setActiveTab("signIn");
+    if (mode === "cloud") {
+      setCloudSignInError(null);
+    } else {
+      setLocalSignInError(null);
+    }
+  }, []);
+
+  const handleCloudSignIn = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       if (!supabaseClient) {
-        setSignInError("Supabase is not configured.");
+        setCloudSignInError("Supabase is not configured.");
         return;
       }
-      setSignInError(null);
-      setSignInPending(true);
+      setCloudSignInError(null);
+      setCloudSignInPending(true);
       try {
         const { data, error } = await supabaseClient.auth.signInWithPassword({
-          email: signInUsername.trim(),
-          password: signInPassword,
+          email: cloudSignInUsername.trim(),
+          password: cloudSignInPassword,
         });
         if (error) {
           throw error;
         }
         if (!data.session) {
-          setSignInError("Sign-in succeeded, but no session was returned.");
+          setCloudSignInError("Sign-in succeeded, but no session was returned.");
           return;
         }
         setSession(data.session);
         navigateToPostAuth();
       } catch (error) {
-        setSignInError(error instanceof Error ? error.message : "Unable to sign in. Try again.");
+        setCloudSignInError(error instanceof Error ? error.message : "Unable to sign in. Try again.");
       } finally {
-        setSignInPending(false);
+        setCloudSignInPending(false);
       }
     },
-    [navigateToPostAuth, signInPassword, signInUsername],
+    [cloudSignInPassword, cloudSignInUsername, navigateToPostAuth],
   );
 
-  const handleSignUpInputChange = useCallback(<K extends keyof SignUpFormState>(key: K, value: SignUpFormState[K]) => {
-    setSignUpForm(prev => ({ ...prev, [key]: value }));
+  const handleCloudSignUpInputChange = useCallback(<K extends keyof SignUpFormState>(key: K, value: SignUpFormState[K]) => {
+    setCloudSignUpForm(prev => ({ ...prev, [key]: value }));
   }, []);
 
-  const handleSignUp = useCallback(
+  const handleCloudSignUp = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       if (!supabaseClient) {
-        setSignUpError("Supabase is not configured.");
+        setCloudSignUpError("Supabase is not configured.");
         return;
       }
-      const { firstName, lastInitial, grade, age, school, priorExperience, username, password } = signUpForm;
+      const { firstName, lastInitial, grade, age, school, priorExperience, username, password } = cloudSignUpForm;
       if (!firstName.trim()) {
-        setSignUpError("Enter a first name.");
+        setCloudSignUpError("Enter a first name.");
         return;
       }
       if (!lastInitial.trim()) {
-        setSignUpError("Enter a last initial.");
+        setCloudSignUpError("Enter a last initial.");
         return;
       }
       if (!grade) {
-        setSignUpError("Select a grade.");
+        setCloudSignUpError("Select a grade.");
         return;
       }
       if (!age) {
-        setSignUpError("Select an age.");
+        setCloudSignUpError("Select an age.");
         return;
       }
       if (!username.trim()) {
-        setSignUpError("Enter a username.");
+        setCloudSignUpError("Enter a username.");
         return;
       }
       if (!password) {
-        setSignUpError("Create a password.");
+        setCloudSignUpError("Create a password.");
         return;
       }
-      setSignUpError(null);
-      setSignUpPending(true);
+      setCloudSignUpError(null);
+      setCloudSignUpPending(true);
       const trimmedUsername = username.trim();
-      const payloadForProfile = {
+      const profileMetadata = {
         first_name: firstName.trim(),
         last_initial: lastInitial.trim().charAt(0).toUpperCase(),
         grade,
@@ -172,7 +407,7 @@ export default function Welcome(): JSX.Element {
           email: trimmedUsername,
           password,
           options: {
-            data: payloadForProfile,
+            data: profileMetadata,
           },
         });
         if (error) {
@@ -183,37 +418,49 @@ export default function Welcome(): JSX.Element {
         if (userId) {
           try {
             const { error: profileError } = await supabaseClient
-              .from("player_profiles")
-              .upsert({ user_id: userId, ...payloadForProfile });
+              .from("demographics_profiles")
+              .upsert({
+                user_id: userId,
+                username: trimmedUsername,
+                first_name: profileMetadata.first_name,
+                last_initial: profileMetadata.last_initial,
+                grade,
+                age,
+                school: profileMetadata.school,
+                prior_experience: profileMetadata.prior_experience,
+                storage_mode: "cloud",
+                consent_version: CONSENT_TEXT_VERSION,
+                consent_granted_at: new Date().toISOString(),
+              });
             if (profileError) {
-              console.warn("player_profiles upsert failed", profileError);
+              console.warn("demographics_profiles upsert failed", profileError);
             }
           } catch (upsertError) {
-            console.warn("player_profiles upsert threw", upsertError);
+            console.warn("demographics_profiles upsert threw", upsertError);
           }
         }
         if (!nextSession) {
-          setSignUpError("Sign-up succeeded. Check your email to confirm before continuing.");
+          setCloudSignUpError("Sign-up succeeded. Check your email to confirm before continuing.");
           return;
         }
         setSession(nextSession);
         navigateToPostAuth();
       } catch (error) {
-        setSignUpError(error instanceof Error ? error.message : "Unable to sign up. Try again.");
+        setCloudSignUpError(error instanceof Error ? error.message : "Unable to sign up. Try again.");
       } finally {
-        setSignUpPending(false);
+        setCloudSignUpPending(false);
       }
     },
-    [navigateToPostAuth, signUpForm],
+    [cloudSignUpForm, navigateToPostAuth],
   );
 
-  const handleSignOut = useCallback(async () => {
+  const handleCloudSignOut = useCallback(async () => {
     if (!supabaseClient) {
-      setSignOutError("Supabase is not configured.");
+      setCloudSignOutError("Supabase is not configured.");
       return;
     }
-    setSignOutError(null);
-    setSignOutPending(true);
+    setCloudSignOutError(null);
+    setCloudSignOutPending(true);
     try {
       const { error } = await supabaseClient.auth.signOut();
       if (error) {
@@ -221,24 +468,155 @@ export default function Welcome(): JSX.Element {
       }
       setSession(null);
     } catch (error) {
-      setSignOutError(error instanceof Error ? error.message : "Unable to sign out right now.");
+      setCloudSignOutError(error instanceof Error ? error.message : "Unable to sign out right now.");
     } finally {
-      setSignOutPending(false);
+      setCloudSignOutPending(false);
     }
   }, []);
 
+  const handleLocalSignIn = useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (!isBrowser()) {
+        setLocalSignInError("Local storage is not available.");
+        return;
+      }
+      setLocalSignInError(null);
+      setLocalSignInPending(true);
+      try {
+        const accounts = loadLocalAccounts();
+        const normalizedUsername = localSignInUsername.trim().toLowerCase();
+        const account = accounts.find(candidate => candidate.username.toLowerCase() === normalizedUsername);
+        if (!account) {
+          setLocalSignInError("Account not found. Check the username and try again.");
+          return;
+        }
+        const hashed = await hashPassword(localSignInPassword);
+        if (account.passwordHash !== hashed) {
+          setLocalSignInError("Password incorrect.");
+          return;
+        }
+        setActiveLocalAccount(account);
+        setLocalSession({ username: account.username, profile: account.profile });
+        navigateToPostAuth();
+      } catch (error) {
+        setLocalSignInError(error instanceof Error ? error.message : "Unable to sign in. Try again.");
+      } finally {
+        setLocalSignInPending(false);
+      }
+    },
+    [localSignInPassword, localSignInUsername, navigateToPostAuth],
+  );
+
+  const handleLocalSignUpInputChange = useCallback(<K extends keyof SignUpFormState>(key: K, value: SignUpFormState[K]) => {
+    setLocalSignUpForm(prev => ({ ...prev, [key]: value }));
+  }, []);
+
+  const handleLocalSignUp = useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (!isBrowser()) {
+        setLocalSignUpError("Local storage is not available.");
+        return;
+      }
+      const { firstName, lastInitial, grade, age, school, priorExperience, username, password } = localSignUpForm;
+      if (!firstName.trim()) {
+        setLocalSignUpError("Enter a first name.");
+        return;
+      }
+      if (!lastInitial.trim()) {
+        setLocalSignUpError("Enter a last initial.");
+        return;
+      }
+      if (!grade) {
+        setLocalSignUpError("Select a grade.");
+        return;
+      }
+      if (!age) {
+        setLocalSignUpError("Select an age.");
+        return;
+      }
+      if (!username.trim()) {
+        setLocalSignUpError("Enter a username.");
+        return;
+      }
+      if (!password) {
+        setLocalSignUpError("Create a password.");
+        return;
+      }
+      setLocalSignUpError(null);
+      setLocalSignUpPending(true);
+      try {
+        const accounts = loadLocalAccounts();
+        const normalizedUsername = username.trim().toLowerCase();
+        const usernameTaken = accounts.some(candidate => candidate.username.toLowerCase() === normalizedUsername);
+        if (usernameTaken) {
+          setLocalSignUpError("That username is taken—try another.");
+          return;
+        }
+        const profile = buildPlayerProfileFromForm(localSignUpForm);
+        const passwordHash = await hashPassword(password);
+        const account: LocalAccountRecord = {
+          username: username.trim(),
+          passwordHash,
+          profile,
+          createdAt: new Date().toISOString(),
+        };
+        saveLocalAccounts(accounts.concat(account));
+        setActiveLocalAccount(account);
+        setLocalSession({ username: account.username, profile: account.profile });
+        setLocalSignUpForm(initialSignUpForm);
+        navigateToPostAuth();
+      } catch (error) {
+        setLocalSignUpError(error instanceof Error ? error.message : "Unable to sign up. Try again.");
+      } finally {
+        setLocalSignUpPending(false);
+      }
+    },
+    [localSignUpForm, navigateToPostAuth],
+  );
+
+  const handleLocalSignOut = useCallback(async () => {
+    if (!isBrowser()) {
+      setLocalSignOutError("Local storage is not available.");
+      return;
+    }
+    setLocalSignOutError(null);
+    setLocalSignOutPending(true);
+    try {
+      clearActiveLocalSession(localSession?.profile.id);
+      setLocalSession(null);
+    } catch (error) {
+      setLocalSignOutError(error instanceof Error ? error.message : "Unable to sign out right now.");
+    } finally {
+      setLocalSignOutPending(false);
+    }
+  }, [localSession]);
+
   const statusMessage = useMemo(() => {
-    if (!supabaseReady) {
-      return "Supabase is not configured. Provide the environment variables to enable sign-in.";
+    if (authMode === "cloud") {
+      if (!supabaseReady) {
+        return "Supabase is not configured. Provide the environment variables to enable sign-in.";
+      }
+      if (initializing) {
+        return "Checking session…";
+      }
+      if (session) {
+        return `Signed in as ${session.user?.email ?? "cloud user"}.`;
+      }
+      return "Cloud mode ready.";
     }
-    if (initializing) {
-      return "Checking session…";
+    if (localSession) {
+      return `Signed in as ${localSession.profile.playerName}.`;
     }
-    if (session) {
-      return "Signed in.";
-    }
-    return DEPLOY_ENV === "cloud" ? "Cloud mode ready." : "Local mode ready.";
-  }, [initializing, session, supabaseReady]);
+    return "Local mode ready.";
+  }, [authMode, initializing, localSession, session, supabaseReady]);
+
+  const signOutError = authMode === "cloud" ? cloudSignOutError : localSignOutError;
+  const signOutPending = authMode === "cloud" ? cloudSignOutPending : localSignOutPending;
+  const signOutDisabled = authMode === "cloud"
+    ? !supabaseReady || signOutPending || !session
+    : !localSession || signOutPending;
 
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-50">
@@ -250,79 +628,156 @@ export default function Welcome(): JSX.Element {
       </header>
       <main className="mx-auto mt-10 w-full max-w-4xl flex-1 px-4 pb-16">
         <div className="rounded-3xl bg-white/10 p-1 shadow-2xl backdrop-blur">
-          <div className="flex w-full justify-between gap-1 rounded-3xl bg-slate-900/60 p-1">
-            <button
-              type="button"
-              onClick={() => setActiveTab("signIn")}
-              className={`flex-1 rounded-3xl px-5 py-3 text-sm font-semibold transition ${
-                activeTab === "signIn" ? "bg-white text-slate-900 shadow" : "text-slate-300 hover:text-white"
-              }`}
-            >
-              Sign In
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab("signUp")}
-              className={`flex-1 rounded-3xl px-5 py-3 text-sm font-semibold transition ${
-                activeTab === "signUp" ? "bg-white text-slate-900 shadow" : "text-slate-300 hover:text-white"
-              }`}
-            >
-              Sign Up
-            </button>
+          <div className="space-y-2 rounded-3xl bg-slate-900/60 p-1">
+            <div className="flex w-full justify-between gap-1 rounded-3xl bg-slate-900/60 p-1">
+              <button
+                type="button"
+                onClick={() => handleAuthModeChange("local")}
+                className={`flex-1 rounded-3xl px-5 py-3 text-sm font-semibold transition ${
+                  authMode === "local" ? "bg-white text-slate-900 shadow" : "text-slate-300 hover:text-white"
+                }`}
+              >
+                Local (this device)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleAuthModeChange("cloud")}
+                className={`flex-1 rounded-3xl px-5 py-3 text-sm font-semibold transition ${
+                  authMode === "cloud" ? "bg-white text-slate-900 shadow" : "text-slate-300 hover:text-white"
+                }`}
+              >
+                Cloud (sync across devices)
+              </button>
+            </div>
+            <div className="flex w-full justify-between gap-1 rounded-3xl bg-slate-900/60 p-1">
+              <button
+                type="button"
+                onClick={() => setActiveTab("signIn")}
+                className={`flex-1 rounded-3xl px-5 py-3 text-sm font-semibold transition ${
+                  activeTab === "signIn" ? "bg-white text-slate-900 shadow" : "text-slate-300 hover:text-white"
+                }`}
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("signUp")}
+                className={`flex-1 rounded-3xl px-5 py-3 text-sm font-semibold transition ${
+                  activeTab === "signUp" ? "bg-white text-slate-900 shadow" : "text-slate-300 hover:text-white"
+                }`}
+              >
+                Sign Up
+              </button>
+            </div>
           </div>
           <div className="grid gap-8 p-8 lg:grid-cols-[1.2fr_1fr]">
             <section className="rounded-2xl bg-white/5 p-6 shadow-inner">
-              <h2 className="text-lg font-semibold text-white">{activeTab === "signIn" ? "Sign In" : "Create account"}</h2>
+              <h2 className="text-lg font-semibold text-white">
+                {activeTab === "signIn" ? "Sign In" : "Create account"}
+              </h2>
               <p className="mt-1 text-sm text-slate-300">
-                {activeTab === "signIn"
-                  ? "Use the username and password associated with your Supabase account."
-                  : "Fill out the same information as the local profile setup so we can save your progress to the cloud."}
+                {authMode === "cloud"
+                  ? activeTab === "signIn"
+                    ? "Use the username and password associated with your Supabase account."
+                    : "Fill out the same information as the local profile setup so we can save your progress to the cloud."
+                  : activeTab === "signIn"
+                    ? "Use the username and password saved on this device to pick up where you left off."
+                    : "Create a local-only profile. Everything stays on this browser unless you export it."}
               </p>
               {activeTab === "signIn" ? (
-                <form className="mt-6 space-y-4" onSubmit={handleSignIn}>
-                  <div>
-                    <label htmlFor="sign-in-username" className="text-sm font-medium text-slate-200">
-                      Username
-                    </label>
-                    <input
-                      id="sign-in-username"
-                      type="text"
-                      autoComplete="username"
-                      value={signInUsername}
-                      onChange={event => setSignInUsername(event.target.value)}
-                      className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                      placeholder="yourname"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="sign-in-password" className="text-sm font-medium text-slate-200">
-                      Password
-                    </label>
-                    <input
-                      id="sign-in-password"
-                      type="password"
-                      autoComplete="current-password"
-                      value={signInPassword}
-                      onChange={event => setSignInPassword(event.target.value)}
-                      className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                      placeholder="••••••••"
-                    />
-                  </div>
-                  {signInError ? <p className="text-sm font-semibold text-rose-300">{signInError}</p> : null}
-                  <button
-                    type="submit"
-                    disabled={!supabaseReady || signInPending}
-                    className={`w-full rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                      !supabaseReady || signInPending
-                        ? "cursor-not-allowed bg-slate-600 text-slate-300"
-                        : "bg-sky-500 text-white hover:bg-sky-400"
-                    }`}
-                  >
-                    {signInPending ? "Signing in…" : "Sign In"}
-                  </button>
-                </form>
-              ) : (
-                <form className="mt-6 grid gap-4" onSubmit={handleSignUp}>
+                authMode === "cloud" ? (
+                  <form className="mt-6 space-y-4" onSubmit={handleCloudSignIn}>
+                    <div>
+                      <label htmlFor="sign-in-username" className="text-sm font-medium text-slate-200">
+                        Username
+                      </label>
+                      <input
+                        id="sign-in-username"
+                        type="text"
+                        autoComplete="username"
+                        value={cloudSignInUsername}
+                        onChange={event => setCloudSignInUsername(event.target.value)}
+                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                        placeholder="yourname"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="sign-in-password" className="text-sm font-medium text-slate-200">
+                        Password
+                      </label>
+                      <input
+                        id="sign-in-password"
+                        type="password"
+                        autoComplete="current-password"
+                        value={cloudSignInPassword}
+                        onChange={event => setCloudSignInPassword(event.target.value)}
+                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                        placeholder="••••••••"
+                      />
+                    </div>
+                    {cloudSignInError ? (
+                      <p className="text-sm font-semibold text-rose-300">{cloudSignInError}</p>
+                    ) : null}
+                    <button
+                      type="submit"
+                      disabled={!supabaseReady || cloudSignInPending}
+                      className={`w-full rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                        !supabaseReady || cloudSignInPending
+                          ? "cursor-not-allowed bg-slate-600 text-slate-300"
+                          : "bg-sky-500 text-white hover:bg-sky-400"
+                      }`}
+                    >
+                      {cloudSignInPending ? "Signing in…" : "Sign In"}
+                    </button>
+                  </form>
+                ) : (
+                  <form className="mt-6 space-y-4" onSubmit={handleLocalSignIn}>
+                    <div>
+                      <label htmlFor="local-sign-in-username" className="text-sm font-medium text-slate-200">
+                        Username
+                      </label>
+                      <input
+                        id="local-sign-in-username"
+                        type="text"
+                        autoComplete="username"
+                        value={localSignInUsername}
+                        onChange={event => setLocalSignInUsername(event.target.value)}
+                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                        placeholder="yourname"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="local-sign-in-password" className="text-sm font-medium text-slate-200">
+                        Password
+                      </label>
+                      <input
+                        id="local-sign-in-password"
+                        type="password"
+                        autoComplete="current-password"
+                        value={localSignInPassword}
+                        onChange={event => setLocalSignInPassword(event.target.value)}
+                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                        placeholder="••••••••"
+                      />
+                    </div>
+                    {localSignInError ? (
+                      <p className="text-sm font-semibold text-rose-300">{localSignInError}</p>
+                    ) : null}
+                    <button
+                      type="submit"
+                      disabled={localSignInPending}
+                      className={`w-full rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                        localSignInPending
+                          ? "cursor-not-allowed bg-slate-600 text-slate-300"
+                          : "bg-emerald-500 text-white hover:bg-emerald-400"
+                      }`}
+                    >
+                      {localSignInPending ? "Signing in…" : "Sign In"}
+                    </button>
+                  </form>
+                )
+              ) : authMode === "cloud" ? (
+                <form className="mt-6 grid gap-4" onSubmit={handleCloudSignUp}>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div>
                       <label htmlFor="sign-up-first-name" className="text-sm font-medium text-slate-200">
@@ -331,21 +786,21 @@ export default function Welcome(): JSX.Element {
                       <input
                         id="sign-up-first-name"
                         type="text"
-                        value={signUpForm.firstName}
-                        onChange={event => handleSignUpInputChange("firstName", event.target.value)}
+                        value={cloudSignUpForm.firstName}
+                        onChange={event => handleCloudSignUpInputChange("firstName", event.target.value)}
                         className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
                         placeholder="e.g. Alex"
                       />
                     </div>
                     <div>
                       <label htmlFor="sign-up-last-initial" className="text-sm font-medium text-slate-200">
-                        Last initial
+                        Last name initial
                       </label>
                       <input
                         id="sign-up-last-initial"
                         type="text"
-                        value={signUpForm.lastInitial}
-                        onChange={event => handleSignUpInputChange("lastInitial", event.target.value)}
+                        value={cloudSignUpForm.lastInitial}
+                        onChange={event => handleCloudSignUpInputChange("lastInitial", event.target.value)}
                         className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
                         placeholder="e.g. W"
                         maxLength={3}
@@ -359,8 +814,8 @@ export default function Welcome(): JSX.Element {
                       </label>
                       <select
                         id="sign-up-grade"
-                        value={signUpForm.grade}
-                        onChange={event => handleSignUpInputChange("grade", event.target.value)}
+                        value={cloudSignUpForm.grade}
+                        onChange={event => handleCloudSignUpInputChange("grade", event.target.value)}
                         className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
                       >
                         <option value="">Select grade</option>
@@ -377,8 +832,8 @@ export default function Welcome(): JSX.Element {
                       </label>
                       <select
                         id="sign-up-age"
-                        value={signUpForm.age}
-                        onChange={event => handleSignUpInputChange("age", event.target.value)}
+                        value={cloudSignUpForm.age}
+                        onChange={event => handleCloudSignUpInputChange("age", event.target.value)}
                         className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
                       >
                         <option value="">Select age</option>
@@ -397,8 +852,8 @@ export default function Welcome(): JSX.Element {
                     <input
                       id="sign-up-school"
                       type="text"
-                      value={signUpForm.school}
-                      onChange={event => handleSignUpInputChange("school", event.target.value)}
+                      value={cloudSignUpForm.school}
+                      onChange={event => handleCloudSignUpInputChange("school", event.target.value)}
                       className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
                       placeholder="e.g. Roosevelt Elementary"
                     />
@@ -409,8 +864,8 @@ export default function Welcome(): JSX.Element {
                     </label>
                     <textarea
                       id="sign-up-prior"
-                      value={signUpForm.priorExperience}
-                      onChange={event => handleSignUpInputChange("priorExperience", event.target.value)}
+                      value={cloudSignUpForm.priorExperience}
+                      onChange={event => handleCloudSignUpInputChange("priorExperience", event.target.value)}
                       rows={3}
                       className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
                       placeholder="Tell us about your RPS or AI experience"
@@ -425,8 +880,8 @@ export default function Welcome(): JSX.Element {
                         id="sign-up-username"
                         type="text"
                         autoComplete="username"
-                        value={signUpForm.username}
-                        onChange={event => handleSignUpInputChange("username", event.target.value)}
+                        value={cloudSignUpForm.username}
+                        onChange={event => handleCloudSignUpInputChange("username", event.target.value)}
                         className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
                         placeholder="yourname"
                       />
@@ -439,24 +894,162 @@ export default function Welcome(): JSX.Element {
                         id="sign-up-password"
                         type="password"
                         autoComplete="new-password"
-                        value={signUpForm.password}
-                        onChange={event => handleSignUpInputChange("password", event.target.value)}
+                        value={cloudSignUpForm.password}
+                        onChange={event => handleCloudSignUpInputChange("password", event.target.value)}
                         className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
                         placeholder="Create a password"
                       />
                     </div>
                   </div>
-                  {signUpError ? <p className="text-sm font-semibold text-rose-300">{signUpError}</p> : null}
+                  {cloudSignUpError ? <p className="text-sm font-semibold text-rose-300">{cloudSignUpError}</p> : null}
                   <button
                     type="submit"
-                    disabled={!supabaseReady || signUpPending}
+                    disabled={!supabaseReady || cloudSignUpPending}
                     className={`w-full rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                      !supabaseReady || signUpPending
+                      !supabaseReady || cloudSignUpPending
                         ? "cursor-not-allowed bg-slate-600 text-slate-300"
                         : "bg-emerald-500 text-white hover:bg-emerald-400"
                     }`}
                   >
-                    {signUpPending ? "Creating account…" : "Create account"}
+                    {cloudSignUpPending ? "Creating account…" : "Create account"}
+                  </button>
+                </form>
+              ) : (
+                <form className="mt-6 grid gap-4" onSubmit={handleLocalSignUp}>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="local-sign-up-first-name" className="text-sm font-medium text-slate-200">
+                        First name
+                      </label>
+                      <input
+                        id="local-sign-up-first-name"
+                        type="text"
+                        value={localSignUpForm.firstName}
+                        onChange={event => handleLocalSignUpInputChange("firstName", event.target.value)}
+                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                        placeholder="e.g. Alex"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="local-sign-up-last-initial" className="text-sm font-medium text-slate-200">
+                        Last name initial
+                      </label>
+                      <input
+                        id="local-sign-up-last-initial"
+                        type="text"
+                        value={localSignUpForm.lastInitial}
+                        onChange={event => handleLocalSignUpInputChange("lastInitial", event.target.value)}
+                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                        placeholder="e.g. W"
+                        maxLength={3}
+                      />
+                    </div>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="local-sign-up-grade" className="text-sm font-medium text-slate-200">
+                        Grade
+                      </label>
+                      <select
+                        id="local-sign-up-grade"
+                        value={localSignUpForm.grade}
+                        onChange={event => handleLocalSignUpInputChange("grade", event.target.value)}
+                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                      >
+                        <option value="">Select grade</option>
+                        {GRADE_OPTIONS.map(option => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="local-sign-up-age" className="text-sm font-medium text-slate-200">
+                        Age
+                      </label>
+                      <select
+                        id="local-sign-up-age"
+                        value={localSignUpForm.age}
+                        onChange={event => handleLocalSignUpInputChange("age", event.target.value)}
+                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                      >
+                        <option value="">Select age</option>
+                        {AGE_OPTIONS.map(option => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label htmlFor="local-sign-up-school" className="text-sm font-medium text-slate-200">
+                      School (optional)
+                    </label>
+                    <input
+                      id="local-sign-up-school"
+                      type="text"
+                      value={localSignUpForm.school}
+                      onChange={event => handleLocalSignUpInputChange("school", event.target.value)}
+                      className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                      placeholder="e.g. Roosevelt Elementary"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="local-sign-up-prior" className="text-sm font-medium text-slate-200">
+                      Prior experience (optional)
+                    </label>
+                    <textarea
+                      id="local-sign-up-prior"
+                      value={localSignUpForm.priorExperience}
+                      onChange={event => handleLocalSignUpInputChange("priorExperience", event.target.value)}
+                      rows={3}
+                      className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                      placeholder="Tell us about your RPS or AI experience"
+                    />
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="local-sign-up-username" className="text-sm font-medium text-slate-200">
+                        Username
+                      </label>
+                      <input
+                        id="local-sign-up-username"
+                        type="text"
+                        autoComplete="username"
+                        value={localSignUpForm.username}
+                        onChange={event => handleLocalSignUpInputChange("username", event.target.value)}
+                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                        placeholder="yourname"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="local-sign-up-password" className="text-sm font-medium text-slate-200">
+                        Password
+                      </label>
+                      <input
+                        id="local-sign-up-password"
+                        type="password"
+                        autoComplete="new-password"
+                        value={localSignUpForm.password}
+                        onChange={event => handleLocalSignUpInputChange("password", event.target.value)}
+                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
+                        placeholder="Create a password"
+                      />
+                    </div>
+                  </div>
+                  {localSignUpError ? <p className="text-sm font-semibold text-rose-300">{localSignUpError}</p> : null}
+                  <button
+                    type="submit"
+                    disabled={localSignUpPending}
+                    className={`w-full rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                      localSignUpPending
+                        ? "cursor-not-allowed bg-slate-600 text-slate-300"
+                        : "bg-emerald-500 text-white hover:bg-emerald-400"
+                    }`}
+                  >
+                    {localSignUpPending ? "Creating account…" : "Create account"}
                   </button>
                 </form>
               )}
@@ -470,18 +1063,18 @@ export default function Welcome(): JSX.Element {
               <div className="space-y-3">
                 <button
                   type="button"
-                  onClick={handleSignOut}
-                  disabled={!supabaseReady || signOutPending}
+                  onClick={authMode === "cloud" ? handleCloudSignOut : handleLocalSignOut}
+                  disabled={signOutDisabled}
                   className={`w-full rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                    !supabaseReady || signOutPending
-                      ? "cursor-not-allowed bg-slate-700 text-slate-400"
-                      : "bg-slate-200 text-slate-900 hover:bg-white"
+                    signOutDisabled ? "cursor-not-allowed bg-slate-700 text-slate-400" : "bg-slate-200 text-slate-900 hover:bg-white"
                   }`}
                 >
                   {signOutPending ? "Signing out…" : "Sign Out"}
                 </button>
                 <p className="text-xs text-slate-400">
-                  Signing out clears the session locally and keeps you on this welcome screen.
+                  {authMode === "cloud"
+                    ? "Signing out clears the session locally and keeps you on this welcome screen."
+                    : "Signing out clears the local session and keeps you on this welcome screen."}
                 </p>
               </div>
             </aside>
