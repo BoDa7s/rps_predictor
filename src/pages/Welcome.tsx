@@ -1,16 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
 import { supabaseClient, isSupabaseConfigured } from "../lib/supabaseClient";
 import { getPostAuthPath, DEPLOY_ENV } from "../lib/env";
 import { GRADE_OPTIONS } from "../players";
 
 const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => String(5 + index));
-
-type AuthSession = {
-  user?: { id?: string | null } | null;
-  [key: string]: unknown;
-} | null;
-type AuthChangeHandler = (_event: unknown, session: AuthSession) => void;
-type GetSessionResult = { data?: { session?: AuthSession } | null; error?: unknown } | null;
 
 function usePostAuthNavigation() {
   const postAuthPath = useMemo(() => getPostAuthPath(), []);
@@ -49,7 +43,7 @@ const initialSignUpForm: SignUpFormState = {
 export default function Welcome(): JSX.Element {
   const navigateToPostAuth = usePostAuthNavigation();
   const [activeTab, setActiveTab] = useState<AuthTab>("signIn");
-  const [session, setSession] = useState<AuthSession>(null);
+  const [session, setSession] = useState<Session | null>(null);
   const [initializing, setInitializing] = useState(true);
 
   const [signInUsername, setSignInUsername] = useState("");
@@ -72,17 +66,17 @@ export default function Welcome(): JSX.Element {
       return;
     }
     let cancelled = false;
-    supabaseClient.auth.getSession().then((result: GetSessionResult) => {
+    supabaseClient.auth.getSession().then(({ data }) => {
       if (cancelled) return;
-      const currentSession = result?.data?.session ?? null;
+      const currentSession = data?.session ?? null;
       setSession(currentSession);
       setInitializing(false);
       if (currentSession) {
         navigateToPostAuth();
       }
     });
-    const handleAuthStateChange: AuthChangeHandler = (_event, nextSession) => {
-      setSession(nextSession ?? null);
+    const handleAuthStateChange = (_event: unknown, nextSession: Session | null) => {
+      setSession(nextSession);
       if (nextSession) {
         navigateToPostAuth();
       }
@@ -187,17 +181,16 @@ export default function Welcome(): JSX.Element {
         const nextSession = data.session;
         const userId = data.user?.id;
         if (userId) {
-          void supabaseClient
-            .from("player_profiles")
-            .upsert({ user_id: userId, ...payloadForProfile })
-            .then(({ error }: { error: unknown }) => {
-              if (error) {
-                console.warn("player_profiles upsert failed", error);
-              }
-            })
-            .catch((upsertError: unknown) => {
-              console.warn("player_profiles upsert threw", upsertError);
-            });
+          try {
+            const { error: profileError } = await supabaseClient
+              .from("player_profiles")
+              .upsert({ user_id: userId, ...payloadForProfile });
+            if (profileError) {
+              console.warn("player_profiles upsert failed", profileError);
+            }
+          } catch (upsertError) {
+            console.warn("player_profiles upsert threw", upsertError);
+          }
         }
         if (!nextSession) {
           setSignUpError("Sign-up succeeded. Check your email to confirm before continuing.");
