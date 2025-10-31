@@ -1496,10 +1496,19 @@ function RPSDoodleAppInner(){
     getModelStateForProfile,
     saveModelStateForProfile,
     clearModelStateForProfile,
+    resetStats,
     adminMatches,
     adminRounds,
   } = useStats();
-  const { players, currentPlayer, hasConsented, createPlayer, updatePlayer, setCurrentPlayer } = usePlayers();
+  const {
+    players,
+    currentPlayer,
+    hasConsented,
+    createPlayer,
+    updatePlayer,
+    setCurrentPlayer,
+    resetPlayers,
+  } = usePlayers();
   const location = useLocation();
   const navigate = useNavigate();
   const initialWelcomePreferenceRef = useRef<WelcomePreference | null>(null);
@@ -2989,6 +2998,11 @@ function RPSDoodleAppInner(){
           window.clearInterval(signOutProgressIntervalRef.current);
           signOutProgressIntervalRef.current = null;
         }
+        resetStats();
+        resetPlayers();
+        resetMatchTimings();
+        lockSecureStore();
+        setWelcomePreference("show");
         openWelcome({
           announce: "Signing out complete. Returning to the welcome screen.",
           resetPlayer: true,
@@ -3020,7 +3034,7 @@ function RPSDoodleAppInner(){
         signOutCompletionTimeoutRef.current = null;
       }
     };
-  }, [signOutActive, openWelcome]);
+  }, [signOutActive, openWelcome, resetMatchTimings, resetPlayers, resetStats, setWelcomePreference]);
 
   const finishWelcomeFlow = useCallback(
     (reason: "setup" | "restore" | "dismiss") => {

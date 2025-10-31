@@ -131,6 +131,10 @@ function loadPlayers(): PlayerProfile[] {
 
 function savePlayers(players: PlayerProfile[]) {
   if (typeof window === "undefined") return;
+  if (players.length === 0) {
+    localStorage.removeItem(PLAYERS_KEY);
+    return;
+  }
   localStorage.setItem(PLAYERS_KEY, JSON.stringify(players));
 }
 
@@ -161,6 +165,7 @@ interface PlayerContextValue {
   createPlayer: (input: Omit<PlayerProfile, "id">) => PlayerProfile;
   updatePlayer: (id: string, patch: Partial<Omit<PlayerProfile, "id">>) => void;
   deletePlayer: (id: string) => void;
+  resetPlayers: () => void;
 }
 
 const PlayerContext = createContext<PlayerContextValue | null>(null);
@@ -195,6 +200,19 @@ export function PlayersProvider({ children }: { children: React.ReactNode }){
     setCurrentPlayerId(prev => (prev === id ? null : prev));
   }, []);
 
+  const resetPlayers = useCallback(() => {
+    setPlayers([]);
+    setCurrentPlayerId(null);
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.removeItem(PLAYERS_KEY);
+        localStorage.removeItem(CURRENT_PLAYER_KEY);
+      } catch {
+        /* noop */
+      }
+    }
+  }, []);
+
   const value = useMemo(() => ({
     players,
     currentPlayerId,
@@ -204,7 +222,18 @@ export function PlayersProvider({ children }: { children: React.ReactNode }){
     createPlayer,
     updatePlayer,
     deletePlayer,
-  }), [players, currentPlayerId, currentPlayer, hasConsented, setCurrentPlayer, createPlayer, updatePlayer, deletePlayer]);
+    resetPlayers,
+  }), [
+    players,
+    currentPlayerId,
+    currentPlayer,
+    hasConsented,
+    setCurrentPlayer,
+    createPlayer,
+    updatePlayer,
+    deletePlayer,
+    resetPlayers,
+  ]);
 
   return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;
 }

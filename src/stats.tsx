@@ -179,6 +179,7 @@ interface StatsContextValue {
   getModelStateForProfile: (profileId: string) => StoredPredictorModelState | null;
   saveModelStateForProfile: (profileId: string, state: StoredPredictorModelState) => void;
   clearModelStateForProfile: (profileId: string) => void;
+  resetStats: () => void;
   adminRounds: RoundLog[];
   adminMatches: MatchSummary[];
   adminProfiles: StatsProfile[];
@@ -611,6 +612,30 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const resetStats = useCallback(() => {
+    setAllRounds([]);
+    setAllMatches([]);
+    setProfiles([]);
+    setCurrentProfileId(null);
+    setModelStates([]);
+    setRoundsDirty(false);
+    setMatchesDirty(false);
+    setProfilesDirty(false);
+    setModelStatesDirty(false);
+    sessionIdRef.current = makeId("sess");
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.removeItem(ROUND_KEY);
+        localStorage.removeItem(MATCH_KEY);
+        localStorage.removeItem(PROFILE_KEY);
+        localStorage.removeItem(CURRENT_PROFILE_KEY);
+        localStorage.removeItem(MODEL_STATE_KEY);
+      } catch (err) {
+        console.warn("Failed to clear stats during reset", err);
+      }
+    }
+  }, []);
+
   const createProfile = useCallback(
     (playerIdOverride?: string) => {
       const targetPlayerId = playerIdOverride ?? currentPlayerId;
@@ -850,6 +875,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     getModelStateForProfile,
     saveModelStateForProfile,
     clearModelStateForProfile,
+    resetStats,
     adminRounds: allRounds,
     adminMatches: allMatches,
     adminProfiles: profiles,
@@ -873,6 +899,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     getModelStateForProfile,
     saveModelStateForProfile,
     clearModelStateForProfile,
+    resetStats,
     allRounds,
     allMatches,
     profiles,
