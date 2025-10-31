@@ -1,6 +1,6 @@
 declare module "@supabase/supabase-js" {
   export type Session = {
-    user?: { id?: string; email?: string | null } | null;
+    user?: { id?: string; email?: string | null; user_metadata?: Record<string, unknown> } | null;
     [key: string]: unknown;
   };
 
@@ -25,6 +25,10 @@ declare module "@supabase/supabase-js" {
 
   export interface SupabaseQueryBuilder {
     upsert(values: Record<string, unknown>): Promise<{ error: unknown }>;
+    select(columns: string): SupabaseQueryBuilder;
+    eq(column: string, value: unknown): SupabaseQueryBuilder;
+    order(column: string, options?: { ascending?: boolean }): Promise<{ data: unknown; error: unknown }>;
+    maybeSingle(): Promise<{ data: unknown; error: unknown }>;
   }
 
   export interface SupabaseClient {

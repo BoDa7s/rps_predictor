@@ -41,6 +41,10 @@ type SignUpFormState = {
   password: string;
 };
 
+type CloudProfileSeed = Partial<
+  Pick<SignUpFormState, "firstName" | "lastInitial" | "grade" | "age" | "school" | "priorExperience" | "username">
+>;
+
 interface LocalAccountRecord {
   profile: PlayerProfile;
   createdAt: string;
@@ -55,6 +59,21 @@ interface StoredStatsProfileSnapshot {
   playerId: string;
   trainingCount?: number;
   trained?: boolean;
+}
+
+interface StatsProfileStorageEntry {
+  id: string;
+  playerId: string;
+  name: string;
+  createdAt: string;
+  trainingCount: number;
+  trained: boolean;
+  predictorDefault: boolean;
+  seenPostTrainingCTA: boolean;
+  baseName: string;
+  version: number;
+  previousProfileId: string | null;
+  nextProfileId: string | null;
 }
 
 const initialSignUpForm: SignUpFormState = {
@@ -257,6 +276,304 @@ function getStoredCurrentStatsProfileId(): string | null {
   }
 }
 
+function loadStatsProfilesStorage(): StatsProfileStorageEntry[] {
+  if (!isBrowser()) return [];
+  try {
+    const raw = window.localStorage.getItem(STATS_PROFILES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map(item => {
+        if (!item || typeof item !== "object") return null;
+        const entry = item as Partial<StatsProfileStorageEntry> & { id?: unknown; playerId?: unknown };
+        const id = typeof entry.id === "string" ? entry.id : null;
+        const playerId = typeof entry.playerId === "string" ? entry.playerId : null;
+        if (!id || !playerId) return null;
+        const createdAt = typeof entry.createdAt === "string" ? entry.createdAt : new Date().toISOString();
+        const baseName = typeof entry.baseName === "string" && entry.baseName.trim() ? entry.baseName : "primary";
+        const version = Number.isFinite(entry.version) ? Math.max(1, Math.floor(Number(entry.version))) : 1;
+        const name = typeof entry.name === "string" && entry.name.trim() ? entry.name : baseName;
+        const trainingCount = Number.isFinite(entry.trainingCount) ? Number(entry.trainingCount) : 0;
+        const trained = entry.trained === true;
+        const predictorDefault = entry.predictorDefault === true;
+        const seenPostTrainingCTA = entry.seenPostTrainingCTA === true;
+        const previousProfileId = typeof entry.previousProfileId === "string" ? entry.previousProfileId : null;
+        const nextProfileId = typeof entry.nextProfileId === "string" ? entry.nextProfileId : null;
+        return {
+          id,
+          playerId,
+          name,
+          createdAt,
+          trainingCount,
+          trained,
+          predictorDefault,
+          seenPostTrainingCTA,
+          baseName,
+          version,
+          previousProfileId,
+          nextProfileId,
+        } satisfies StatsProfileStorageEntry;
+      })
+      .filter((entry): entry is StatsProfileStorageEntry => entry !== null);
+  } catch {
+    return [];
+  }
+}
+
+function saveStatsProfilesStorage(profiles: StatsProfileStorageEntry[]) {
+  if (!isBrowser()) return;
+  window.localStorage.setItem(STATS_PROFILES_KEY, JSON.stringify(profiles));
+}
+
+function setStoredCurrentStatsProfileId(id: string | null) {
+  if (!isBrowser()) return;
+  if (id) {
+    window.localStorage.setItem(STATS_CURRENT_PROFILE_KEY, id);
+  } else {
+    window.localStorage.removeItem(STATS_CURRENT_PROFILE_KEY);
+  }
+}
+
+async function hydrateCloudPlayerState(session: Session, seed?: CloudProfileSeed): Promise<string | null> {
+  if (!supabaseClient) {
+    return null;
+  }
+  const userId = session.user?.id;
+  if (!userId) {
+    return null;
+  }
+
+  type DemographicsRow = {
+    user_id: string;
+    username?: string | null;
+    first_name?: string | null;
+    last_initial?: string | null;
+    grade?: string | null;
+    age?: string | null;
+    school?: string | null;
+    prior_experience?: string | null;
+    consent_version?: string | null;
+    consent_granted_at?: string | null;
+    training_completed?: boolean | null;
+    training_count?: number | null;
+  } | null;
+
+  type StatsProfileRow = {
+    id: string | null;
+    base_name?: string | null;
+    display_name?: string | null;
+    training_count?: number | null;
+    training_completed?: boolean | null;
+    predictor_default?: boolean | null;
+    seen_post_training_cta?: boolean | null;
+    previous_profile_id?: string | null;
+    next_profile_id?: string | null;
+    archived?: boolean | null;
+    created_at?: string | null;
+    version?: number | null;
+    profile_version?: number | null;
+  };
+
+  let demographics: DemographicsRow = null;
+  let statsProfiles: StatsProfileRow[] = [];
+
+  try {
+    const [demographicsResult, statsResult] = await Promise.all([
+      supabaseClient
+        .from("demographics_profiles")
+        .select(
+          "user_id, username, first_name, last_initial, grade, age, school, prior_experience, consent_version, consent_granted_at, training_completed, training_count",
+        )
+        .eq("user_id", userId)
+        .maybeSingle(),
+      supabaseClient
+        .from("stats_profiles")
+        .select(
+          "id, base_name, display_name, training_count, training_completed, predictor_default, seen_post_training_cta, previous_profile_id, next_profile_id, archived, created_at, version, profile_version",
+        )
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true }),
+    ]);
+
+    if (!demographicsResult.error) {
+      demographics = (demographicsResult.data as DemographicsRow) ?? null;
+    } else {
+      console.warn("Failed to load demographics profile", demographicsResult.error);
+    }
+
+    if (!statsResult.error && Array.isArray(statsResult.data)) {
+      statsProfiles = statsResult.data as StatsProfileRow[];
+    } else if (statsResult.error) {
+      console.warn("Failed to load stats profiles", statsResult.error);
+    }
+  } catch (error) {
+    console.warn("Unexpected error loading cloud profile state", error);
+  }
+
+  const metadata = (session.user?.user_metadata ?? {}) as Record<string, unknown>;
+
+  const pickString = (...values: Array<unknown>): string => {
+    for (const value of values) {
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (trimmed) {
+          return trimmed;
+        }
+      }
+    }
+    return "";
+  };
+
+  const firstName = pickString(
+    demographics?.first_name,
+    seed?.firstName,
+    metadata.first_name,
+    metadata.firstName,
+  );
+  const lastInitialRaw = pickString(
+    demographics?.last_initial,
+    seed?.lastInitial,
+    metadata.last_initial,
+    metadata.lastInitial,
+  );
+  const lastInitial = lastInitialRaw ? lastInitialRaw.charAt(0).toUpperCase() : "";
+  const usernameFallback = pickString(
+    demographics?.username,
+    seed?.username,
+    metadata.username,
+    metadata.user_name,
+    session.user?.email,
+  );
+  const playerName = (() => {
+    if (firstName && lastInitial) return `${firstName} ${lastInitial}.`;
+    if (firstName) return firstName;
+    if (usernameFallback) return usernameFallback;
+    return "Player";
+  })();
+
+  const gradeCandidate = pickString(
+    demographics?.grade,
+    seed?.grade,
+    metadata.grade,
+  );
+  const grade = isGradeValue(gradeCandidate) ? gradeCandidate : "Not applicable";
+  const ageCandidate =
+    demographics?.age ?? seed?.age ?? (typeof metadata.age === "string" || typeof metadata.age === "number" ? metadata.age : null);
+  const age = sanitizeAge(ageCandidate);
+  const school = pickString(demographics?.school, seed?.school, metadata.school);
+  const priorExperience = pickString(
+    demographics?.prior_experience,
+    seed?.priorExperience,
+    metadata.prior_experience,
+    metadata.priorExperience,
+  );
+
+  const consentVersion = pickString(demographics?.consent_version) || CONSENT_TEXT_VERSION;
+  const consentTimestamp = pickString(demographics?.consent_granted_at) || new Date().toISOString();
+
+  const profile: PlayerProfile = {
+    id: userId,
+    playerName,
+    grade,
+    age,
+    school: school || undefined,
+    priorExperience: priorExperience || undefined,
+    consent: {
+      agreed: true,
+      consentTextVersion: consentVersion,
+      timestamp: consentTimestamp,
+    },
+    needsReview: !isGradeValue(gradeCandidate) || age === null,
+  };
+
+  ensurePlayerStored(profile);
+
+  const normalizedStats: StatsProfileStorageEntry[] = (() => {
+    const activeProfiles = (Array.isArray(statsProfiles) ? statsProfiles : [])
+      .map(profileRow => {
+        if (!profileRow || typeof profileRow !== "object") return null;
+        const id = typeof profileRow.id === "string" ? profileRow.id : null;
+        if (!id) return null;
+        if (profileRow.archived) return null;
+        const baseName = pickString(profileRow.base_name) || "primary";
+        const name = pickString(profileRow.display_name, baseName) || "Primary";
+        const createdAt = pickString(profileRow.created_at) || new Date().toISOString();
+        const versionSource = Number.isFinite(profileRow.version)
+          ? Number(profileRow.version)
+          : Number.isFinite(profileRow.profile_version)
+            ? Number(profileRow.profile_version)
+            : 1;
+        const version = Math.max(1, Math.floor(versionSource));
+        const trainingCount = Number.isFinite(profileRow.training_count)
+          ? Number(profileRow.training_count)
+          : 0;
+        const trained = profileRow.training_completed === true;
+        const predictorDefault = profileRow.predictor_default === true;
+        const seenPostTrainingCTA = profileRow.seen_post_training_cta === true;
+        const previousProfileId = typeof profileRow.previous_profile_id === "string" ? profileRow.previous_profile_id : null;
+        const nextProfileId = typeof profileRow.next_profile_id === "string" ? profileRow.next_profile_id : null;
+        return {
+          id,
+          playerId: userId,
+          name,
+          createdAt,
+          trainingCount,
+          trained,
+          predictorDefault,
+          seenPostTrainingCTA,
+          baseName,
+          version,
+          previousProfileId,
+          nextProfileId,
+        } satisfies StatsProfileStorageEntry;
+      })
+      .filter((entry): entry is StatsProfileStorageEntry => entry !== null);
+
+    if (activeProfiles.length > 0) {
+      return activeProfiles;
+    }
+
+    const fallbackTrainingCount = Number.isFinite(demographics?.training_count)
+      ? Number(demographics?.training_count)
+      : 0;
+    const fallbackTrained = demographics?.training_completed === true;
+    const fallbackId = `${userId}-primary-profile`;
+    return [
+      {
+        id: fallbackId,
+        playerId: userId,
+        name: "Primary",
+        createdAt: new Date().toISOString(),
+        trainingCount: fallbackTrainingCount,
+        trained: fallbackTrained,
+        predictorDefault: true,
+        seenPostTrainingCTA: false,
+        baseName: "primary",
+        version: 1,
+        previousProfileId: null,
+        nextProfileId: null,
+      },
+    ];
+  })();
+
+  const existingProfiles = loadStatsProfilesStorage();
+  const retainedProfiles = existingProfiles.filter(entry => entry.playerId !== userId);
+  const nextProfiles = retainedProfiles.concat(normalizedStats);
+  saveStatsProfilesStorage(nextProfiles);
+
+  const currentProfileId = getStoredCurrentStatsProfileId();
+  if (normalizedStats.length > 0) {
+    const preferred = normalizedStats.find(profile => profile.predictorDefault) ?? normalizedStats[0];
+    setStoredCurrentStatsProfileId(preferred.id);
+  } else if (currentProfileId && !retainedProfiles.some(profile => profile.id === currentProfileId)) {
+    const fallback = retainedProfiles[0]?.id ?? null;
+    setStoredCurrentStatsProfileId(fallback ?? null);
+  }
+
+  return userId;
+}
+
 function resolveStatsProfileForPlayer(playerId: string | null | undefined): StoredStatsProfileSnapshot | null {
   if (!playerId) return null;
   const profiles = loadStoredStatsProfiles();
@@ -362,27 +679,35 @@ export default function Welcome(): JSX.Element {
   const supabaseReady = isSupabaseConfigured && Boolean(supabaseClient);
 
   useEffect(() => {
-    if (!supabaseClient) {
+    const client = supabaseClient;
+    if (!client) {
       setInitializing(false);
       return;
     }
     let cancelled = false;
-    supabaseClient.auth.getSession().then(({ data }) => {
+    const runInitial = async () => {
+      const { data } = await client.auth.getSession();
       if (cancelled) return;
       const currentSession = data?.session ?? null;
       setSession(currentSession);
       setInitializing(false);
       if (currentSession) {
-        navigateToPostAuth();
-      }
-    });
-    const handleAuthStateChange = (_event: unknown, nextSession: Session | null) => {
-      setSession(nextSession);
-      if (nextSession) {
-        navigateToPostAuth();
+        const playerId = await hydrateCloudPlayerState(currentSession);
+        if (cancelled) return;
+        navigateToPostAuth({ playerId: playerId ?? undefined });
       }
     };
-    const { data: listener } = supabaseClient.auth.onAuthStateChange(handleAuthStateChange);
+    runInitial();
+    const { data: listener } = client.auth.onAuthStateChange((_event, nextSession) => {
+      if (cancelled) return;
+      setSession(nextSession);
+      if (nextSession) {
+        hydrateCloudPlayerState(nextSession).then(playerId => {
+          if (cancelled) return;
+          navigateToPostAuth({ playerId: playerId ?? undefined });
+        });
+      }
+    });
     return () => {
       cancelled = true;
       listener?.subscription.unsubscribe();
@@ -441,7 +766,8 @@ export default function Welcome(): JSX.Element {
           return;
         }
         setSession(nextSession);
-        navigateToPostAuth();
+        const playerId = await hydrateCloudPlayerState(nextSession, { username: trimmedUsername });
+        navigateToPostAuth({ playerId: playerId ?? undefined });
       } catch (error) {
         setCloudSignInError(error instanceof Error ? error.message : "Unable to sign in. Try again.");
       } finally {
@@ -550,7 +876,16 @@ export default function Welcome(): JSX.Element {
           }
         }
         setSession(nextSession);
-        navigateToPostAuth();
+        const playerId = await hydrateCloudPlayerState(nextSession, {
+          firstName: profileMetadata.first_name ?? undefined,
+          lastInitial: profileMetadata.last_initial ?? undefined,
+          grade,
+          age,
+          school: profileMetadata.school ?? undefined,
+          priorExperience: profileMetadata.prior_experience ?? undefined,
+          username: trimmedUsername,
+        });
+        navigateToPostAuth({ playerId: playerId ?? undefined });
       } catch (error) {
         setCloudSignUpError(error instanceof Error ? error.message : "Unable to sign up. Try again.");
       } finally {
