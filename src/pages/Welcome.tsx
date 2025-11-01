@@ -23,15 +23,20 @@ import {
   LOCAL_ACTIVE_ACCOUNT_KEY,
   PLAYERS_STORAGE_KEY,
 } from "../lib/localSession";
+import { usePlayMode, type PlayMode } from "../lib/playMode";
 
 const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => String(5 + index));
 
 const STATS_PROFILES_KEY = "rps_stats_profiles_v1";
 const STATS_CURRENT_PROFILE_KEY = "rps_current_stats_profile_v1";
+const STATS_ROUNDS_KEY = "rps_stats_rounds_v1";
+const STATS_MATCHES_KEY = "rps_stats_matches_v1";
+const STATS_MODEL_STATE_KEY = "rps_predictor_models_v1";
 const TRAINING_ROUNDS_REQUIRED = 10;
 
 type AuthTab = "signIn" | "signUp";
 type AuthMode = "local" | "cloud";
+type StorageScope = "local" | "session";
 
 type SignUpFormState = {
   firstName: string;
@@ -51,6 +56,7 @@ type CloudProfileSeed = Partial<
 interface LocalAccountRecord {
   profile: PlayerProfile;
   createdAt: string;
+  storageMode: AuthMode;
 }
 
 interface LocalSession {
@@ -92,6 +98,19 @@ const initialSignUpForm: SignUpFormState = {
 
 function isBrowser(): boolean {
   return typeof window !== "undefined";
+}
+
+function getScopedStorage(scope: StorageScope): Storage | null {
+  if (!isBrowser()) return null;
+  try {
+    return scope === "session" ? window.sessionStorage : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function scopeFromMode(mode: PlayMode | AuthMode): StorageScope {
+  return mode === "cloud" ? "session" : "local";
 }
 
 function createProfileId(): string {
@@ -146,10 +165,11 @@ function normalizeStoredProfile(raw: any): PlayerProfile {
   };
 }
 
-function loadStoredPlayers(): PlayerProfile[] {
-  if (!isBrowser()) return [];
+function loadStoredPlayers(scope: StorageScope): PlayerProfile[] {
+  const storage = getScopedStorage(scope);
+  if (!storage) return [];
   try {
-    const raw = window.localStorage.getItem(PLAYERS_STORAGE_KEY);
+    const raw = storage.getItem(PLAYERS_STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -159,27 +179,30 @@ function loadStoredPlayers(): PlayerProfile[] {
   }
 }
 
-function saveStoredPlayers(players: PlayerProfile[]) {
-  if (!isBrowser()) return;
-  window.localStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(players));
+function saveStoredPlayers(scope: StorageScope, players: PlayerProfile[]) {
+  const storage = getScopedStorage(scope);
+  if (!storage) return;
+  storage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(players));
 }
 
-function ensurePlayerStored(profile: PlayerProfile) {
-  if (!isBrowser()) return;
-  const players = loadStoredPlayers();
+function ensurePlayerStored(profile: PlayerProfile, scope: StorageScope) {
+  const storage = getScopedStorage(scope);
+  if (!storage) return;
+  const players = loadStoredPlayers(scope);
   const existingIndex = players.findIndex(player => player.id === profile.id);
   const nextPlayers = existingIndex >= 0 ? [...players] : players.concat(profile);
   if (existingIndex >= 0) {
     nextPlayers[existingIndex] = { ...nextPlayers[existingIndex], ...profile };
   }
-  saveStoredPlayers(nextPlayers);
-  window.localStorage.setItem(CURRENT_PLAYER_STORAGE_KEY, profile.id);
+  saveStoredPlayers(scope, nextPlayers);
+  storage.setItem(CURRENT_PLAYER_STORAGE_KEY, profile.id);
 }
 
 function loadLocalAccounts(): LocalAccountRecord[] {
-  if (!isBrowser()) return [];
+  const storage = getScopedStorage("local");
+  if (!storage) return [];
   try {
-    const raw = window.localStorage.getItem(LOCAL_ACCOUNTS_KEY);
+    const raw = storage.getItem(LOCAL_ACCOUNTS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -187,12 +210,18 @@ function loadLocalAccounts(): LocalAccountRecord[] {
       .map(item => {
         if (!item || typeof item !== "object") return null;
         const profile = normalizeStoredProfile((item as any).profile);
+        const storageMode = (item as any).storageMode === "cloud" ? "cloud" : "local";
+        if (storageMode !== "local") {
+          return null;
+        }
+        const createdAtValue =
+          typeof (item as any).createdAt === "string"
+            ? (item as any).createdAt
+            : new Date().toISOString();
         return {
           profile,
-          createdAt:
-            typeof (item as any).createdAt === "string"
-              ? (item as any).createdAt
-              : new Date().toISOString(),
+          createdAt: createdAtValue,
+          storageMode: "local",
         } as LocalAccountRecord;
       })
       .filter((account): account is LocalAccountRecord => account !== null);
@@ -202,37 +231,41 @@ function loadLocalAccounts(): LocalAccountRecord[] {
 }
 
 function saveLocalAccounts(accounts: LocalAccountRecord[]) {
-  if (!isBrowser()) return;
-  window.localStorage.setItem(LOCAL_ACCOUNTS_KEY, JSON.stringify(accounts));
+  const storage = getScopedStorage("local");
+  if (!storage) return;
+  storage.setItem(LOCAL_ACCOUNTS_KEY, JSON.stringify(accounts));
 }
 
 function setActiveLocalAccount(account: LocalAccountRecord) {
-  if (!isBrowser()) return;
-  ensurePlayerStored(account.profile);
-  window.localStorage.setItem(LOCAL_ACTIVE_ACCOUNT_KEY, account.profile.id);
+  const storage = getScopedStorage("local");
+  if (!storage) return;
+  ensurePlayerStored(account.profile, "local");
+  storage.setItem(LOCAL_ACTIVE_ACCOUNT_KEY, account.profile.id);
 }
 
 function loadActiveLocalSession(): LocalSession | null {
-  if (!isBrowser()) return null;
-  const profileId = window.localStorage.getItem(LOCAL_ACTIVE_ACCOUNT_KEY);
+  const storage = getScopedStorage("local");
+  if (!storage) return null;
+  const profileId = storage.getItem(LOCAL_ACTIVE_ACCOUNT_KEY);
   if (!profileId) return null;
   const accounts = loadLocalAccounts();
   const account = accounts.find(candidate => candidate.profile.id === profileId);
   if (account) {
-    ensurePlayerStored(account.profile);
+    ensurePlayerStored(account.profile, "local");
     return { profile: account.profile };
   }
-  const storedPlayers = loadStoredPlayers();
+  const storedPlayers = loadStoredPlayers("local");
   const fallbackProfile = storedPlayers.find(player => player.id === profileId);
   if (!fallbackProfile) return null;
-  ensurePlayerStored(fallbackProfile);
+  ensurePlayerStored(fallbackProfile, "local");
   return { profile: fallbackProfile };
 }
 
-function loadStoredStatsProfiles(): StoredStatsProfileSnapshot[] {
-  if (!isBrowser()) return [];
+function loadStoredStatsProfiles(scope: StorageScope): StoredStatsProfileSnapshot[] {
+  const storage = getScopedStorage(scope);
+  if (!storage) return [];
   try {
-    const raw = window.localStorage.getItem(STATS_PROFILES_KEY);
+    const raw = storage.getItem(STATS_PROFILES_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -260,19 +293,21 @@ function loadStoredStatsProfiles(): StoredStatsProfileSnapshot[] {
   }
 }
 
-function getStoredCurrentStatsProfileId(): string | null {
-  if (!isBrowser()) return null;
+function getStoredCurrentStatsProfileId(scope: StorageScope): string | null {
+  const storage = getScopedStorage(scope);
+  if (!storage) return null;
   try {
-    return window.localStorage.getItem(STATS_CURRENT_PROFILE_KEY);
+    return storage.getItem(STATS_CURRENT_PROFILE_KEY);
   } catch {
     return null;
   }
 }
 
-function loadStatsProfilesStorage(): StatsProfileStorageEntry[] {
-  if (!isBrowser()) return [];
+function loadStatsProfilesStorage(scope: StorageScope): StatsProfileStorageEntry[] {
+  const storage = getScopedStorage(scope);
+  if (!storage) return [];
   try {
-    const raw = window.localStorage.getItem(STATS_PROFILES_KEY);
+    const raw = storage.getItem(STATS_PROFILES_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -314,17 +349,19 @@ function loadStatsProfilesStorage(): StatsProfileStorageEntry[] {
   }
 }
 
-function saveStatsProfilesStorage(profiles: StatsProfileStorageEntry[]) {
-  if (!isBrowser()) return;
-  window.localStorage.setItem(STATS_PROFILES_KEY, JSON.stringify(profiles));
+function saveStatsProfilesStorage(scope: StorageScope, profiles: StatsProfileStorageEntry[]) {
+  const storage = getScopedStorage(scope);
+  if (!storage) return;
+  storage.setItem(STATS_PROFILES_KEY, JSON.stringify(profiles));
 }
 
-function setStoredCurrentStatsProfileId(id: string | null) {
-  if (!isBrowser()) return;
+function setStoredCurrentStatsProfileId(scope: StorageScope, id: string | null) {
+  const storage = getScopedStorage(scope);
+  if (!storage) return;
   if (id) {
-    window.localStorage.setItem(STATS_CURRENT_PROFILE_KEY, id);
+    storage.setItem(STATS_CURRENT_PROFILE_KEY, id);
   } else {
-    window.localStorage.removeItem(STATS_CURRENT_PROFILE_KEY);
+    storage.removeItem(STATS_CURRENT_PROFILE_KEY);
   }
 }
 
@@ -480,7 +517,7 @@ async function hydrateCloudPlayerState(session: Session, seed?: CloudProfileSeed
     needsReview: !isGradeValue(gradeCandidate) || age === null,
   };
 
-  ensurePlayerStored(profile);
+  ensurePlayerStored(profile, "session");
 
   const normalizedStats: StatsProfileStorageEntry[] = (() => {
     const activeProfiles = (Array.isArray(statsProfiles) ? statsProfiles : [])
@@ -550,30 +587,33 @@ async function hydrateCloudPlayerState(session: Session, seed?: CloudProfileSeed
     ];
   })();
 
-  const existingProfiles = loadStatsProfilesStorage();
+  const existingProfiles = loadStatsProfilesStorage("session");
   const retainedProfiles = existingProfiles.filter(entry => entry.playerId !== userId);
   const nextProfiles = retainedProfiles.concat(normalizedStats);
-  saveStatsProfilesStorage(nextProfiles);
+  saveStatsProfilesStorage("session", nextProfiles);
 
-  const currentProfileId = getStoredCurrentStatsProfileId();
+  const currentProfileId = getStoredCurrentStatsProfileId("session");
   if (normalizedStats.length > 0) {
     const preferred = normalizedStats.find(profile => profile.predictorDefault) ?? normalizedStats[0];
-    setStoredCurrentStatsProfileId(preferred.id);
+    setStoredCurrentStatsProfileId("session", preferred.id);
   } else if (currentProfileId && !retainedProfiles.some(profile => profile.id === currentProfileId)) {
     const fallback = retainedProfiles[0]?.id ?? null;
-    setStoredCurrentStatsProfileId(fallback ?? null);
+    setStoredCurrentStatsProfileId("session", fallback ?? null);
   }
 
   return userId;
 }
 
-function resolveStatsProfileForPlayer(playerId: string | null | undefined): StoredStatsProfileSnapshot | null {
+function resolveStatsProfileForPlayer(
+  playerId: string | null | undefined,
+  scope: StorageScope,
+): StoredStatsProfileSnapshot | null {
   if (!playerId) return null;
-  const profiles = loadStoredStatsProfiles();
+  const profiles = loadStoredStatsProfiles(scope);
   if (profiles.length === 0) return null;
   const candidates = profiles.filter(profile => profile.playerId === playerId);
   if (candidates.length === 0) return null;
-  const currentProfileId = getStoredCurrentStatsProfileId();
+  const currentProfileId = getStoredCurrentStatsProfileId(scope);
   if (currentProfileId) {
     const preferred = candidates.find(profile => profile.id === currentProfileId);
     if (preferred) {
@@ -583,29 +623,14 @@ function resolveStatsProfileForPlayer(playerId: string | null | undefined): Stor
   return candidates[0] ?? null;
 }
 
-function resolveActivePlayerId(playerIdHint?: string | null): string | null {
-  if (!isBrowser()) return playerIdHint ?? null;
-  if (playerIdHint) {
-    return playerIdHint;
-  }
-  const storedActive = window.localStorage.getItem(CURRENT_PLAYER_STORAGE_KEY);
-  if (storedActive) {
-    return storedActive;
-  }
-  const players = loadStoredPlayers();
-  if (players.length > 0) {
-    return players[0]?.id ?? null;
-  }
-  return null;
-}
-
-function shouldStartTrainingAfterAuth(playerIdHint?: string | null): boolean {
-  if (!isBrowser()) return false;
-  const activePlayerId = resolveActivePlayerId(playerIdHint);
+function shouldStartTrainingAfterAuth(playerIdHint: string | null, scope: StorageScope): boolean {
+  const storage = getScopedStorage(scope);
+  if (!storage) return false;
+  const activePlayerId = playerIdHint ?? storage.getItem(CURRENT_PLAYER_STORAGE_KEY);
   if (!activePlayerId) {
     return false;
   }
-  const profile = resolveStatsProfileForPlayer(activePlayerId);
+  const profile = resolveStatsProfileForPlayer(activePlayerId, scope);
   if (!profile) {
     return true;
   }
@@ -617,11 +642,17 @@ function shouldStartTrainingAfterAuth(playerIdHint?: string | null): boolean {
   return !trained && trainingCount < TRAINING_ROUNDS_REQUIRED;
 }
 
-function resolvePostAuthDestination(playerIdHint?: string | null): string {
-  const configuredPath = getPostAuthPath();
-  const defaultPath = configuredPath && configuredPath !== BOOT_ROUTE ? configuredPath : MODES_ROUTE;
-  const requireTraining = shouldStartTrainingAfterAuth(playerIdHint ?? null);
-  return requireTraining ? TRAINING_ROUTE : defaultPath;
+function resolvePostAuthDestination(playerIdHint: string | null, mode: PlayMode): string {
+  const defaultPath = getPostAuthPath();
+  const scope = scopeFromMode(mode);
+  const requireTraining = shouldStartTrainingAfterAuth(playerIdHint ?? null, scope);
+  if (requireTraining) {
+    return TRAINING_ROUTE;
+  }
+  if (defaultPath === BOOT_ROUTE) {
+    return MODES_ROUTE;
+  }
+  return defaultPath;
 }
 
 function buildPlayerProfileFromForm(form: SignUpFormState): PlayerProfile {
@@ -649,8 +680,8 @@ const defaultAuthMode: AuthMode = isSupabaseConfigured && DEPLOY_ENV === "cloud"
 function usePostAuthNavigation() {
   const navigate = useNavigate();
   return useCallback(
-    (options?: { playerId?: string | null }) => {
-      const destination = resolvePostAuthDestination(options?.playerId ?? null);
+    (mode: PlayMode, options?: { playerId?: string | null }) => {
+      const destination = resolvePostAuthDestination(options?.playerId ?? null, mode);
       navigate(destination, { replace: true });
     },
     [navigate],
@@ -659,6 +690,7 @@ function usePostAuthNavigation() {
 
 export default function Welcome(): JSX.Element {
   const navigateToPostAuth = usePostAuthNavigation();
+  const { setMode } = usePlayMode();
   const [authMode, setAuthMode] = useState<AuthMode>(defaultAuthMode);
   const [activeTab, setActiveTab] = useState<AuthTab>("signIn");
 
@@ -678,6 +710,7 @@ export default function Welcome(): JSX.Element {
   const [cloudSignOutPending, setCloudSignOutPending] = useState(false);
 
   const [localSession, setLocalSession] = useState<LocalSession | null>(null);
+  const [localAccounts, setLocalAccounts] = useState<LocalAccountRecord[]>(() => loadLocalAccounts());
 
   const [localSignUpForm, setLocalSignUpForm] = useState<SignUpFormState>(initialSignUpForm);
   const [localSignUpError, setLocalSignUpError] = useState<string | null>(null);
@@ -704,7 +737,8 @@ export default function Welcome(): JSX.Element {
       if (currentSession) {
         const playerId = await hydrateCloudPlayerState(currentSession);
         if (cancelled) return;
-        navigateToPostAuth({ playerId: playerId ?? undefined });
+        setMode("cloud");
+        navigateToPostAuth("cloud", { playerId: playerId ?? undefined });
       }
     };
     runInitial();
@@ -714,7 +748,8 @@ export default function Welcome(): JSX.Element {
       if (nextSession) {
         hydrateCloudPlayerState(nextSession).then(playerId => {
           if (cancelled) return;
-          navigateToPostAuth({ playerId: playerId ?? undefined });
+          setMode("cloud");
+          navigateToPostAuth("cloud", { playerId: playerId ?? undefined });
         });
       }
     });
@@ -722,14 +757,16 @@ export default function Welcome(): JSX.Element {
       cancelled = true;
       listener?.subscription.unsubscribe();
     };
-  }, [navigateToPostAuth]);
+  }, [navigateToPostAuth, setMode]);
 
   useEffect(() => {
+    setLocalAccounts(loadLocalAccounts());
     const existing = loadActiveLocalSession();
     if (existing) {
       setLocalSession(existing);
+      setMode("local");
     }
-  }, []);
+  }, [setMode]);
 
   useEffect(() => {
     if (authMode === "local") {
@@ -742,6 +779,8 @@ export default function Welcome(): JSX.Element {
     setActiveTab(mode === "cloud" ? "signIn" : "signUp");
     if (mode === "cloud") {
       setCloudSignInError(null);
+    } else {
+      setLocalAccounts(loadLocalAccounts());
     }
   }, []);
 
@@ -777,14 +816,15 @@ export default function Welcome(): JSX.Element {
         }
         setSession(nextSession);
         const playerId = await hydrateCloudPlayerState(nextSession, { username: trimmedUsername });
-        navigateToPostAuth({ playerId: playerId ?? undefined });
+        setMode("cloud");
+        navigateToPostAuth("cloud", { playerId: playerId ?? undefined });
       } catch (error) {
         setCloudSignInError(error instanceof Error ? error.message : "Unable to sign in. Try again.");
       } finally {
         setCloudSignInPending(false);
       }
     },
-    [cloudSignInPassword, cloudSignInUsername, navigateToPostAuth],
+    [cloudSignInPassword, cloudSignInUsername, navigateToPostAuth, setMode],
   );
 
   const handleCloudSignUpInputChange = useCallback(<K extends keyof SignUpFormState>(key: K, value: SignUpFormState[K]) => {
@@ -895,14 +935,15 @@ export default function Welcome(): JSX.Element {
           priorExperience: profileMetadata.prior_experience ?? undefined,
           username: trimmedUsername,
         });
-        navigateToPostAuth({ playerId: playerId ?? undefined });
+        setMode("cloud");
+        navigateToPostAuth("cloud", { playerId: playerId ?? undefined });
       } catch (error) {
         setCloudSignUpError(error instanceof Error ? error.message : "Unable to sign up. Try again.");
       } finally {
         setCloudSignUpPending(false);
       }
     },
-    [cloudSignUpForm, navigateToPostAuth],
+    [cloudSignUpForm, navigateToPostAuth, setMode],
   );
 
   const handleCloudSignOut = useCallback(async () => {
@@ -918,12 +959,27 @@ export default function Welcome(): JSX.Element {
         throw error;
       }
       setSession(null);
+      setMode("local");
+      const sessionScopedStorage = getScopedStorage("session");
+      if (sessionScopedStorage) {
+        [
+          PLAYERS_STORAGE_KEY,
+          CURRENT_PLAYER_STORAGE_KEY,
+          STATS_PROFILES_KEY,
+          STATS_CURRENT_PROFILE_KEY,
+          STATS_ROUNDS_KEY,
+          STATS_MATCHES_KEY,
+          STATS_MODEL_STATE_KEY,
+        ].forEach(key => {
+          sessionScopedStorage.removeItem(key);
+        });
+      }
     } catch (error) {
       setCloudSignOutError(error instanceof Error ? error.message : "Unable to sign out right now.");
     } finally {
       setCloudSignOutPending(false);
     }
-  }, []);
+  }, [setMode]);
 
   const handleLocalSignUpInputChange = useCallback(<K extends keyof SignUpFormState>(key: K, value: SignUpFormState[K]) => {
     setLocalSignUpForm(prev => ({ ...prev, [key]: value }));
@@ -961,20 +1017,24 @@ export default function Welcome(): JSX.Element {
         const nextAccount: LocalAccountRecord = {
           profile,
           createdAt: new Date().toISOString(),
+          storageMode: "local",
         };
         const existingWithoutProfile = accounts.filter(candidate => candidate.profile.id !== profile.id);
-        saveLocalAccounts(existingWithoutProfile.concat(nextAccount));
+        const nextAccounts = existingWithoutProfile.concat(nextAccount);
+        saveLocalAccounts(nextAccounts);
         setActiveLocalAccount(nextAccount);
         setLocalSession({ profile: nextAccount.profile });
+        setLocalAccounts(nextAccounts);
         setLocalSignUpForm(initialSignUpForm);
-        navigateToPostAuth({ playerId: nextAccount.profile.id });
+        setMode("local");
+        navigateToPostAuth("local", { playerId: nextAccount.profile.id });
       } catch (error) {
         setLocalSignUpError(error instanceof Error ? error.message : "Unable to sign up. Try again.");
       } finally {
         setLocalSignUpPending(false);
       }
     },
-    [localSignUpForm, navigateToPostAuth],
+    [localSignUpForm, navigateToPostAuth, setLocalAccounts, setMode],
   );
 
   const handleLocalSignOut = useCallback(async () => {
@@ -987,12 +1047,27 @@ export default function Welcome(): JSX.Element {
     try {
       clearActiveLocalSession(localSession?.profile.id);
       setLocalSession(null);
+      setMode("local");
     } catch (error) {
       setLocalSignOutError(error instanceof Error ? error.message : "Unable to sign out right now.");
     } finally {
       setLocalSignOutPending(false);
     }
-  }, [localSession]);
+  }, [localSession, setMode]);
+
+  const handleSelectLocalAccount = useCallback(
+    (profileId: string) => {
+      const accounts = loadLocalAccounts();
+      const account = accounts.find(candidate => candidate.profile.id === profileId);
+      if (!account) return;
+      setActiveLocalAccount(account);
+      setLocalSession({ profile: account.profile });
+      setLocalAccounts(accounts);
+      setMode("local");
+      navigateToPostAuth("local", { playerId: account.profile.id });
+    },
+    [navigateToPostAuth, setLocalAccounts, setMode],
+  );
 
   const statusMessage = useMemo(() => {
     if (authMode === "cloud") {
@@ -1395,6 +1470,43 @@ export default function Welcome(): JSX.Element {
                 <h3 className="text-base font-semibold text-white">Status</h3>
                 <p className="mt-1 text-sm text-slate-300">{statusMessage}</p>
                 {signOutError ? <p className="mt-2 text-sm font-semibold text-rose-300">{signOutError}</p> : null}
+                {authMode === "local" ? (
+                  <div className="mt-4 space-y-2">
+                    <h4 className="text-sm font-semibold text-white">Local profiles</h4>
+                    {localAccounts.length === 0 ? (
+                      <p className="text-xs text-slate-400">No local profiles yet. Create one to get started.</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {localAccounts.map(account => {
+                          const isActive = localSession?.profile.id === account.profile.id;
+                          const needsReviewLabel = account.profile.needsReview ? "Needs review" : "Ready";
+                          return (
+                            <li key={account.profile.id}>
+                              <button
+                                type="button"
+                                onClick={() => handleSelectLocalAccount(account.profile.id)}
+                                className={`w-full rounded-xl border px-4 py-2 text-left transition ${
+                                  isActive
+                                    ? "border-sky-400 bg-sky-500/20 text-white"
+                                    : "border-slate-700/70 bg-slate-800/60 text-slate-200 hover:border-sky-400 hover:text-white"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="font-semibold">{account.profile.playerName}</span>
+                                  {isActive ? <span className="text-xs font-semibold text-sky-300">Active</span> : null}
+                                </div>
+                                <div className="mt-1 flex items-center justify-between text-xs text-slate-400">
+                                  <span>{account.profile.grade}</span>
+                                  <span>{needsReviewLabel}</span>
+                                </div>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                ) : null}
               </div>
               <div className="space-y-3">
                 <button

@@ -5,6 +5,7 @@ import RPSDoodleApp from "./App";
 import Welcome from "./pages/Welcome";
 import { BOOT_ROUTE, MODES_ROUTE, TRAINING_ROUTE, WELCOME_ROUTE } from "./lib/routes";
 import "./index.css";
+import { PlayModeProvider } from "./lib/playMode";
 
 function AppLayout(): JSX.Element {
   return (
@@ -38,6 +39,8 @@ const router = createBrowserRouter([
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+    <PlayModeProvider>
+      <RouterProvider router={router} />
+    </PlayModeProvider>
   </React.StrictMode>,
 );

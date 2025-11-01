@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AIMode, BestOf, Mode, Move, Outcome } from "./gameTypes";
 import { usePlayers } from "./players";
+import { usePlayMode, type PlayMode } from "./lib/playMode";
 
 export type SerializedExpertState =
   | { type: "FrequencyExpert"; window: number; alpha: number }
@@ -199,6 +200,21 @@ const MAX_ROUNDS = 1000;
 const PRIMARY_BASE = "primary";
 const PRACTICE_LEGACY_TYPE = "Practice Legacy" as const;
 
+type StorageScope = "local" | "session";
+
+function getScopedStorage(scope: StorageScope): Storage | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return scope === "session" ? window.sessionStorage : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function resolveScopeFromMode(mode: PlayMode): StorageScope {
+  return mode === "cloud" ? "session" : "local";
+}
+
 function formatLineageBaseName(index: number): string {
   const normalizedIndex = Number.isFinite(index) ? Math.max(1, Math.floor(index)) : 1;
   return normalizedIndex <= 1 ? PRIMARY_BASE : `${PRIMARY_BASE} ${normalizedIndex}`;
@@ -228,10 +244,10 @@ function getLineageIndex(baseName: string): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
-function loadFromStorage<T>(key: string): T[] {
-  if (typeof window === "undefined") return [];
+function loadFromStorage<T>(storage: Storage | null, key: string): T[] {
+  if (!storage) return [];
   try {
-    const raw = localStorage.getItem(key);
+    const raw = storage.getItem(key);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
@@ -241,19 +257,19 @@ function loadFromStorage<T>(key: string): T[] {
   }
 }
 
-function saveToStorage(key: string, value: unknown) {
-  if (typeof window === "undefined") return;
+function saveToStorage(storage: Storage | null, key: string, value: unknown) {
+  if (!storage) return;
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    storage.setItem(key, JSON.stringify(value));
   } catch (err) {
     console.warn("Failed to persist stats", err);
   }
 }
 
-function loadModelStates(): StoredPredictorModelState[] {
-  if (typeof window === "undefined") return [];
+function loadModelStates(storage: Storage | null): StoredPredictorModelState[] {
+  if (!storage) return [];
   try {
-    const raw = localStorage.getItem(MODEL_STATE_KEY);
+    const raw = storage.getItem(MODEL_STATE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -290,10 +306,10 @@ function loadModelStates(): StoredPredictorModelState[] {
   }
 }
 
-function saveModelStates(states: StoredPredictorModelState[]) {
-  if (typeof window === "undefined") return;
+function saveModelStates(storage: Storage | null, states: StoredPredictorModelState[]) {
+  if (!storage) return;
   try {
-    localStorage.setItem(MODEL_STATE_KEY, JSON.stringify(states));
+    storage.setItem(MODEL_STATE_KEY, JSON.stringify(states));
   } catch (err) {
     console.warn("Failed to persist predictor model state", err);
   }
@@ -318,10 +334,10 @@ function migrateMatchRecords(matches: MatchSummary[]): { matches: MatchSummary[]
   return { matches: migrated, changed };
 }
 
-function loadProfiles(): StatsProfile[] {
-  if (typeof window === "undefined") return [];
+function loadProfiles(storage: Storage | null): StatsProfile[] {
+  if (!storage) return [];
   try {
-    const raw = localStorage.getItem(PROFILE_KEY);
+    const raw = storage.getItem(PROFILE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -360,30 +376,30 @@ function loadProfiles(): StatsProfile[] {
   }
 }
 
-function saveProfiles(profiles: StatsProfile[]) {
-  if (typeof window === "undefined") return;
+function saveProfiles(storage: Storage | null, profiles: StatsProfile[]) {
+  if (!storage) return;
   try {
-    localStorage.setItem(PROFILE_KEY, JSON.stringify(profiles));
+    storage.setItem(PROFILE_KEY, JSON.stringify(profiles));
   } catch (err) {
     console.warn("Failed to persist stats profiles", err);
   }
 }
 
-function loadCurrentProfileId(): string | null {
-  if (typeof window === "undefined") return null;
+function loadCurrentProfileId(storage: Storage | null): string | null {
+  if (!storage) return null;
   try {
-    return localStorage.getItem(CURRENT_PROFILE_KEY);
+    return storage.getItem(CURRENT_PROFILE_KEY);
   } catch (err) {
     console.warn("Failed to read current stats profile", err);
     return null;
   }
 }
 
-function saveCurrentProfileId(id: string | null) {
-  if (typeof window === "undefined") return;
+function saveCurrentProfileId(storage: Storage | null, id: string | null) {
+  if (!storage) return;
   try {
-    if (id) localStorage.setItem(CURRENT_PROFILE_KEY, id);
-    else localStorage.removeItem(CURRENT_PROFILE_KEY);
+    if (id) storage.setItem(CURRENT_PROFILE_KEY, id);
+    else storage.removeItem(CURRENT_PROFILE_KEY);
   } catch (err) {
     console.warn("Failed to persist current stats profile", err);
   }
@@ -397,24 +413,45 @@ function makeId(prefix: string) {
 }
 
 export function StatsProvider({ children }: { children: React.ReactNode }) {
-  const [allRounds, setAllRounds] = useState<RoundLog[]>(() => loadFromStorage<RoundLog>(ROUND_KEY));
+  const { mode } = usePlayMode();
+  const storageScope = useMemo(() => resolveScopeFromMode(mode), [mode]);
+  const storage = useMemo(() => getScopedStorage(storageScope), [storageScope]);
+
+  const [allRounds, setAllRounds] = useState<RoundLog[]>(() => loadFromStorage<RoundLog>(storage, ROUND_KEY));
   const [allMatches, setAllMatches] = useState<MatchSummary[]>(() => {
-    const loaded = loadFromStorage<MatchSummary>(MATCH_KEY);
+    const loaded = loadFromStorage<MatchSummary>(storage, MATCH_KEY);
     const { matches, changed } = migrateMatchRecords(loaded);
     if (changed) {
-      saveToStorage(MATCH_KEY, matches);
+      saveToStorage(storage, MATCH_KEY, matches);
     }
     return matches;
   });
-  const [profiles, setProfiles] = useState<StatsProfile[]>(() => loadProfiles());
-  const [currentProfileId, setCurrentProfileId] = useState<string | null>(() => loadCurrentProfileId());
+  const [profiles, setProfiles] = useState<StatsProfile[]>(() => loadProfiles(storage));
+  const [currentProfileId, setCurrentProfileId] = useState<string | null>(() => loadCurrentProfileId(storage));
   const [roundsDirty, setRoundsDirty] = useState(false);
   const [matchesDirty, setMatchesDirty] = useState(false);
   const [profilesDirty, setProfilesDirty] = useState(false);
-  const [modelStates, setModelStates] = useState<StoredPredictorModelState[]>(() => loadModelStates());
+  const [modelStates, setModelStates] = useState<StoredPredictorModelState[]>(() => loadModelStates(storage));
   const [modelStatesDirty, setModelStatesDirty] = useState(false);
   const sessionIdRef = useRef<string>("");
   const { currentPlayerId, currentPlayer } = usePlayers();
+
+  useEffect(() => {
+    setAllRounds(loadFromStorage<RoundLog>(storage, ROUND_KEY));
+    const loadedMatches = loadFromStorage<MatchSummary>(storage, MATCH_KEY);
+    const migrated = migrateMatchRecords(loadedMatches);
+    if (migrated.changed) {
+      saveToStorage(storage, MATCH_KEY, migrated.matches);
+    }
+    setAllMatches(migrated.matches);
+    setProfiles(loadProfiles(storage));
+    setCurrentProfileId(loadCurrentProfileId(storage));
+    setModelStates(loadModelStates(storage));
+    setRoundsDirty(false);
+    setMatchesDirty(false);
+    setProfilesDirty(false);
+    setModelStatesDirty(false);
+  }, [storage]);
 
   if (!sessionIdRef.current) {
     sessionIdRef.current = makeId("sess");
@@ -453,7 +490,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     if (!currentPlayerId) {
       if (currentProfileId) {
         setCurrentProfileId(null);
-        saveCurrentProfileId(null);
+        saveCurrentProfileId(storage, null);
       }
       return;
     }
@@ -476,7 +513,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       setProfiles(prev => prev.concat(defaultProfile));
       setProfilesDirty(true);
       setCurrentProfileId(defaultProfile.id);
-      saveCurrentProfileId(defaultProfile.id);
+      saveCurrentProfileId(storage, defaultProfile.id);
       return;
     }
     const belongs = currentProfileId && playerProfiles.some(p => p.id === currentProfileId);
@@ -484,10 +521,10 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       const fallback = playerProfiles[0];
       if (fallback && fallback.id !== currentProfileId) {
         setCurrentProfileId(fallback.id);
-        saveCurrentProfileId(fallback.id);
+        saveCurrentProfileId(storage, fallback.id);
       }
     }
-  }, [currentPlayerId, currentProfileId, playerProfiles]);
+  }, [currentPlayerId, currentProfileId, playerProfiles, storage]);
 
   const currentProfile = useMemo(() => {
     if (!currentProfileId) return playerProfiles[0] ?? null;
@@ -497,44 +534,44 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!roundsDirty) return;
     const timer = window.setTimeout(() => {
-      saveToStorage(ROUND_KEY, allRounds);
+      saveToStorage(storage, ROUND_KEY, allRounds);
       setRoundsDirty(false);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [roundsDirty, allRounds]);
+  }, [roundsDirty, allRounds, storage]);
 
   useEffect(() => {
     if (!matchesDirty) return;
     const timer = window.setTimeout(() => {
-      saveToStorage(MATCH_KEY, allMatches);
+      saveToStorage(storage, MATCH_KEY, allMatches);
       setMatchesDirty(false);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [matchesDirty, allMatches]);
+  }, [matchesDirty, allMatches, storage]);
 
   useEffect(() => {
     if (!profilesDirty) return;
     const timer = window.setTimeout(() => {
-      saveProfiles(profiles);
+      saveProfiles(storage, profiles);
       setProfilesDirty(false);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [profilesDirty, profiles]);
+  }, [profilesDirty, profiles, storage]);
 
   useEffect(() => {
     if (!modelStatesDirty) return;
     const timer = window.setTimeout(() => {
-      saveModelStates(modelStates);
+      saveModelStates(storage, modelStates);
       setModelStatesDirty(false);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [modelStatesDirty, modelStates]);
+  }, [modelStatesDirty, modelStates, storage]);
 
   useEffect(() => {
     if (typeof document === "undefined") return;
     const flush = () => {
       if (!modelStatesDirty) return;
-      saveModelStates(modelStates);
+      saveModelStates(storage, modelStates);
       setModelStatesDirty(false);
     };
     const handleVisibility = () => {
@@ -551,7 +588,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, [modelStatesDirty, modelStates]);
+  }, [modelStatesDirty, modelStates, storage]);
 
   useEffect(() => {
     if (!currentPlayerId) return;
@@ -580,8 +617,8 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   const selectProfile = useCallback((id: string) => {
     if (!playerProfiles.some(p => p.id === id)) return;
     setCurrentProfileId(id);
-    saveCurrentProfileId(id);
-  }, [playerProfiles]);
+    saveCurrentProfileId(storage, id);
+  }, [playerProfiles, storage]);
 
   const getModelStateForProfile = useCallback(
     (profileId: string): StoredPredictorModelState | null => {
@@ -647,11 +684,11 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       setProfilesDirty(true);
       if (!playerIdOverride || playerIdOverride === currentPlayerId) {
         setCurrentProfileId(profile.id);
-        saveCurrentProfileId(profile.id);
+        saveCurrentProfileId(storage, profile.id);
       }
       return profile;
     },
-    [currentPlayerId, profiles]
+    [currentPlayerId, profiles, storage]
   );
 
   const updateProfile = useCallback((id: string, patch: StatsProfileUpdate) => {
@@ -712,9 +749,9 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     });
     setProfilesDirty(true);
     setCurrentProfileId(newProfile.id);
-    saveCurrentProfileId(newProfile.id);
+    saveCurrentProfileId(storage, newProfile.id);
     return newProfile;
-  }, [currentPlayerId, profiles]);
+  }, [currentPlayerId, profiles, storage]);
 
   const logRound = useCallback((round: Omit<RoundLog, "id" | "sessionId" | "playerId" | "profileId">) => {
     if (!currentPlayerId || !currentProfile) return null;

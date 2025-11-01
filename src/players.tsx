@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { usePlayMode, type PlayMode } from "./lib/playMode";
 
 export type Grade =
   | "K"
@@ -111,10 +112,25 @@ function normalizePlayer(raw: any): PlayerProfile | null {
   };
 }
 
-function loadPlayers(): PlayerProfile[] {
-  if (typeof window === "undefined") return [];
+type StorageScope = "local" | "session";
+
+function getScopedStorage(scope: StorageScope): Storage | null {
+  if (typeof window === "undefined") return null;
   try {
-    const raw = localStorage.getItem(PLAYERS_KEY);
+    return scope === "session" ? window.sessionStorage : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function resolveScopeFromMode(mode: PlayMode): StorageScope {
+  return mode === "cloud" ? "session" : "local";
+}
+
+function loadPlayersFromStorage(storage: Storage | null): PlayerProfile[] {
+  if (!storage) return [];
+  try {
+    const raw = storage.getItem(PLAYERS_KEY);
     if (!raw) return [];
     const val = JSON.parse(raw);
     if (!Array.isArray(val)) return [];
@@ -129,20 +145,32 @@ function loadPlayers(): PlayerProfile[] {
   }
 }
 
-function savePlayers(players: PlayerProfile[]) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(PLAYERS_KEY, JSON.stringify(players));
+function savePlayersToStorage(storage: Storage | null, players: PlayerProfile[]) {
+  if (!storage) return;
+  try {
+    storage.setItem(PLAYERS_KEY, JSON.stringify(players));
+  } catch {
+    // ignore persistence failures (storage may be unavailable)
+  }
 }
 
-function loadCurrentId(): string | null {
-  if (typeof window === "undefined") return null;
-  try { return localStorage.getItem(CURRENT_PLAYER_KEY); } catch { return null; }
+function loadCurrentIdFromStorage(storage: Storage | null): string | null {
+  if (!storage) return null;
+  try {
+    return storage.getItem(CURRENT_PLAYER_KEY);
+  } catch {
+    return null;
+  }
 }
 
-function saveCurrentId(id: string | null) {
-  if (typeof window === "undefined") return;
-  if (id) localStorage.setItem(CURRENT_PLAYER_KEY, id);
-  else localStorage.removeItem(CURRENT_PLAYER_KEY);
+function saveCurrentIdToStorage(storage: Storage | null, id: string | null) {
+  if (!storage) return;
+  try {
+    if (id) storage.setItem(CURRENT_PLAYER_KEY, id);
+    else storage.removeItem(CURRENT_PLAYER_KEY);
+  } catch {
+    // ignore persistence failures (storage may be unavailable)
+  }
 }
 
 function makeId(prefix: string) {
@@ -166,11 +194,20 @@ interface PlayerContextValue {
 const PlayerContext = createContext<PlayerContextValue | null>(null);
 
 export function PlayersProvider({ children }: { children: React.ReactNode }){
-  const [players, setPlayers] = useState<PlayerProfile[]>(() => loadPlayers());
-  const [currentPlayerId, setCurrentPlayerId] = useState<string | null>(() => loadCurrentId());
+  const { mode } = usePlayMode();
+  const storageScope = useMemo(() => resolveScopeFromMode(mode), [mode]);
+  const storage = useMemo(() => getScopedStorage(storageScope), [storageScope]);
 
-  useEffect(() => { savePlayers(players); }, [players]);
-  useEffect(() => { saveCurrentId(currentPlayerId); }, [currentPlayerId]);
+  const [players, setPlayers] = useState<PlayerProfile[]>(() => loadPlayersFromStorage(storage));
+  const [currentPlayerId, setCurrentPlayerId] = useState<string | null>(() => loadCurrentIdFromStorage(storage));
+
+  useEffect(() => {
+    setPlayers(loadPlayersFromStorage(storage));
+    setCurrentPlayerId(loadCurrentIdFromStorage(storage));
+  }, [storage]);
+
+  useEffect(() => { savePlayersToStorage(storage, players); }, [players, storage]);
+  useEffect(() => { saveCurrentIdToStorage(storage, currentPlayerId); }, [currentPlayerId, storage]);
 
   const currentPlayer = useMemo(() => players.find(p => p.id === currentPlayerId) || null, [players, currentPlayerId]);
   const hasConsented = currentPlayer != null;
