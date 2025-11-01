@@ -3045,18 +3045,18 @@ function RPSDoodleAppInner(){
           window.clearInterval(signOutProgressIntervalRef.current);
           signOutProgressIntervalRef.current = null;
         }
-        openWelcome({
-          announce: "Signing out complete. Returning to the welcome screen.",
-          resetPlayer: true,
-          origin: "settings",
-          bootFirst: true,
-        });
         if (signOutCompletionTimeoutRef.current !== null) {
           window.clearTimeout(signOutCompletionTimeoutRef.current);
         }
         signOutCompletionTimeoutRef.current = window.setTimeout(() => {
           setSignOutActive(false);
           setSignOutProgress(0);
+          openWelcome({
+            announce: "Signing out complete. Returning to the welcome screen.",
+            resetPlayer: true,
+            origin: "settings",
+            bootFirst: true,
+          });
           if (signOutCompletionTimeoutRef.current !== null) {
             window.clearTimeout(signOutCompletionTimeoutRef.current);
             signOutCompletionTimeoutRef.current = null;
