@@ -1,5 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { usePlayMode, type PlayMode } from "./lib/playMode";
+import { cloudDataService } from "./lib/cloudData";
+import { supabaseClient } from "./lib/supabaseClient";
 
 export type Grade =
   | "K"
@@ -195,42 +197,181 @@ const PlayerContext = createContext<PlayerContextValue | null>(null);
 
 export function PlayersProvider({ children }: { children: React.ReactNode }){
   const { mode } = usePlayMode();
-  const storageScope = useMemo(() => resolveScopeFromMode(mode), [mode]);
-  const storage = useMemo(() => getScopedStorage(storageScope), [storageScope]);
+  const isCloudMode = mode === "cloud";
+  const storageScope = useMemo<StorageScope | null>(() => (isCloudMode ? null : resolveScopeFromMode(mode)), [isCloudMode, mode]);
+  const storage = useMemo(() => (storageScope ? getScopedStorage(storageScope) : null), [storageScope]);
 
-  const [players, setPlayers] = useState<PlayerProfile[]>(() => loadPlayersFromStorage(storage));
-  const [currentPlayerId, setCurrentPlayerId] = useState<string | null>(() => loadCurrentIdFromStorage(storage));
+  const [players, setPlayers] = useState<PlayerProfile[]>(() => (isCloudMode ? [] : loadPlayersFromStorage(storage)));
+  const [currentPlayerId, setCurrentPlayerId] = useState<string | null>(() =>
+    isCloudMode ? null : loadCurrentIdFromStorage(storage),
+  );
+  const [cloudUserId, setCloudUserId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (isCloudMode) {
+      return;
+    }
     setPlayers(loadPlayersFromStorage(storage));
     setCurrentPlayerId(loadCurrentIdFromStorage(storage));
-  }, [storage]);
+    setCloudUserId(null);
+  }, [isCloudMode, storage]);
 
-  useEffect(() => { savePlayersToStorage(storage, players); }, [players, storage]);
-  useEffect(() => { saveCurrentIdToStorage(storage, currentPlayerId); }, [currentPlayerId, storage]);
+  useEffect(() => {
+    if (!isCloudMode) {
+      return;
+    }
+
+    const sessionStorage = getScopedStorage("session");
+    const fallbackPlayers = loadPlayersFromStorage(sessionStorage);
+    const fallbackCurrentId = loadCurrentIdFromStorage(sessionStorage);
+
+    setPlayers(fallbackPlayers);
+    setCurrentPlayerId(fallbackCurrentId);
+
+    const service = cloudDataService;
+    const client = supabaseClient;
+
+    if (!service || !client) {
+      setCloudUserId(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const { data } = await client.auth.getSession();
+        if (cancelled) return;
+
+        const session = data?.session ?? null;
+        const userId = session?.user?.id ?? null;
+        setCloudUserId(userId);
+
+        if (!userId) {
+          return;
+        }
+
+        try {
+          const profile = await service.loadPlayerProfile(userId);
+          if (cancelled) return;
+          if (profile) {
+            const others = fallbackPlayers.filter(player => player.id !== userId);
+            setPlayers([profile, ...others]);
+          }
+        } catch (err) {
+          if (!cancelled) {
+            console.error("Failed to load cloud player profile", err);
+          }
+        }
+
+        setCurrentPlayerId(userId);
+      } catch (err) {
+        if (!cancelled) {
+          console.error("Failed to resolve Supabase session", err);
+          setCloudUserId(null);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isCloudMode, supabaseClient, cloudDataService]);
+
+  useEffect(() => {
+    if (isCloudMode) {
+      const sessionStorage = getScopedStorage("session");
+      savePlayersToStorage(sessionStorage, players);
+      saveCurrentIdToStorage(sessionStorage, currentPlayerId);
+      return;
+    }
+    savePlayersToStorage(storage, players);
+  }, [isCloudMode, players, storage, currentPlayerId]);
+
+  useEffect(() => {
+    if (!isCloudMode) {
+      saveCurrentIdToStorage(storage, currentPlayerId);
+    }
+  }, [isCloudMode, storage, currentPlayerId]);
 
   const currentPlayer = useMemo(() => players.find(p => p.id === currentPlayerId) || null, [players, currentPlayerId]);
   const hasConsented = currentPlayer != null;
 
-  const setCurrentPlayer = useCallback((id: string | null) => {
-    setCurrentPlayerId(id);
-  }, []);
+  const setCurrentPlayer = useCallback(
+    (id: string | null) => {
+      setCurrentPlayerId(id);
+    },
+    [],
+  );
 
-  const createPlayer = useCallback((input: Omit<PlayerProfile, "id">) => {
-    const profile: PlayerProfile = { ...input, id: makeId("plr"), needsReview: input.needsReview ?? false };
-    setPlayers(prev => prev.concat(profile));
-    setCurrentPlayerId(profile.id);
-    return profile;
-  }, []);
+  const createPlayer = useCallback(
+    (input: Omit<PlayerProfile, "id">) => {
+      if (isCloudMode) {
+        const targetId = cloudUserId ?? makeId("plr");
+        const profile: PlayerProfile = { ...input, id: targetId, needsReview: input.needsReview ?? false };
+        setPlayers(prev => {
+          const others = prev.filter(player => player.id !== targetId);
+          return [profile, ...others];
+        });
+        setCurrentPlayerId(targetId);
+        if (cloudUserId && cloudDataService) {
+          void cloudDataService.upsertPlayerProfile(profile).catch(err => {
+            console.error("Failed to persist cloud player profile", err);
+          });
+        }
+        return profile;
+      }
 
-  const updatePlayer = useCallback((id: string, patch: Partial<Omit<PlayerProfile, "id">>) => {
-    setPlayers(prev => prev.map(p => p.id === id ? { ...p, ...patch } : p));
-  }, []);
+      const profile: PlayerProfile = { ...input, id: makeId("plr"), needsReview: input.needsReview ?? false };
+      setPlayers(prev => prev.concat(profile));
+      setCurrentPlayerId(profile.id);
+      return profile;
+    },
+    [cloudUserId, isCloudMode],
+  );
 
-  const deletePlayer = useCallback((id: string) => {
-    setPlayers(prev => prev.filter(p => p.id !== id));
-    setCurrentPlayerId(prev => (prev === id ? null : prev));
-  }, []);
+  const updatePlayer = useCallback(
+    (id: string, patch: Partial<Omit<PlayerProfile, "id">>) => {
+      let updatedProfile: PlayerProfile | null = null;
+      setPlayers(prev =>
+        prev.map(player => {
+          if (player.id !== id) return player;
+          const merged: PlayerProfile = {
+            ...player,
+            ...patch,
+            needsReview: patch.needsReview ?? player.needsReview ?? false,
+          };
+          updatedProfile = merged;
+          return merged;
+        }),
+      );
+
+      if (isCloudMode && cloudUserId && id === cloudUserId && updatedProfile && cloudDataService) {
+        void cloudDataService.upsertPlayerProfile(updatedProfile).catch(err => {
+          console.error("Failed to persist cloud player profile", err);
+        });
+      }
+    },
+    [cloudUserId, isCloudMode],
+  );
+
+  const deletePlayer = useCallback(
+    (id: string) => {
+      if (isCloudMode) {
+        if (cloudUserId && id === cloudUserId) {
+          console.warn("Cannot delete the active cloud player profile.");
+          return;
+        }
+        setPlayers(prev => prev.filter(player => player.id !== id));
+        setCurrentPlayerId(prev => (prev === id ? null : prev));
+        return;
+      }
+
+      setPlayers(prev => prev.filter(p => p.id !== id));
+      setCurrentPlayerId(prev => (prev === id ? null : prev));
+    },
+    [cloudUserId, isCloudMode],
+  );
 
   const value = useMemo(() => ({
     players,
