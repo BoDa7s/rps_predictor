@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { AIMode, BestOf, Mode, Move, Outcome } from "./gameTypes";
 import { usePlayers } from "./players";
 import { usePlayMode, type PlayMode } from "./lib/playMode";
-import { cloudDataService } from "./lib/cloudData";
+import { cloudDataService, type MatchRecord, type RoundRecord } from "./lib/cloudData";
 
 export type SerializedExpertState =
   | { type: "FrequencyExpert"; window: number; alpha: number }
@@ -413,6 +413,141 @@ function makeId(prefix: string) {
   return prefix + "-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
 }
 
+function mapRoundPatchToCloudUpdate(patch: Partial<RoundLog>): Partial<RoundRecord> {
+  const update: Partial<RoundRecord> = {};
+  if ("sessionId" in patch) {
+    update.session_id = patch.sessionId ?? undefined;
+  }
+  if ("matchId" in patch) {
+    update.match_id = patch.matchId ?? null;
+  }
+  if ("playerId" in patch) {
+    update.user_id = patch.playerId ?? undefined;
+  }
+  if ("profileId" in patch) {
+    update.stats_profile_id = patch.profileId ?? undefined;
+  }
+  if ("t" in patch) {
+    update.played_at = patch.t ?? undefined;
+  }
+  if ("mode" in patch) {
+    update.mode = patch.mode as RoundRecord["mode"];
+  }
+  if ("bestOf" in patch) {
+    update.best_of = patch.bestOf as RoundRecord["best_of"];
+  }
+  if ("difficulty" in patch) {
+    update.difficulty = patch.difficulty as RoundRecord["difficulty"];
+  }
+  if ("player" in patch) {
+    update.player_move = patch.player as RoundRecord["player_move"];
+  }
+  if ("ai" in patch) {
+    update.ai_move = patch.ai as RoundRecord["ai_move"];
+  }
+  if ("outcome" in patch) {
+    update.outcome = patch.outcome as RoundRecord["outcome"];
+  }
+  if ("policy" in patch) {
+    update.decision_policy = patch.policy as RoundRecord["decision_policy"];
+  }
+  if ("reason" in patch) {
+    update.reason = patch.reason ?? null;
+  }
+  if ("confidence" in patch) {
+    update.ai_confidence = patch.confidence ?? null;
+  }
+  if ("confidenceBucket" in patch) {
+    update.confidence_bucket = patch.confidenceBucket ?? null;
+  }
+  if ("decisionTimeMs" in patch) {
+    update.decision_time_ms = patch.decisionTimeMs ?? null;
+  }
+  if ("streakAI" in patch) {
+    update.streak_ai = patch.streakAI ?? null;
+  }
+  if ("streakYou" in patch) {
+    update.streak_you = patch.streakYou ?? null;
+  }
+  if ("mixer" in patch) {
+    update.mixer_trace = patch.mixer ?? null;
+  }
+  if ("heuristic" in patch) {
+    update.heuristic_trace = patch.heuristic ?? null;
+  }
+  return update;
+}
+
+function mapMatchPatchToCloudUpdate(patch: Partial<MatchSummary>): Partial<MatchRecord> {
+  const update: Partial<MatchRecord> = {};
+  if ("sessionId" in patch) {
+    update.session_id = patch.sessionId ?? undefined;
+  }
+  if ("playerId" in patch) {
+    update.user_id = patch.playerId ?? undefined;
+  }
+  if ("profileId" in patch) {
+    update.stats_profile_id = patch.profileId ?? undefined;
+  }
+  if ("clientId" in patch) {
+    update.client_match_id = patch.clientId ?? null;
+  }
+  if ("startedAt" in patch) {
+    update.started_at = patch.startedAt ?? undefined;
+  }
+  if ("endedAt" in patch) {
+    update.ended_at = patch.endedAt ?? null;
+  }
+  if ("mode" in patch) {
+    update.mode = patch.mode as MatchRecord["mode"];
+  }
+  if ("bestOf" in patch) {
+    update.best_of = patch.bestOf as MatchRecord["best_of"];
+  }
+  if ("difficulty" in patch) {
+    update.difficulty = patch.difficulty as MatchRecord["difficulty"];
+  }
+  if ("rounds" in patch) {
+    update.rounds_played = patch.rounds ?? undefined;
+  }
+  if ("score" in patch && patch.score) {
+    if (typeof patch.score.you === "number") {
+      update.score_you = patch.score.you;
+    }
+    if (typeof patch.score.ai === "number") {
+      update.score_ai = patch.score.ai;
+    }
+  }
+  if ("aiWinRate" in patch) {
+    update.ai_win_rate = patch.aiWinRate ?? null;
+  }
+  if ("youSwitchedRate" in patch) {
+    update.you_switched_rate = patch.youSwitchedRate ?? null;
+  }
+  if ("notes" in patch) {
+    update.notes = patch.notes ?? null;
+  }
+  if ("leaderboardScore" in patch) {
+    update.leaderboard_score = patch.leaderboardScore ?? null;
+  }
+  if ("leaderboardMaxStreak" in patch) {
+    update.leaderboard_max_streak = patch.leaderboardMaxStreak ?? null;
+  }
+  if ("leaderboardRoundCount" in patch) {
+    update.leaderboard_round_count = patch.leaderboardRoundCount ?? null;
+  }
+  if ("leaderboardTimerBonus" in patch) {
+    update.leaderboard_timer_bonus = patch.leaderboardTimerBonus ?? null;
+  }
+  if ("leaderboardBeatConfidenceBonus" in patch) {
+    update.leaderboard_beat_confidence_bonus = patch.leaderboardBeatConfidenceBonus ?? null;
+  }
+  if ("leaderboardType" in patch) {
+    update.leaderboard_type = patch.leaderboardType ?? null;
+  }
+  return update;
+}
+
 export function StatsProvider({ children }: { children: React.ReactNode }) {
   const { mode } = usePlayMode();
   const isCloudMode = mode === "cloud";
@@ -784,15 +919,26 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     [currentPlayerId, isCloudMode],
   );
 
-  const clearModelStateForProfile = useCallback((profileId: string) => {
-    setModelStates(prev => {
-      const next = prev.filter(entry => entry.profileId !== profileId);
-      if (next.length !== prev.length && !isCloudMode) {
-        setModelStatesDirty(true);
+  const clearModelStateForProfile = useCallback(
+    (profileId: string) => {
+      setModelStates(prev => {
+        const next = prev.filter(entry => entry.profileId !== profileId);
+        if (next.length !== prev.length && !isCloudMode) {
+          setModelStatesDirty(true);
+        }
+        return next;
+      });
+      if (isCloudMode) {
+        const userId = currentPlayerId;
+        if (userId) {
+          void cloudDataService
+            ?.deleteAiState(userId, profileId)
+            .catch(err => console.error("Failed to delete cloud AI state", err));
+        }
       }
-      return next;
-    });
-  }, [isCloudMode]);
+    },
+    [currentPlayerId, isCloudMode],
+  );
 
   const createProfile = useCallback(
     (playerIdOverride?: string) => {
@@ -1008,41 +1154,75 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   const adminUpdateRound = useCallback(
     (id: string, patch: Partial<RoundLog>) => {
       setAllRounds(prev => prev.map(r => (r.id === id ? { ...r, ...patch } : r)));
-      if (!isCloudMode) {
+      if (isCloudMode) {
+        const userId = currentPlayerId;
+        if (userId) {
+          const update = mapRoundPatchToCloudUpdate(patch);
+          if (Object.keys(update).length > 0) {
+            void cloudDataService
+              ?.updateRoundFields(userId, id, update)
+              .catch(err => console.error("Failed to update cloud round", err));
+          }
+        }
+      } else {
         setRoundsDirty(true);
       }
     },
-    [isCloudMode],
+    [currentPlayerId, isCloudMode],
   );
 
   const adminDeleteRound = useCallback(
     (id: string) => {
       setAllRounds(prev => prev.filter(r => r.id !== id));
-      if (!isCloudMode) {
+      if (isCloudMode) {
+        const userId = currentPlayerId;
+        if (userId) {
+          void cloudDataService
+            ?.deleteRound(userId, id)
+            .catch(err => console.error("Failed to delete cloud round", err));
+        }
+      } else {
         setRoundsDirty(true);
       }
     },
-    [isCloudMode],
+    [currentPlayerId, isCloudMode],
   );
 
   const adminUpdateMatch = useCallback(
     (id: string, patch: Partial<MatchSummary>) => {
       setAllMatches(prev => prev.map(m => (m.id === id ? { ...m, ...patch } : m)));
-      if (!isCloudMode) {
+      if (isCloudMode) {
+        const userId = currentPlayerId;
+        if (userId) {
+          const update = mapMatchPatchToCloudUpdate(patch);
+          if (Object.keys(update).length > 0) {
+            void cloudDataService
+              ?.updateMatchFields(userId, id, update)
+              .catch(err => console.error("Failed to update cloud match", err));
+          }
+        }
+      } else {
         setMatchesDirty(true);
       }
     },
-    [isCloudMode],
+    [currentPlayerId, isCloudMode],
   );
 
   const adminDeleteMatch = useCallback(
     (id: string) => {
       setAllMatches(prev => prev.filter(m => m.id !== id));
-      if (!isCloudMode) {
+      if (isCloudMode) {
+        const userId = currentPlayerId;
+        if (userId) {
+          void cloudDataService
+            ?.deleteMatch(userId, id)
+            .catch(err => console.error("Failed to delete cloud match", err));
+        }
+      } else {
         setMatchesDirty(true);
       }
     },
-    [isCloudMode],
+    [currentPlayerId, isCloudMode],
   );
 
   const exportRoundsCsv = useCallback(() => {

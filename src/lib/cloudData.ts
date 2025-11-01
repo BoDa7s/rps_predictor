@@ -710,6 +710,31 @@ export class CloudDataService {
     await handleMutation(mutation, "insert rounds");
   }
 
+  async updateRoundFields(
+    userId: string,
+    roundId: string,
+    patch: Partial<RoundRow>,
+  ): Promise<void> {
+    if (!patch || Object.keys(patch).length === 0) return;
+    const client = ensureClient(this.client);
+    const mutation = (client
+      .from("rounds") as any)
+      .update(patch as any)
+      .eq("user_id", userId)
+      .or(`client_round_id.eq.${roundId},id.eq.${roundId}`);
+    await handleMutation(mutation, "update round");
+  }
+
+  async deleteRound(userId: string, roundId: string): Promise<void> {
+    const client = ensureClient(this.client);
+    const mutation = (client
+      .from("rounds") as any)
+      .delete()
+      .eq("user_id", userId)
+      .or(`client_round_id.eq.${roundId},id.eq.${roundId}`);
+    await handleMutation(mutation, "delete round");
+  }
+
   async loadRounds(userId: string, statsProfileId: string): Promise<RoundLog[]> {
     const client = ensureClient(this.client);
     const query = client
@@ -731,6 +756,31 @@ export class CloudDataService {
     const payload = matches.map(matchSummaryToRow);
     const mutation = client.from("matches").upsert(payload as any);
     await handleMutation(mutation, "insert matches");
+  }
+
+  async updateMatchFields(
+    userId: string,
+    matchId: string,
+    patch: Partial<MatchRow>,
+  ): Promise<void> {
+    if (!patch || Object.keys(patch).length === 0) return;
+    const client = ensureClient(this.client);
+    const mutation = (client
+      .from("matches") as any)
+      .update(patch as any)
+      .eq("user_id", userId)
+      .or(`client_match_id.eq.${matchId},id.eq.${matchId}`);
+    await handleMutation(mutation, "update match");
+  }
+
+  async deleteMatch(userId: string, matchId: string): Promise<void> {
+    const client = ensureClient(this.client);
+    const mutation = (client
+      .from("matches") as any)
+      .delete()
+      .eq("user_id", userId)
+      .or(`client_match_id.eq.${matchId},id.eq.${matchId}`);
+    await handleMutation(mutation, "delete match");
   }
 
   async loadMatches(userId: string, statsProfileId: string): Promise<MatchSummary[]> {
@@ -764,6 +814,16 @@ export class CloudDataService {
     };
     const mutation = client.from("ai_states").upsert(payload as any);
     await handleMutation(mutation, "upsert ai state");
+  }
+
+  async deleteAiState(userId: string, statsProfileId: string): Promise<void> {
+    const client = ensureClient(this.client);
+    const mutation = (client
+      .from("ai_states") as any)
+      .delete()
+      .eq("user_id", userId)
+      .eq("stats_profile_id", statsProfileId);
+    await handleMutation(mutation, "delete ai state");
   }
 
   async loadAiState(userId: string, statsProfileId: string): Promise<StoredPredictorModelState | null> {
