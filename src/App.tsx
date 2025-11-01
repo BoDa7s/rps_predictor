@@ -2741,7 +2741,12 @@ function RPSDoodleAppInner(){
     setTrainingActive(false);
     trainingAnnouncementsRef.current.clear();
   }, [currentProfile?.id]);
-  const clearCountdown = ()=>{ if (countdownRef.current!==null){ clearInterval(countdownRef.current); countdownRef.current=null; } };
+  const clearCountdown = useCallback(() => {
+    if (countdownRef.current !== null) {
+      window.clearInterval(countdownRef.current);
+      countdownRef.current = null;
+    }
+  }, []);
   const startCountdown = ()=>{
     const modeForTiming: Mode = selectedMode ?? "practice";
     const interval = matchTimings[modeForTiming].countdownTickMs;
