@@ -58,6 +58,12 @@ type CloudProfileSeed = Partial<
   Pick<SignUpFormState, "firstName" | "lastInitial" | "grade" | "age" | "school" | "priorExperience" | "username">
 >;
 
+interface CloudHydrationResult {
+  playerId: string;
+  profile: PlayerProfile;
+  statsProfiles: StatsProfile[];
+}
+
 interface LocalAccountRecord {
   profile: PlayerProfile;
   createdAt: string;
@@ -73,21 +79,6 @@ interface StoredStatsProfileSnapshot {
   playerId: string;
   trainingCount?: number;
   trained?: boolean;
-}
-
-interface StatsProfileStorageEntry {
-  id: string;
-  playerId: string;
-  name: string;
-  createdAt: string;
-  trainingCount: number;
-  trained: boolean;
-  predictorDefault: boolean;
-  seenPostTrainingCTA: boolean;
-  baseName: string;
-  version: number;
-  previousProfileId: string | null;
-  nextProfileId: string | null;
 }
 
 const initialSignUpForm: SignUpFormState = {
@@ -308,69 +299,7 @@ function getStoredCurrentStatsProfileId(scope: StorageScope): string | null {
   }
 }
 
-function loadStatsProfilesStorage(scope: StorageScope): StatsProfileStorageEntry[] {
-  const storage = getScopedStorage(scope);
-  if (!storage) return [];
-  try {
-    const raw = storage.getItem(STATS_PROFILES_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map(item => {
-        if (!item || typeof item !== "object") return null;
-        const entry = item as Partial<StatsProfileStorageEntry> & { id?: unknown; playerId?: unknown };
-        const id = typeof entry.id === "string" ? entry.id : null;
-        const playerId = typeof entry.playerId === "string" ? entry.playerId : null;
-        if (!id || !playerId) return null;
-        const createdAt = typeof entry.createdAt === "string" ? entry.createdAt : new Date().toISOString();
-        const baseName = typeof entry.baseName === "string" && entry.baseName.trim() ? entry.baseName : "primary";
-        const version = Number.isFinite(entry.version) ? Math.max(1, Math.floor(Number(entry.version))) : 1;
-        const name = typeof entry.name === "string" && entry.name.trim() ? entry.name : baseName;
-        const trainingCount = Number.isFinite(entry.trainingCount) ? Number(entry.trainingCount) : 0;
-        const trained = entry.trained === true;
-        const predictorDefault = entry.predictorDefault === true;
-        const seenPostTrainingCTA = entry.seenPostTrainingCTA === true;
-        const previousProfileId = typeof entry.previousProfileId === "string" ? entry.previousProfileId : null;
-        const nextProfileId = typeof entry.nextProfileId === "string" ? entry.nextProfileId : null;
-        return {
-          id,
-          playerId,
-          name,
-          createdAt,
-          trainingCount,
-          trained,
-          predictorDefault,
-          seenPostTrainingCTA,
-          baseName,
-          version,
-          previousProfileId,
-          nextProfileId,
-        } satisfies StatsProfileStorageEntry;
-      })
-      .filter((entry): entry is StatsProfileStorageEntry => entry !== null);
-  } catch {
-    return [];
-  }
-}
-
-function saveStatsProfilesStorage(scope: StorageScope, profiles: StatsProfileStorageEntry[]) {
-  const storage = getScopedStorage(scope);
-  if (!storage) return;
-  storage.setItem(STATS_PROFILES_KEY, JSON.stringify(profiles));
-}
-
-function setStoredCurrentStatsProfileId(scope: StorageScope, id: string | null) {
-  const storage = getScopedStorage(scope);
-  if (!storage) return;
-  if (id) {
-    storage.setItem(STATS_CURRENT_PROFILE_KEY, id);
-  } else {
-    storage.removeItem(STATS_CURRENT_PROFILE_KEY);
-  }
-}
-
-async function hydrateCloudPlayerState(session: Session, seed?: CloudProfileSeed): Promise<string | null> {
+async function hydrateCloudPlayerState(session: Session, seed?: CloudProfileSeed): Promise<CloudHydrationResult | null> {
   if (!cloudDataService) {
     return null;
   }
@@ -479,28 +408,52 @@ async function hydrateCloudPlayerState(session: Session, seed?: CloudProfileSeed
     needsReview: !isGradeValue(gradeCandidate) || age === null,
   };
 
-  ensurePlayerStored(profile, "session");
-
-  const normalizedStats: StatsProfileStorageEntry[] = (() => {
+  const normalizedStats: StatsProfile[] = (() => {
     if (Array.isArray(statsProfiles) && statsProfiles.length > 0) {
-      const mapped = statsProfiles
-        .map(profile => ({
-          id: profile.id,
-          playerId: profile.playerId,
-          name: profile.name,
-          createdAt: profile.createdAt,
-          trainingCount: profile.trainingCount,
-          trained: profile.trained,
-          predictorDefault: profile.predictorDefault,
-          seenPostTrainingCTA: profile.seenPostTrainingCTA,
-          baseName: profile.baseName,
-          version: profile.version,
-          previousProfileId: profile.previousProfileId ?? null,
-          nextProfileId: profile.nextProfileId ?? null,
-        }))
-        .filter((entry): entry is StatsProfileStorageEntry => Boolean(entry.id));
-      if (mapped.length > 0) {
-        return mapped;
+      const sanitized: StatsProfile[] = [];
+      statsProfiles.forEach(profileEntry => {
+        if (!profileEntry || typeof profileEntry !== "object") {
+          return;
+        }
+        const id = typeof profileEntry.id === "string" ? profileEntry.id : null;
+        const playerIdValue = typeof profileEntry.playerId === "string" ? profileEntry.playerId : null;
+        if (!id || !playerIdValue) {
+          return;
+        }
+        const baseNameValue =
+          typeof profileEntry.baseName === "string" && profileEntry.baseName.trim()
+            ? profileEntry.baseName
+            : "primary";
+        const versionValue = Number.isFinite(profileEntry.version)
+          ? Math.max(1, Math.floor(Number(profileEntry.version)))
+          : 1;
+        const sanitizedEntry: StatsProfile = {
+          id,
+          playerId: playerIdValue,
+          name:
+            typeof profileEntry.name === "string" && profileEntry.name.trim()
+              ? profileEntry.name
+              : baseNameValue,
+          createdAt:
+            typeof profileEntry.createdAt === "string"
+              ? profileEntry.createdAt
+              : new Date().toISOString(),
+          trainingCount: Number.isFinite(profileEntry.trainingCount)
+            ? Number(profileEntry.trainingCount)
+            : 0,
+          trained: profileEntry.trained === true,
+          predictorDefault: profileEntry.predictorDefault === true,
+          seenPostTrainingCTA: profileEntry.seenPostTrainingCTA === true,
+          baseName: baseNameValue,
+          version: versionValue,
+          previousProfileId:
+            typeof profileEntry.previousProfileId === "string" ? profileEntry.previousProfileId : null,
+          nextProfileId: typeof profileEntry.nextProfileId === "string" ? profileEntry.nextProfileId : null,
+        };
+        sanitized.push(sanitizedEntry);
+      });
+      if (sanitized.length > 0) {
+        return sanitized;
       }
     }
 
@@ -527,21 +480,13 @@ async function hydrateCloudPlayerState(session: Session, seed?: CloudProfileSeed
     ];
   })();
 
-  const existingProfiles = loadStatsProfilesStorage("session");
-  const retainedProfiles = existingProfiles.filter(entry => entry.playerId !== userId);
-  const nextProfiles = retainedProfiles.concat(normalizedStats);
-  saveStatsProfilesStorage("session", nextProfiles);
+  const filteredStats = normalizedStats.filter(entry => entry.playerId === userId);
 
-  const currentProfileId = getStoredCurrentStatsProfileId("session");
-  if (normalizedStats.length > 0) {
-    const preferred = normalizedStats.find(profile => profile.predictorDefault) ?? normalizedStats[0];
-    setStoredCurrentStatsProfileId("session", preferred.id);
-  } else if (currentProfileId && !retainedProfiles.some(profile => profile.id === currentProfileId)) {
-    const fallback = retainedProfiles[0]?.id ?? null;
-    setStoredCurrentStatsProfileId("session", fallback ?? null);
-  }
-
-  return userId;
+  return {
+    playerId: userId,
+    profile,
+    statsProfiles: filteredStats,
+  };
 }
 
 function resolveStatsProfileForPlayer(
@@ -563,7 +508,7 @@ function resolveStatsProfileForPlayer(
   return candidates[0] ?? null;
 }
 
-function shouldStartTrainingAfterAuth(playerIdHint: string | null, scope: StorageScope): boolean {
+function shouldStartTrainingFromStorage(playerIdHint: string | null, scope: StorageScope): boolean {
   const storage = getScopedStorage(scope);
   if (!storage) return false;
   const activePlayerId = playerIdHint ?? storage.getItem(CURRENT_PLAYER_STORAGE_KEY);
@@ -582,10 +527,38 @@ function shouldStartTrainingAfterAuth(playerIdHint: string | null, scope: Storag
   return !trained && trainingCount < TRAINING_ROUNDS_REQUIRED;
 }
 
-function resolvePostAuthDestination(playerIdHint: string | null, mode: PlayMode): string {
-  const defaultPath = getPostAuthPath();
+function shouldStartTrainingFromProfiles(playerIdHint: string | null, profiles: StatsProfile[]): boolean {
+  if (!playerIdHint) {
+    return false;
+  }
+  const candidates = profiles.filter(profile => profile.playerId === playerIdHint);
+  if (candidates.length === 0) {
+    return true;
+  }
+  const preferred = candidates.find(profile => profile.predictorDefault) ?? candidates[0];
+  const trainingCount = Number.isFinite(preferred.trainingCount) ? Number(preferred.trainingCount) : 0;
+  const trained = preferred.trained === true;
+  return !trained && trainingCount < TRAINING_ROUNDS_REQUIRED;
+}
+
+function shouldStartTrainingAfterAuth(
+  mode: PlayMode,
+  playerIdHint: string | null,
+  statsProfiles?: StatsProfile[],
+): boolean {
+  if (mode === "cloud") {
+    return shouldStartTrainingFromProfiles(playerIdHint, statsProfiles ?? []);
+  }
   const scope = scopeFromMode(mode);
-  const requireTraining = shouldStartTrainingAfterAuth(playerIdHint ?? null, scope);
+  return shouldStartTrainingFromStorage(playerIdHint, scope);
+}
+
+function resolvePostAuthDestination(
+  mode: PlayMode,
+  options?: { playerId?: string | null; statsProfiles?: StatsProfile[] },
+): string {
+  const defaultPath = getPostAuthPath();
+  const requireTraining = shouldStartTrainingAfterAuth(mode, options?.playerId ?? null, options?.statsProfiles);
   if (requireTraining) {
     return TRAINING_ROUTE;
   }
@@ -620,8 +593,8 @@ const defaultAuthMode: AuthMode = isSupabaseConfigured && DEPLOY_ENV === "cloud"
 function usePostAuthNavigation() {
   const navigate = useNavigate();
   return useCallback(
-    (mode: PlayMode, options?: { playerId?: string | null }) => {
-      const destination = resolvePostAuthDestination(options?.playerId ?? null, mode);
+    (mode: PlayMode, options?: { playerId?: string | null; statsProfiles?: StatsProfile[] }) => {
+      const destination = resolvePostAuthDestination(mode, options);
       navigate(destination, { replace: true });
     },
     [navigate],
@@ -675,10 +648,15 @@ export default function Welcome(): JSX.Element {
       setSession(currentSession);
       setInitializing(false);
       if (currentSession) {
-        const playerId = await hydrateCloudPlayerState(currentSession);
+        const hydration = await hydrateCloudPlayerState(currentSession);
         if (cancelled) return;
         setMode("cloud");
-        navigateToPostAuth("cloud", { playerId: playerId ?? undefined });
+        navigateToPostAuth(
+          "cloud",
+          hydration
+            ? { playerId: hydration.playerId, statsProfiles: hydration.statsProfiles }
+            : undefined,
+        );
       }
     };
     runInitial();
@@ -686,10 +664,15 @@ export default function Welcome(): JSX.Element {
       if (cancelled) return;
       setSession(nextSession);
       if (nextSession) {
-        hydrateCloudPlayerState(nextSession).then(playerId => {
+        hydrateCloudPlayerState(nextSession).then(hydration => {
           if (cancelled) return;
           setMode("cloud");
-          navigateToPostAuth("cloud", { playerId: playerId ?? undefined });
+          navigateToPostAuth(
+            "cloud",
+            hydration
+              ? { playerId: hydration.playerId, statsProfiles: hydration.statsProfiles }
+              : undefined,
+          );
         });
       }
     });
@@ -755,9 +738,12 @@ export default function Welcome(): JSX.Element {
           return;
         }
         setSession(nextSession);
-        const playerId = await hydrateCloudPlayerState(nextSession, { username: trimmedUsername });
+        const hydration = await hydrateCloudPlayerState(nextSession, { username: trimmedUsername });
         setMode("cloud");
-        navigateToPostAuth("cloud", { playerId: playerId ?? undefined });
+        navigateToPostAuth(
+          "cloud",
+          hydration ? { playerId: hydration.playerId, statsProfiles: hydration.statsProfiles } : undefined,
+        );
       } catch (error) {
         setCloudSignInError(error instanceof Error ? error.message : "Unable to sign in. Try again.");
       } finally {
@@ -867,7 +853,7 @@ export default function Welcome(): JSX.Element {
           }
         }
         setSession(nextSession);
-        const playerId = await hydrateCloudPlayerState(nextSession, {
+        const hydration = await hydrateCloudPlayerState(nextSession, {
           firstName: profileMetadata.first_name ?? undefined,
           lastInitial: profileMetadata.last_initial ?? undefined,
           grade,
@@ -877,7 +863,12 @@ export default function Welcome(): JSX.Element {
           username: trimmedUsername,
         });
         setMode("cloud");
-        navigateToPostAuth("cloud", { playerId: playerId ?? undefined });
+        navigateToPostAuth(
+          "cloud",
+          hydration
+            ? { playerId: hydration.playerId, statsProfiles: hydration.statsProfiles }
+            : undefined,
+        );
       } catch (error) {
         setCloudSignUpError(error instanceof Error ? error.message : "Unable to sign up. Try again.");
       } finally {
