@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { AIMode, BestOf, Mode, Move, Outcome } from "./gameTypes";
 import { usePlayers } from "./players";
 import { usePlayMode, type PlayMode } from "./lib/playMode";
+import { cloudDataService } from "./lib/cloudData";
 
 export type SerializedExpertState =
   | { type: "FrequencyExpert"; window: number; alpha: number }
@@ -414,29 +415,24 @@ function makeId(prefix: string) {
 
 export function StatsProvider({ children }: { children: React.ReactNode }) {
   const { mode } = usePlayMode();
-  const storageScope = useMemo(() => resolveScopeFromMode(mode), [mode]);
-  const storage = useMemo(() => getScopedStorage(storageScope), [storageScope]);
+  const isCloudMode = mode === "cloud";
+  const storageScope = useMemo<StorageScope | null>(() => (isCloudMode ? null : resolveScopeFromMode(mode)), [isCloudMode, mode]);
+  const storage = useMemo(() => (storageScope ? getScopedStorage(storageScope) : null), [storageScope]);
 
-  const [allRounds, setAllRounds] = useState<RoundLog[]>(() => loadFromStorage<RoundLog>(storage, ROUND_KEY));
-  const [allMatches, setAllMatches] = useState<MatchSummary[]>(() => {
-    const loaded = loadFromStorage<MatchSummary>(storage, MATCH_KEY);
-    const { matches, changed } = migrateMatchRecords(loaded);
-    if (changed) {
-      saveToStorage(storage, MATCH_KEY, matches);
-    }
-    return matches;
-  });
-  const [profiles, setProfiles] = useState<StatsProfile[]>(() => loadProfiles(storage));
-  const [currentProfileId, setCurrentProfileId] = useState<string | null>(() => loadCurrentProfileId(storage));
+  const [allRounds, setAllRounds] = useState<RoundLog[]>([]);
+  const [allMatches, setAllMatches] = useState<MatchSummary[]>([]);
+  const [profiles, setProfiles] = useState<StatsProfile[]>([]);
+  const [currentProfileId, setCurrentProfileId] = useState<string | null>(null);
   const [roundsDirty, setRoundsDirty] = useState(false);
   const [matchesDirty, setMatchesDirty] = useState(false);
   const [profilesDirty, setProfilesDirty] = useState(false);
-  const [modelStates, setModelStates] = useState<StoredPredictorModelState[]>(() => loadModelStates(storage));
+  const [modelStates, setModelStates] = useState<StoredPredictorModelState[]>([]);
   const [modelStatesDirty, setModelStatesDirty] = useState(false);
   const sessionIdRef = useRef<string>("");
   const { currentPlayerId, currentPlayer } = usePlayers();
 
   useEffect(() => {
+    if (isCloudMode) return;
     setAllRounds(loadFromStorage<RoundLog>(storage, ROUND_KEY));
     const loadedMatches = loadFromStorage<MatchSummary>(storage, MATCH_KEY);
     const migrated = migrateMatchRecords(loadedMatches);
@@ -451,7 +447,131 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     setMatchesDirty(false);
     setProfilesDirty(false);
     setModelStatesDirty(false);
-  }, [storage]);
+  }, [isCloudMode, storage]);
+
+  useEffect(() => {
+    if (!isCloudMode) return;
+    const service = cloudDataService;
+    if (!service) {
+      console.warn("Cloud mode active but cloud data service is unavailable");
+      setAllRounds([]);
+      setAllMatches([]);
+      setProfiles([]);
+      setCurrentProfileId(null);
+      setModelStates([]);
+      setRoundsDirty(false);
+      setMatchesDirty(false);
+      setProfilesDirty(false);
+      setModelStatesDirty(false);
+      return;
+    }
+    const userId = currentPlayerId;
+    if (!userId) {
+      setAllRounds([]);
+      setAllMatches([]);
+      setProfiles([]);
+      setCurrentProfileId(null);
+      setModelStates([]);
+      setRoundsDirty(false);
+      setMatchesDirty(false);
+      setProfilesDirty(false);
+      setModelStatesDirty(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const rawProfiles = await service.loadStatsProfiles(userId);
+        let normalizedProfiles = rawProfiles.map(profile => {
+          const baseName = normalizeBaseName(profile.baseName ?? profile.name);
+          const rawVersion = profile.version ?? 1;
+          const version =
+            typeof rawVersion === "number" && Number.isFinite(rawVersion) ? Math.max(1, Math.floor(rawVersion)) : 1;
+          return {
+            ...profile,
+            baseName,
+            version,
+            name: makeProfileDisplayName(baseName, version),
+          } satisfies StatsProfile;
+        });
+        if (normalizedProfiles.length === 0) {
+          const baseName = formatLineageBaseName(1);
+          const createdAt = new Date().toISOString();
+          const defaultProfile: StatsProfile = {
+            id: makeId("profile"),
+            playerId: userId,
+            baseName,
+            version: 1,
+            name: makeProfileDisplayName(baseName, 1),
+            createdAt,
+            trainingCount: 0,
+            trained: false,
+            predictorDefault: true,
+            seenPostTrainingCTA: false,
+            previousProfileId: null,
+            nextProfileId: null,
+          };
+          try {
+            await service.upsertStatsProfile(defaultProfile);
+          } catch (err) {
+            console.error("Failed to seed default stats profile in cloud mode", err);
+          }
+          normalizedProfiles = [defaultProfile];
+        }
+
+        const roundsPromises = normalizedProfiles.map(profile => service.loadRounds(userId, profile.id));
+        const matchesPromises = normalizedProfiles.map(profile => service.loadMatches(userId, profile.id));
+        const modelPromises = normalizedProfiles.map(profile => service.loadAiState(userId, profile.id));
+        const [roundGroups, matchGroups, modelGroup] = await Promise.all([
+          Promise.all(roundsPromises),
+          Promise.all(matchesPromises),
+          Promise.all(modelPromises),
+        ]);
+        if (cancelled) return;
+
+        const aggregatedRounds = roundGroups.flat();
+        const rawMatches = matchGroups.flat();
+        const migratedMatches = migrateMatchRecords(rawMatches);
+        const aggregatedModelStates = modelGroup
+          .filter((entry): entry is StoredPredictorModelState => Boolean(entry))
+          .map(entry => ({ ...entry }));
+
+        setProfiles(normalizedProfiles);
+        setAllRounds(aggregatedRounds);
+        setAllMatches(migratedMatches.matches);
+        setModelStates(aggregatedModelStates);
+        setRoundsDirty(false);
+        setMatchesDirty(false);
+        setProfilesDirty(false);
+        setModelStatesDirty(false);
+
+        setCurrentProfileId(prev => {
+          if (prev && normalizedProfiles.some(profile => profile.id === prev)) {
+            return prev;
+          }
+          const preferred = normalizedProfiles.find(profile => profile.predictorDefault) ?? normalizedProfiles[0] ?? null;
+          return preferred?.id ?? null;
+        });
+      } catch (err) {
+        if (!cancelled) {
+          console.error("Failed to load cloud stats data", err);
+          setAllRounds([]);
+          setAllMatches([]);
+          setProfiles([]);
+          setModelStates([]);
+          setCurrentProfileId(null);
+          setRoundsDirty(false);
+          setMatchesDirty(false);
+          setProfilesDirty(false);
+          setModelStatesDirty(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPlayerId, isCloudMode]);
 
   if (!sessionIdRef.current) {
     sessionIdRef.current = makeId("sess");
@@ -490,7 +610,9 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     if (!currentPlayerId) {
       if (currentProfileId) {
         setCurrentProfileId(null);
-        saveCurrentProfileId(storage, null);
+        if (!isCloudMode) {
+          saveCurrentProfileId(storage, null);
+        }
       }
       return;
     }
@@ -505,15 +627,21 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         createdAt: new Date().toISOString(),
         trainingCount: 0,
         trained: false,
-        predictorDefault: false,
+        predictorDefault: isCloudMode,
         seenPostTrainingCTA: false,
         previousProfileId: null,
         nextProfileId: null,
       };
       setProfiles(prev => prev.concat(defaultProfile));
-      setProfilesDirty(true);
+      if (isCloudMode) {
+        void cloudDataService?.upsertStatsProfile(defaultProfile).catch(err => {
+          console.error("Failed to persist default profile in cloud mode", err);
+        });
+      } else {
+        setProfilesDirty(true);
+        saveCurrentProfileId(storage, defaultProfile.id);
+      }
       setCurrentProfileId(defaultProfile.id);
-      saveCurrentProfileId(storage, defaultProfile.id);
       return;
     }
     const belongs = currentProfileId && playerProfiles.some(p => p.id === currentProfileId);
@@ -521,10 +649,12 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       const fallback = playerProfiles[0];
       if (fallback && fallback.id !== currentProfileId) {
         setCurrentProfileId(fallback.id);
-        saveCurrentProfileId(storage, fallback.id);
+        if (!isCloudMode) {
+          saveCurrentProfileId(storage, fallback.id);
+        }
       }
     }
-  }, [currentPlayerId, currentProfileId, playerProfiles, storage]);
+  }, [currentPlayerId, currentProfileId, isCloudMode, playerProfiles, storage]);
 
   const currentProfile = useMemo(() => {
     if (!currentProfileId) return playerProfiles[0] ?? null;
@@ -532,43 +662,43 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   }, [currentProfileId, playerProfiles]);
 
   useEffect(() => {
-    if (!roundsDirty) return;
+    if (isCloudMode || !roundsDirty) return;
     const timer = window.setTimeout(() => {
       saveToStorage(storage, ROUND_KEY, allRounds);
       setRoundsDirty(false);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [roundsDirty, allRounds, storage]);
+  }, [allRounds, isCloudMode, roundsDirty, storage]);
 
   useEffect(() => {
-    if (!matchesDirty) return;
+    if (isCloudMode || !matchesDirty) return;
     const timer = window.setTimeout(() => {
       saveToStorage(storage, MATCH_KEY, allMatches);
       setMatchesDirty(false);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [matchesDirty, allMatches, storage]);
+  }, [allMatches, isCloudMode, matchesDirty, storage]);
 
   useEffect(() => {
-    if (!profilesDirty) return;
+    if (isCloudMode || !profilesDirty) return;
     const timer = window.setTimeout(() => {
       saveProfiles(storage, profiles);
       setProfilesDirty(false);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [profilesDirty, profiles, storage]);
+  }, [isCloudMode, profiles, profilesDirty, storage]);
 
   useEffect(() => {
-    if (!modelStatesDirty) return;
+    if (isCloudMode || !modelStatesDirty) return;
     const timer = window.setTimeout(() => {
       saveModelStates(storage, modelStates);
       setModelStatesDirty(false);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [modelStatesDirty, modelStates, storage]);
+  }, [isCloudMode, modelStates, modelStatesDirty, storage]);
 
   useEffect(() => {
-    if (typeof document === "undefined") return;
+    if (isCloudMode || typeof document === "undefined") return;
     const flush = () => {
       if (!modelStatesDirty) return;
       saveModelStates(storage, modelStates);
@@ -588,10 +718,10 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, [modelStatesDirty, modelStates, storage]);
+  }, [isCloudMode, modelStates, modelStatesDirty, storage]);
 
   useEffect(() => {
-    if (!currentPlayerId) return;
+    if (isCloudMode || !currentPlayerId) return;
     const fallbackProfile = playerProfiles[0];
     if (!fallbackProfile) return;
     if (allRounds.some(r => r.playerId === currentPlayerId && !r.profileId)) {
@@ -612,13 +742,15 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       }));
       setMatchesDirty(true);
     }
-  }, [currentPlayerId, playerProfiles, allRounds, allMatches]);
+  }, [allMatches, allRounds, currentPlayerId, isCloudMode, playerProfiles]);
 
   const selectProfile = useCallback((id: string) => {
     if (!playerProfiles.some(p => p.id === id)) return;
     setCurrentProfileId(id);
-    saveCurrentProfileId(storage, id);
-  }, [playerProfiles, storage]);
+    if (!isCloudMode) {
+      saveCurrentProfileId(storage, id);
+    }
+  }, [isCloudMode, playerProfiles, storage]);
 
   const getModelStateForProfile = useCallback(
     (profileId: string): StoredPredictorModelState | null => {
@@ -633,20 +765,34 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         const filtered = prev.filter(entry => entry.profileId !== profileId);
         return filtered.concat({ ...state, profileId });
       });
-      setModelStatesDirty(true);
+      if (isCloudMode) {
+        const userId = currentPlayerId;
+        if (userId) {
+          const payload: StoredPredictorModelState = {
+            ...state,
+            profileId,
+            updatedAt: state.updatedAt ?? new Date().toISOString(),
+          };
+          void cloudDataService
+            ?.upsertAiState({ ...payload, userId })
+            .catch(err => console.error("Failed to persist cloud AI state", err));
+        }
+      } else {
+        setModelStatesDirty(true);
+      }
     },
-    [],
+    [currentPlayerId, isCloudMode],
   );
 
   const clearModelStateForProfile = useCallback((profileId: string) => {
     setModelStates(prev => {
       const next = prev.filter(entry => entry.profileId !== profileId);
-      if (next.length !== prev.length) {
+      if (next.length !== prev.length && !isCloudMode) {
         setModelStatesDirty(true);
       }
       return next;
     });
-  }, []);
+  }, [isCloudMode]);
 
   const createProfile = useCallback(
     (playerIdOverride?: string) => {
@@ -681,109 +827,173 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         nextProfileId: null,
       };
       setProfiles(prev => prev.concat(profile));
-      setProfilesDirty(true);
+      if (isCloudMode) {
+        void cloudDataService?.upsertStatsProfile(profile).catch(err => {
+          console.error("Failed to create cloud stats profile", err);
+        });
+      } else {
+        setProfilesDirty(true);
+      }
       if (!playerIdOverride || playerIdOverride === currentPlayerId) {
         setCurrentProfileId(profile.id);
-        saveCurrentProfileId(storage, profile.id);
+        if (!isCloudMode) {
+          saveCurrentProfileId(storage, profile.id);
+        }
       }
       return profile;
     },
-    [currentPlayerId, profiles, storage]
+    [currentPlayerId, isCloudMode, profiles, storage]
   );
 
-  const updateProfile = useCallback((id: string, patch: StatsProfileUpdate) => {
-    setProfiles(prev => prev.map(p => {
-      if (p.id !== id) return p;
-      const next = { ...p, ...patch };
-      if (patch.baseName || patch.version) {
-        const baseName = normalizeBaseName(patch.baseName ?? next.baseName);
-        const rawVersion = patch.version ?? next.version ?? 1;
-        const version =
-          typeof rawVersion === "number" && Number.isFinite(rawVersion) ? Math.max(1, Math.floor(rawVersion)) : 1;
-        next.baseName = baseName;
-        next.version = version;
-        next.name = makeProfileDisplayName(baseName, version);
+  const updateProfile = useCallback(
+    (id: string, patch: StatsProfileUpdate) => {
+      let updatedProfile: StatsProfile | null = null;
+      setProfiles(prev =>
+        prev.map(p => {
+          if (p.id !== id) return p;
+          const next = { ...p, ...patch } as StatsProfile;
+          if (patch.baseName || patch.version) {
+            const baseName = normalizeBaseName(patch.baseName ?? next.baseName);
+            const rawVersion = patch.version ?? next.version ?? 1;
+            const version =
+              typeof rawVersion === "number" && Number.isFinite(rawVersion) ? Math.max(1, Math.floor(rawVersion)) : 1;
+            next.baseName = baseName;
+            next.version = version;
+            next.name = makeProfileDisplayName(baseName, version);
+          }
+          updatedProfile = next;
+          return next;
+        }),
+      );
+      if (isCloudMode) {
+        if (updatedProfile) {
+          void cloudDataService?.upsertStatsProfile(updatedProfile).catch(err => {
+            console.error("Failed to update cloud stats profile", err);
+          });
+        }
+      } else {
+        setProfilesDirty(true);
       }
-      return next;
-    }));
-    setProfilesDirty(true);
-  }, []);
+    },
+    [isCloudMode],
+  );
 
-  const forkProfileVersion = useCallback((id: string) => {
-    if (!currentPlayerId) return null;
-    const source = profiles.find(p => p.id === id && p.playerId === currentPlayerId);
-    if (!source) return null;
-    const sourceVersionRaw = source.version;
-    const sourceVersion =
-      typeof sourceVersionRaw === "number" && Number.isFinite(sourceVersionRaw)
-        ? Math.max(1, Math.floor(sourceVersionRaw))
-        : 1;
-    const baseName = normalizeBaseName(source.baseName ?? source.name);
-    const nextVersion = sourceVersion + 1;
-    const newProfile: StatsProfile = {
-      id: makeId("profile"),
-      playerId: currentPlayerId,
-      baseName,
-      version: nextVersion,
-      name: makeProfileDisplayName(baseName, nextVersion),
-      createdAt: new Date().toISOString(),
-      trainingCount: 0,
-      trained: false,
-      predictorDefault: source.predictorDefault,
-      seenPostTrainingCTA: false,
-      previousProfileId: source.id,
-      nextProfileId: null,
-    };
-    setProfiles(prev => {
-      const updated = prev.map(p => {
-        if (p.id !== source.id) return p;
-        return {
-          ...p,
-          baseName,
-          version: sourceVersion,
-          name: makeProfileDisplayName(baseName, sourceVersion),
-          nextProfileId: newProfile.id,
-        };
+  const forkProfileVersion = useCallback(
+    (id: string) => {
+      if (!currentPlayerId) return null;
+      const source = profiles.find(p => p.id === id && p.playerId === currentPlayerId);
+      if (!source) return null;
+      const sourceVersionRaw = source.version;
+      const sourceVersion =
+        typeof sourceVersionRaw === "number" && Number.isFinite(sourceVersionRaw)
+          ? Math.max(1, Math.floor(sourceVersionRaw))
+          : 1;
+      const baseName = normalizeBaseName(source.baseName ?? source.name);
+      const nextVersion = sourceVersion + 1;
+      const newProfile: StatsProfile = {
+        id: makeId("profile"),
+        playerId: currentPlayerId,
+        baseName,
+        version: nextVersion,
+        name: makeProfileDisplayName(baseName, nextVersion),
+        createdAt: new Date().toISOString(),
+        trainingCount: 0,
+        trained: false,
+        predictorDefault: source.predictorDefault,
+        seenPostTrainingCTA: false,
+        previousProfileId: source.id,
+        nextProfileId: null,
+      };
+      let updatedSource: StatsProfile | null = null;
+      setProfiles(prev => {
+        const updated = prev.map(p => {
+          if (p.id !== source.id) return p;
+          const next: StatsProfile = {
+            ...p,
+            baseName,
+            version: sourceVersion,
+            name: makeProfileDisplayName(baseName, sourceVersion),
+            nextProfileId: newProfile.id,
+          };
+          updatedSource = next;
+          return next;
+        });
+        return updated.concat(newProfile);
       });
-      return updated.concat(newProfile);
-    });
-    setProfilesDirty(true);
-    setCurrentProfileId(newProfile.id);
-    saveCurrentProfileId(storage, newProfile.id);
-    return newProfile;
-  }, [currentPlayerId, profiles, storage]);
+      setCurrentProfileId(newProfile.id);
+      if (isCloudMode) {
+        void cloudDataService?.upsertStatsProfile(newProfile).catch(err => {
+          console.error("Failed to fork cloud stats profile", err);
+        });
+        if (updatedSource) {
+          void cloudDataService?.upsertStatsProfile(updatedSource).catch(err => {
+            console.error("Failed to update source profile during cloud fork", err);
+          });
+        }
+      } else {
+        setProfilesDirty(true);
+        saveCurrentProfileId(storage, newProfile.id);
+      }
+      return newProfile;
+    },
+    [currentPlayerId, isCloudMode, profiles, storage],
+  );
 
-  const logRound = useCallback((round: Omit<RoundLog, "id" | "sessionId" | "playerId" | "profileId">) => {
-    if (!currentPlayerId || !currentProfile) return null;
-    const entry: RoundLog = {
-      ...round,
-      id: makeId("r"),
-      sessionId,
-      playerId: currentPlayerId,
-      profileId: currentProfile.id,
-    };
-    setAllRounds(prev => {
-      const next = prev.concat(entry);
-      const trimStart = Math.max(0, next.length - MAX_ROUNDS);
-      return trimStart ? next.slice(trimStart) : next;
-    });
-    setRoundsDirty(true);
-    return entry;
-  }, [sessionId, currentPlayerId, currentProfile]);
+  const logRound = useCallback(
+    (round: Omit<RoundLog, "id" | "sessionId" | "playerId" | "profileId">) => {
+      if (!currentPlayerId || !currentProfile) return null;
+      const entry: RoundLog = {
+        ...round,
+        id: makeId("r"),
+        sessionId,
+        playerId: currentPlayerId,
+        profileId: currentProfile.id,
+      };
+      const existingCount = allRounds.filter(
+        r => r.playerId === currentPlayerId && (r.profileId ?? currentProfile.id) === currentProfile.id,
+      ).length;
+      setAllRounds(prev => {
+        const next = prev.concat(entry);
+        if (isCloudMode) {
+          return next;
+        }
+        const trimStart = Math.max(0, next.length - MAX_ROUNDS);
+        return trimStart ? next.slice(trimStart) : next;
+      });
+      if (isCloudMode) {
+        void cloudDataService
+          ?.insertRounds([{ round: entry, roundNumber: existingCount + 1 }])
+          .catch(err => console.error("Failed to log cloud round", err));
+      } else {
+        setRoundsDirty(true);
+      }
+      return entry;
+    },
+    [allRounds, currentPlayerId, currentProfile, isCloudMode, sessionId],
+  );
 
-  const logMatch = useCallback((match: Omit<MatchSummary, "id" | "sessionId" | "playerId" | "profileId">) => {
-    if (!currentPlayerId || !currentProfile) return null;
-    const entry: MatchSummary = {
-      ...match,
-      id: makeId("m"),
-      sessionId,
-      playerId: currentPlayerId,
-      profileId: currentProfile.id,
-    };
-    setAllMatches(prev => prev.concat(entry));
-    setMatchesDirty(true);
-    return entry;
-  }, [sessionId, currentPlayerId, currentProfile]);
+  const logMatch = useCallback(
+    (match: Omit<MatchSummary, "id" | "sessionId" | "playerId" | "profileId">) => {
+      if (!currentPlayerId || !currentProfile) return null;
+      const entry: MatchSummary = {
+        ...match,
+        id: makeId("m"),
+        sessionId,
+        playerId: currentPlayerId,
+        profileId: currentProfile.id,
+      };
+      setAllMatches(prev => prev.concat(entry));
+      if (isCloudMode) {
+        void cloudDataService?.insertMatches([entry]).catch(err => {
+          console.error("Failed to log cloud match", err);
+        });
+      } else {
+        setMatchesDirty(true);
+      }
+      return entry;
+    },
+    [currentPlayerId, currentProfile, isCloudMode, sessionId],
+  );
 
   const rounds = useMemo(() => {
     if (!currentPlayerId || !currentProfile) return [] as RoundLog[];
@@ -795,25 +1005,45 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     return allMatches.filter(m => m.playerId === currentPlayerId && (m.profileId ?? currentProfile.id) === currentProfile.id);
   }, [allMatches, currentPlayerId, currentProfile]);
 
-  const adminUpdateRound = useCallback((id: string, patch: Partial<RoundLog>) => {
-    setAllRounds(prev => prev.map(r => (r.id === id ? { ...r, ...patch } : r)));
-    setRoundsDirty(true);
-  }, []);
+  const adminUpdateRound = useCallback(
+    (id: string, patch: Partial<RoundLog>) => {
+      setAllRounds(prev => prev.map(r => (r.id === id ? { ...r, ...patch } : r)));
+      if (!isCloudMode) {
+        setRoundsDirty(true);
+      }
+    },
+    [isCloudMode],
+  );
 
-  const adminDeleteRound = useCallback((id: string) => {
-    setAllRounds(prev => prev.filter(r => r.id !== id));
-    setRoundsDirty(true);
-  }, []);
+  const adminDeleteRound = useCallback(
+    (id: string) => {
+      setAllRounds(prev => prev.filter(r => r.id !== id));
+      if (!isCloudMode) {
+        setRoundsDirty(true);
+      }
+    },
+    [isCloudMode],
+  );
 
-  const adminUpdateMatch = useCallback((id: string, patch: Partial<MatchSummary>) => {
-    setAllMatches(prev => prev.map(m => (m.id === id ? { ...m, ...patch } : m)));
-    setMatchesDirty(true);
-  }, []);
+  const adminUpdateMatch = useCallback(
+    (id: string, patch: Partial<MatchSummary>) => {
+      setAllMatches(prev => prev.map(m => (m.id === id ? { ...m, ...patch } : m)));
+      if (!isCloudMode) {
+        setMatchesDirty(true);
+      }
+    },
+    [isCloudMode],
+  );
 
-  const adminDeleteMatch = useCallback((id: string) => {
-    setAllMatches(prev => prev.filter(m => m.id !== id));
-    setMatchesDirty(true);
-  }, []);
+  const adminDeleteMatch = useCallback(
+    (id: string) => {
+      setAllMatches(prev => prev.filter(m => m.id !== id));
+      if (!isCloudMode) {
+        setMatchesDirty(true);
+      }
+    },
+    [isCloudMode],
+  );
 
   const exportRoundsCsv = useCallback(() => {
     const headers = [
