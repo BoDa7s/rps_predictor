@@ -467,6 +467,7 @@ function rowToRoundLog(row: RoundRow): RoundLog | null {
 
 function matchSummaryToRow(match: MatchSummary): MatchRow {
   return {
+    id: match.id,
     user_id: match.playerId,
     session_id: match.sessionId,
     stats_profile_id: match.profileId,

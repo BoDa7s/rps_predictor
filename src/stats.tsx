@@ -1254,9 +1254,12 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         console.warn("Unable to log match: missing cloud session");
         return null;
       }
+      const providedClientId = match.clientId?.trim();
+      const entryId = providedClientId && providedClientId.length > 0 ? providedClientId : makeId("m");
       const entry: MatchSummary = {
         ...match,
-        id: makeId("m"),
+        clientId: providedClientId ?? entryId,
+        id: entryId,
         sessionId,
         playerId: currentPlayerId,
         profileId: currentProfile.id,

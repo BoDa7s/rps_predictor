@@ -1240,6 +1240,20 @@ function makeLocalId(prefix: string){
   return prefix + "-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2,6);
 }
 
+function makeUuidFallback(){
+  const random = () => Math.floor(Math.random() * 0xffff).toString(16).padStart(4, "0");
+  const variant = () => (Math.floor(Math.random() * 0x3fff) | 0x8000).toString(16).padStart(4, "0");
+  const version = () => (Math.floor(Math.random() * 0x0fff) | 0x4000).toString(16).padStart(4, "0");
+  return `${random()}${random()}-${random()}-${version()}-${variant()}-${random()}${random()}${random()}`;
+}
+
+function makeMatchId(){
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"){
+    return crypto.randomUUID();
+  }
+  return makeUuidFallback();
+}
+
 const EXPERT_LABELS = [
   "FrequencyExpert",
   "RecencyExpert",
@@ -1546,7 +1560,7 @@ function RPSDoodleAppInner(){
   const aiStreakRef = useRef(0);
   const youStreakRef = useRef(0);
   const matchStartRef = useRef<string>(new Date().toISOString());
-  const currentMatchIdRef = useRef<string>(makeLocalId("match"));
+  const currentMatchIdRef = useRef<string>(makeMatchId());
   const roundStartRef = useRef<number | null>(null);
   const lastDecisionMsRef = useRef<number | null>(null);
   const currentMatchRoundsRef = useRef<RoundLog[]>([]);
@@ -4441,7 +4455,7 @@ function RPSDoodleAppInner(){
     youStreakRef.current = 0;
     matchStartRef.current = new Date().toISOString();
     const matchMode: Mode = mode ?? selectedMode ?? "practice";
-    const matchId = makeLocalId("match");
+    const matchId = makeMatchId();
     currentMatchIdRef.current = matchId;
     if (matchMode === "challenge") {
       matchScoreTotalRef.current = 0;
@@ -4738,7 +4752,7 @@ function RPSDoodleAppInner(){
         });
         currentMatchRoundsRef.current = [];
         matchStartRef.current = new Date().toISOString();
-        currentMatchIdRef.current = makeLocalId("match");
+        currentMatchIdRef.current = makeMatchId();
         setResultBanner(banner);
         if (banner === "Victory") audio.win();
         else if (banner === "Defeat") audio.lose();
