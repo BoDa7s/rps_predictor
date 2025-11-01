@@ -1,4 +1,6 @@
-const DEFAULT_POST_AUTH_PATH = "/boot";
+import { BOOT_ROUTE, MODES_ROUTE } from "./routes";
+
+const DEFAULT_POST_AUTH_PATH = MODES_ROUTE;
 
 function normalizePath(input: unknown): string {
   if (typeof input !== "string") {
@@ -9,9 +11,10 @@ function normalizePath(input: unknown): string {
     return DEFAULT_POST_AUTH_PATH;
   }
   if (trimmed.startsWith("/")) {
-    return trimmed;
+    return trimmed === BOOT_ROUTE ? MODES_ROUTE : trimmed;
   }
-  return `/${trimmed}`;
+  const normalized = `/${trimmed}`;
+  return normalized === BOOT_ROUTE ? MODES_ROUTE : normalized;
 }
 
 const rawPostAuthPath = import.meta.env.VITE_POST_AUTH_PATH;

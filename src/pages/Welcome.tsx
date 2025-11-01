@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabaseClient, isSupabaseConfigured } from "../lib/supabaseClient";
 import { getPostAuthPath, DEPLOY_ENV } from "../lib/env";
-import { BOOT_ROUTE, TRAINING_ROUTE } from "../lib/routes";
+import { BOOT_ROUTE, MODES_ROUTE, TRAINING_ROUTE } from "../lib/routes";
 import {
   CONSENT_TEXT_VERSION,
   GRADE_OPTIONS,
@@ -583,9 +583,25 @@ function resolveStatsProfileForPlayer(playerId: string | null | undefined): Stor
   return candidates[0] ?? null;
 }
 
+function resolveActivePlayerId(playerIdHint?: string | null): string | null {
+  if (!isBrowser()) return playerIdHint ?? null;
+  if (playerIdHint) {
+    return playerIdHint;
+  }
+  const storedActive = window.localStorage.getItem(CURRENT_PLAYER_STORAGE_KEY);
+  if (storedActive) {
+    return storedActive;
+  }
+  const players = loadStoredPlayers();
+  if (players.length > 0) {
+    return players[0]?.id ?? null;
+  }
+  return null;
+}
+
 function shouldStartTrainingAfterAuth(playerIdHint?: string | null): boolean {
   if (!isBrowser()) return false;
-  const activePlayerId = playerIdHint ?? window.localStorage.getItem(CURRENT_PLAYER_STORAGE_KEY);
+  const activePlayerId = resolveActivePlayerId(playerIdHint);
   if (!activePlayerId) {
     return false;
   }
@@ -602,7 +618,8 @@ function shouldStartTrainingAfterAuth(playerIdHint?: string | null): boolean {
 }
 
 function resolvePostAuthDestination(playerIdHint?: string | null): string {
-  const defaultPath = getPostAuthPath() || BOOT_ROUTE;
+  const configuredPath = getPostAuthPath();
+  const defaultPath = configuredPath && configuredPath !== BOOT_ROUTE ? configuredPath : MODES_ROUTE;
   const requireTraining = shouldStartTrainingAfterAuth(playerIdHint ?? null);
   return requireTraining ? TRAINING_ROUTE : defaultPath;
 }

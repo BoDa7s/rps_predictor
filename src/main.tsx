@@ -33,7 +33,7 @@ const router = createBrowserRouter([
     ],
   },
   { path: WELCOME_ROUTE, element: <Welcome /> },
-  { path: "*", element: <Navigate to={BOOT_ROUTE} replace /> },
+  { path: "*", element: <Navigate to={WELCOME_ROUTE} replace /> },
 ]);
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
