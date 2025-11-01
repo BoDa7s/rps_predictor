@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabaseClient, isSupabaseConfigured } from "../lib/supabaseClient";
+import {
+  cloudDataService,
+  type DemographicsProfileRecord,
+} from "../lib/cloudData";
 import { getPostAuthPath, DEPLOY_ENV } from "../lib/env";
 import { BOOT_ROUTE, MODES_ROUTE, TRAINING_ROUTE } from "../lib/routes";
 import {
@@ -24,6 +28,7 @@ import {
   PLAYERS_STORAGE_KEY,
 } from "../lib/localSession";
 import { usePlayMode, type PlayMode } from "../lib/playMode";
+import type { StatsProfile } from "../stats";
 
 const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => String(5 + index));
 
@@ -366,7 +371,7 @@ function setStoredCurrentStatsProfileId(scope: StorageScope, id: string | null) 
 }
 
 async function hydrateCloudPlayerState(session: Session, seed?: CloudProfileSeed): Promise<string | null> {
-  if (!supabaseClient) {
+  if (!cloudDataService) {
     return null;
   }
   const userId = session.user?.id;
@@ -374,68 +379,25 @@ async function hydrateCloudPlayerState(session: Session, seed?: CloudProfileSeed
     return null;
   }
 
-  type DemographicsRow = {
-    user_id: string;
-    username?: string | null;
-    first_name?: string | null;
-    last_initial?: string | null;
-    grade?: string | null;
-    age?: string | null;
-    school?: string | null;
-    prior_experience?: string | null;
-    consent_version?: string | null;
-    consent_granted_at?: string | null;
-    training_completed?: boolean | null;
-    training_count?: number | null;
-  } | null;
-
-  type StatsProfileRow = {
-    id: string | null;
-    base_name?: string | null;
-    display_name?: string | null;
-    training_count?: number | null;
-    training_completed?: boolean | null;
-    predictor_default?: boolean | null;
-    seen_post_training_cta?: boolean | null;
-    previous_profile_id?: string | null;
-    next_profile_id?: string | null;
-    archived?: boolean | null;
-    created_at?: string | null;
-    version?: number | null;
-    profile_version?: number | null;
-  };
-
-  let demographics: DemographicsRow = null;
-  let statsProfiles: StatsProfileRow[] = [];
+  let demographics: DemographicsProfileRecord | null = null;
+  let statsProfiles: StatsProfile[] = [];
 
   try {
-    const [demographicsResult, statsResult] = await Promise.all([
-      supabaseClient
-        .from("demographics_profiles")
-        .select(
-          "user_id, username, first_name, last_initial, grade, age, school, prior_experience, consent_version, consent_granted_at, training_completed, training_count",
-        )
-        .eq("user_id", userId)
-        .maybeSingle(),
-      supabaseClient
-        .from("stats_profiles")
-        .select(
-          "id, base_name, display_name, training_count, training_completed, predictor_default, seen_post_training_cta, previous_profile_id, next_profile_id, archived, created_at, version, profile_version",
-        )
-        .eq("user_id", userId)
-        .order("created_at", { ascending: true }),
+    const [demographicsResult, statsResult] = await Promise.allSettled([
+      cloudDataService.selectDemographicsProfileRow(userId),
+      cloudDataService.loadStatsProfiles(userId),
     ]);
 
-    if (!demographicsResult.error) {
-      demographics = (demographicsResult.data as DemographicsRow) ?? null;
+    if (demographicsResult.status === "fulfilled") {
+      demographics = demographicsResult.value;
     } else {
-      console.warn("Failed to load demographics profile", demographicsResult.error);
+      console.warn("Failed to load demographics profile", demographicsResult.reason);
     }
 
-    if (!statsResult.error && Array.isArray(statsResult.data)) {
-      statsProfiles = statsResult.data as StatsProfileRow[];
-    } else if (statsResult.error) {
-      console.warn("Failed to load stats profiles", statsResult.error);
+    if (statsResult.status === "fulfilled") {
+      statsProfiles = statsResult.value ?? [];
+    } else {
+      console.warn("Failed to load stats profiles", statsResult.reason);
     }
   } catch (error) {
     console.warn("Unexpected error loading cloud profile state", error);
@@ -520,48 +482,26 @@ async function hydrateCloudPlayerState(session: Session, seed?: CloudProfileSeed
   ensurePlayerStored(profile, "session");
 
   const normalizedStats: StatsProfileStorageEntry[] = (() => {
-    const activeProfiles = (Array.isArray(statsProfiles) ? statsProfiles : [])
-      .map(profileRow => {
-        if (!profileRow || typeof profileRow !== "object") return null;
-        const id = typeof profileRow.id === "string" ? profileRow.id : null;
-        if (!id) return null;
-        if (profileRow.archived) return null;
-        const baseName = pickString(profileRow.base_name) || "primary";
-        const name = pickString(profileRow.display_name, baseName) || "Primary";
-        const createdAt = pickString(profileRow.created_at) || new Date().toISOString();
-        const versionSource = Number.isFinite(profileRow.version)
-          ? Number(profileRow.version)
-          : Number.isFinite(profileRow.profile_version)
-            ? Number(profileRow.profile_version)
-            : 1;
-        const version = Math.max(1, Math.floor(versionSource));
-        const trainingCount = Number.isFinite(profileRow.training_count)
-          ? Number(profileRow.training_count)
-          : 0;
-        const trained = profileRow.training_completed === true;
-        const predictorDefault = profileRow.predictor_default === true;
-        const seenPostTrainingCTA = profileRow.seen_post_training_cta === true;
-        const previousProfileId = typeof profileRow.previous_profile_id === "string" ? profileRow.previous_profile_id : null;
-        const nextProfileId = typeof profileRow.next_profile_id === "string" ? profileRow.next_profile_id : null;
-        return {
-          id,
-          playerId: userId,
-          name,
-          createdAt,
-          trainingCount,
-          trained,
-          predictorDefault,
-          seenPostTrainingCTA,
-          baseName,
-          version,
-          previousProfileId,
-          nextProfileId,
-        } satisfies StatsProfileStorageEntry;
-      })
-      .filter((entry): entry is StatsProfileStorageEntry => entry !== null);
-
-    if (activeProfiles.length > 0) {
-      return activeProfiles;
+    if (Array.isArray(statsProfiles) && statsProfiles.length > 0) {
+      const mapped = statsProfiles
+        .map(profile => ({
+          id: profile.id,
+          playerId: profile.playerId,
+          name: profile.name,
+          createdAt: profile.createdAt,
+          trainingCount: profile.trainingCount,
+          trained: profile.trained,
+          predictorDefault: profile.predictorDefault,
+          seenPostTrainingCTA: profile.seenPostTrainingCTA,
+          baseName: profile.baseName,
+          version: profile.version,
+          previousProfileId: profile.previousProfileId ?? null,
+          nextProfileId: profile.nextProfileId ?? null,
+        }))
+        .filter((entry): entry is StatsProfileStorageEntry => Boolean(entry.id));
+      if (mapped.length > 0) {
+        return mapped;
+      }
     }
 
     const fallbackTrainingCount = Number.isFinite(demographics?.training_count)
@@ -901,28 +841,29 @@ export default function Welcome(): JSX.Element {
           return;
         }
         const userId = nextSession.user?.id ?? result.data.user?.id;
-        if (userId) {
+        if (userId && cloudDataService) {
           try {
-            const { error: profileError } = await supabaseClient
-              .from("demographics_profiles")
-              .upsert({
-                user_id: userId,
-                username: trimmedUsername,
-                first_name: profileMetadata.first_name,
-                last_initial: profileMetadata.last_initial,
-                grade,
-                age,
-                school: profileMetadata.school,
-                prior_experience: profileMetadata.prior_experience,
-                storage_mode: "cloud",
-                consent_version: CONSENT_TEXT_VERSION,
-                consent_granted_at: new Date().toISOString(),
-              });
-            if (profileError) {
-              console.warn("demographics_profiles upsert failed", profileError);
-            }
+            const consentTimestamp = new Date().toISOString();
+            const normalizedAge = sanitizeAge(age);
+            const playerNameForCloud = profileMetadata.first_name
+              ? `${profileMetadata.first_name}${profileMetadata.last_initial ? ` ${profileMetadata.last_initial}.` : ""}`.trim()
+              : trimmedUsername || "Player";
+            await cloudDataService.upsertPlayerProfile({
+              id: userId,
+              playerName: playerNameForCloud,
+              grade: isGradeValue(grade) ? grade : "Not applicable",
+              age: normalizedAge,
+              school: profileMetadata.school ?? undefined,
+              priorExperience: profileMetadata.prior_experience ?? undefined,
+              consent: {
+                agreed: true,
+                consentTextVersion: CONSENT_TEXT_VERSION,
+                timestamp: consentTimestamp,
+              },
+              needsReview: !isGradeValue(grade) || normalizedAge === null,
+            });
           } catch (upsertError) {
-            console.warn("demographics_profiles upsert threw", upsertError);
+            console.warn("demographics_profiles upsert failed", upsertError);
           }
         }
         setSession(nextSession);
