@@ -8,10 +8,19 @@ function normalizePath(input: unknown): string {
   if (!trimmed) {
     return DEFAULT_POST_AUTH_PATH;
   }
-  if (trimmed.startsWith("/")) {
-    return trimmed;
+  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  const withoutTrailingSlash =
+    withLeadingSlash.length > 1 ? withLeadingSlash.replace(/\/+$/, "") : withLeadingSlash;
+
+  if (
+    withoutTrailingSlash === "/" ||
+    withoutTrailingSlash === "" ||
+    withoutTrailingSlash === DEFAULT_POST_AUTH_PATH
+  ) {
+    return DEFAULT_POST_AUTH_PATH;
   }
-  return `/${trimmed}`;
+
+  return withoutTrailingSlash;
 }
 
 const rawPostAuthPath = import.meta.env.VITE_POST_AUTH_PATH;
