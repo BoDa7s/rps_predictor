@@ -1,4 +1,4 @@
-const DEFAULT_POST_AUTH_PATH = "/modes";
+const DEFAULT_POST_AUTH_PATH = "/boot";
 
 function normalizePath(input: unknown): string {
   if (typeof input !== "string") {

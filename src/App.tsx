@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence, type Transition, useReducedMotion } from "framer-motion";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import {
@@ -49,6 +49,9 @@ import botSad48 from "./assets/mascot/bot-sad-48.svg";
 import botSad64 from "./assets/mascot/bot-sad-64.svg";
 import botSad96 from "./assets/mascot/bot-sad-96.svg";
 import HelpCenter, { type HelpQuestion } from "./HelpCenter";
+import { supabaseClient, isSupabaseConfigured } from "./lib/supabaseClient";
+import { clearActiveLocalSession } from "./lib/localSession";
+import { BOOT_ROUTE, MODES_ROUTE, TRAINING_ROUTE, WELCOME_ROUTE } from "./lib/routes";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -1501,6 +1504,15 @@ function RPSDoodleAppInner(){
   } = useStats();
   const { players, currentPlayer, hasConsented, createPlayer, updatePlayer, setCurrentPlayer } = usePlayers();
   const location = useLocation();
+  const navigate = useNavigate();
+  const navigateIfNeeded = useCallback(
+    (target: string, options: { replace?: boolean } = { replace: true }) => {
+      const nextPath = target;
+      if (location.pathname === nextPath) return;
+      navigate(nextPath, { replace: options.replace ?? true });
+    },
+    [location.pathname, navigate],
+  );
   const initialWelcomePreferenceRef = useRef<WelcomePreference | null>(null);
   if (initialWelcomePreferenceRef.current === null) {
     initialWelcomePreferenceRef.current = getInitialWelcomePreference();
@@ -1550,7 +1562,7 @@ function RPSDoodleAppInner(){
   const [forceTrainingPrompt, setForceTrainingPrompt] = useState(false);
   const trainingRouteHandledRef = useRef(false);
   useEffect(() => {
-    const trainingRouteActive = location.pathname === "/training";
+    const trainingRouteActive = location.pathname === TRAINING_ROUTE;
     if (trainingRouteActive) {
       if (!trainingRouteHandledRef.current) {
         trainingRouteHandledRef.current = true;
@@ -1797,6 +1809,8 @@ function RPSDoodleAppInner(){
   const [signOutProgress, setSignOutProgress] = useState(0);
   const signOutProgressIntervalRef = useRef<number | null>(null);
   const signOutCompletionTimeoutRef = useRef<number | null>(null);
+  const signOutCleanupStartedRef = useRef(false);
+  const signOutProfileIdRef = useRef<string | null>(null);
   const [helpGuideOpen, setHelpGuideOpen] = useState(false);
   const helpButtonRef = useRef<HTMLButtonElement | null>(null);
   const [helpCenterOpen, setHelpCenterOpen] = useState(false);
@@ -2904,6 +2918,9 @@ function RPSDoodleAppInner(){
       setWelcomeActive(false);
       setBootNext(options.bootNext ?? "AUTO");
       setScene("BOOT");
+      if (options.bootFirst) {
+        navigateIfNeeded(BOOT_ROUTE);
+      }
       welcomeToastShownRef.current = false;
       welcomeFinalToastShownRef.current = false;
       if (options.announce) {
@@ -2958,6 +2975,7 @@ function RPSDoodleAppInner(){
       setPendingWelcomeExit,
       setWipeRun,
       setLive,
+      navigateIfNeeded,
     ],
   );
 
@@ -2971,8 +2989,34 @@ function RPSDoodleAppInner(){
         window.clearTimeout(signOutCompletionTimeoutRef.current);
         signOutCompletionTimeoutRef.current = null;
       }
+      signOutCleanupStartedRef.current = false;
+      signOutProfileIdRef.current = null;
       return;
     }
+
+    if (signOutProfileIdRef.current === null) {
+      signOutProfileIdRef.current = currentPlayer?.id ?? null;
+    }
+
+    if (!signOutCleanupStartedRef.current) {
+      signOutCleanupStartedRef.current = true;
+      void (async () => {
+        try {
+          if (isSupabaseConfigured && supabaseClient) {
+            await supabaseClient.auth.signOut();
+          }
+        } catch (error) {
+          console.error("Failed to sign out from Supabase", error);
+          setToastMessage("We couldn't complete the cloud sign-out. Local session cleared.");
+          setLive(
+            "Encountered an error while signing out of the cloud session. Local session data has been cleared.",
+          );
+        } finally {
+          clearActiveLocalSession(signOutProfileIdRef.current ?? undefined);
+        }
+      })();
+    }
+
     let progress = 0;
     setSignOutProgress(0);
     const step = () => {
@@ -2987,6 +3031,7 @@ function RPSDoodleAppInner(){
           announce: "Signing out complete. Returning to the welcome screen.",
           resetPlayer: true,
           origin: "settings",
+          bootFirst: true,
         });
         if (signOutCompletionTimeoutRef.current !== null) {
           window.clearTimeout(signOutCompletionTimeoutRef.current);
@@ -3013,7 +3058,13 @@ function RPSDoodleAppInner(){
         signOutCompletionTimeoutRef.current = null;
       }
     };
-  }, [signOutActive, openWelcome]);
+  }, [
+    signOutActive,
+    openWelcome,
+    currentPlayer?.id,
+    setToastMessage,
+    setLive,
+  ]);
 
   const finishWelcomeFlow = useCallback(
     (reason: "setup" | "restore" | "dismiss") => {
@@ -3271,15 +3322,33 @@ function RPSDoodleAppInner(){
     if (!bootReady) return;
     if (bootAdvancingRef.current) return;
     bootAdvancingRef.current = true;
+
+    const finish = () => {
+      bootAdvancingRef.current = false;
+    };
+
+    if (!hasConsented || !currentProfile) {
+      navigateIfNeeded(WELCOME_ROUTE);
+      finish();
+      return;
+    }
+
     if (bootNext === "RESTORE") {
       const resumeState = rebootResumeRef.current;
       rebootResumeRef.current = null;
       setBootNext("AUTO");
       if (resumeState) {
+        if (resumeState.trainingActive) {
+          navigateIfNeeded(TRAINING_ROUTE);
+        } else {
+          navigateIfNeeded(MODES_ROUTE);
+        }
         applyRebootResumeState(resumeState);
+        finish();
         return;
       }
     }
+
     if (needsTraining && currentProfile && hasConsented) {
       if (forceTrainingPrompt) {
         if (trainingActive) {
@@ -3288,12 +3357,17 @@ function RPSDoodleAppInner(){
       } else if (!trainingActive) {
         setTrainingActive(true);
       }
+      navigateIfNeeded(TRAINING_ROUTE);
       startMatch("practice", { silent: true });
       setForceTrainingPrompt(false);
+      finish();
       return;
     }
+
     setForceTrainingPrompt(false);
+    navigateIfNeeded(MODES_ROUTE);
     setScene("MODE");
+    finish();
   }, [
     scene,
     bootReady,
@@ -3304,11 +3378,9 @@ function RPSDoodleAppInner(){
     trainingActive,
     forceTrainingPrompt,
     welcomeActive,
-    setWelcomeOrigin,
-    setWelcomeSeen,
-    setWelcomeStage,
     applyRebootResumeState,
     setBootNext,
+    navigateIfNeeded,
   ]);
 
   useEffect(() => {
@@ -3330,6 +3402,24 @@ function RPSDoodleAppInner(){
     hasConsented,
     setPendingWelcomeExit,
     setForceTrainingPrompt,
+  ]);
+
+  useEffect(() => {
+    if (scene === "BOOT") return;
+    if (welcomeActive) return;
+    if (location.pathname === WELCOME_ROUTE) return;
+    if (trainingActive || needsTraining) {
+      navigateIfNeeded(TRAINING_ROUTE);
+      return;
+    }
+    navigateIfNeeded(MODES_ROUTE);
+  }, [
+    scene,
+    welcomeActive,
+    trainingActive,
+    needsTraining,
+    location.pathname,
+    navigateIfNeeded,
   ]);
 
   const statsTabs = [

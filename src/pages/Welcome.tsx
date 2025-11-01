@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabaseClient, isSupabaseConfigured } from "../lib/supabaseClient";
 import { getPostAuthPath, DEPLOY_ENV } from "../lib/env";
+import { BOOT_ROUTE, TRAINING_ROUTE } from "../lib/routes";
 import {
   CONSENT_TEXT_VERSION,
   GRADE_OPTIONS,
@@ -15,17 +16,19 @@ import {
   signup as signupThroughEdge,
   setEdgeSession,
 } from "../lib/edgeFunctions";
+import {
+  clearActiveLocalSession,
+  CURRENT_PLAYER_STORAGE_KEY,
+  LOCAL_ACCOUNTS_KEY,
+  LOCAL_ACTIVE_ACCOUNT_KEY,
+  PLAYERS_STORAGE_KEY,
+} from "../lib/localSession";
 
 const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => String(5 + index));
 
-const LOCAL_ACCOUNTS_KEY = "rps_local_accounts_v1";
-const LOCAL_ACTIVE_ACCOUNT_KEY = "rps_local_active_account_v1";
-const PLAYERS_STORAGE_KEY = "rps_players_v1";
-const CURRENT_PLAYER_STORAGE_KEY = "rps_current_player_v1";
 const STATS_PROFILES_KEY = "rps_stats_profiles_v1";
 const STATS_CURRENT_PROFILE_KEY = "rps_current_stats_profile_v1";
 const TRAINING_ROUNDS_REQUIRED = 10;
-const TRAINING_ROUTE_PATH = "/training";
 
 type AuthTab = "signIn" | "signUp";
 type AuthMode = "local" | "cloud";
@@ -224,16 +227,6 @@ function loadActiveLocalSession(): LocalSession | null {
   if (!fallbackProfile) return null;
   ensurePlayerStored(fallbackProfile);
   return { profile: fallbackProfile };
-}
-
-function clearActiveLocalSession(profileId?: string) {
-  if (!isBrowser()) return;
-  window.localStorage.removeItem(LOCAL_ACTIVE_ACCOUNT_KEY);
-  if (!profileId) return;
-  const currentId = window.localStorage.getItem(CURRENT_PLAYER_STORAGE_KEY);
-  if (currentId === profileId) {
-    window.localStorage.removeItem(CURRENT_PLAYER_STORAGE_KEY);
-  }
 }
 
 function loadStoredStatsProfiles(): StoredStatsProfileSnapshot[] {
@@ -609,9 +602,9 @@ function shouldStartTrainingAfterAuth(playerIdHint?: string | null): boolean {
 }
 
 function resolvePostAuthDestination(playerIdHint?: string | null): string {
-  const defaultPath = getPostAuthPath();
+  const defaultPath = getPostAuthPath() || BOOT_ROUTE;
   const requireTraining = shouldStartTrainingAfterAuth(playerIdHint ?? null);
-  return requireTraining ? TRAINING_ROUTE_PATH : defaultPath;
+  return requireTraining ? TRAINING_ROUTE : defaultPath;
 }
 
 function buildPlayerProfileFromForm(form: SignUpFormState): PlayerProfile {
