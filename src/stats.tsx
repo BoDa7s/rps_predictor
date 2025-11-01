@@ -584,6 +584,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   const [profilesDirty, setProfilesDirty] = useState(false);
   const [modelStates, setModelStates] = useState<StoredPredictorModelState[]>([]);
   const [modelStatesDirty, setModelStatesDirty] = useState(false);
+  const [cloudProfilesHydrated, setCloudProfilesHydrated] = useState(!isCloudMode);
   const sessionIdRef = useRef<string>("");
   const sessionStartedAtRef = useRef<string>("");
   const sessionOwnerRef = useRef<string | null>(null);
@@ -648,6 +649,14 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   }, [ensureSession]);
 
   useEffect(() => {
+    if (isCloudMode) {
+      setCloudProfilesHydrated(false);
+    } else {
+      setCloudProfilesHydrated(true);
+    }
+  }, [isCloudMode]);
+
+  useEffect(() => {
     if (isCloudMode) return;
     setAllRounds(loadFromStorage<RoundLog>(storage, ROUND_KEY));
     const loadedMatches = loadFromStorage<MatchSummary>(storage, MATCH_KEY);
@@ -679,6 +688,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       setMatchesDirty(false);
       setProfilesDirty(false);
       setModelStatesDirty(false);
+      setCloudProfilesHydrated(true);
       return;
     }
     const userId = currentPlayerId;
@@ -692,9 +702,11 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       setMatchesDirty(false);
       setProfilesDirty(false);
       setModelStatesDirty(false);
+      setCloudProfilesHydrated(true);
       return;
     }
     let cancelled = false;
+    setCloudProfilesHydrated(false);
     (async () => {
       try {
         const rawProfiles = await service.loadStatsProfiles(userId);
@@ -760,6 +772,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         setMatchesDirty(false);
         setProfilesDirty(false);
         setModelStatesDirty(false);
+        setCloudProfilesHydrated(true);
 
         setCurrentProfileId(prev => {
           if (prev && normalizedProfiles.some(profile => profile.id === prev)) {
@@ -780,6 +793,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
           setMatchesDirty(false);
           setProfilesDirty(false);
           setModelStatesDirty(false);
+          setCloudProfilesHydrated(true);
         }
       }
     })();
@@ -829,6 +843,9 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     if (playerProfiles.length === 0) {
+      if (isCloudMode && !cloudProfilesHydrated) {
+        return;
+      }
       const baseName = formatLineageBaseName(1);
       const defaultProfile: StatsProfile = {
         id: makeStatsProfileId(isCloudMode),
@@ -866,7 +883,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         }
       }
     }
-  }, [currentPlayerId, currentProfileId, isCloudMode, playerProfiles, storage]);
+  }, [cloudProfilesHydrated, currentPlayerId, currentProfileId, isCloudMode, playerProfiles, storage]);
 
   const currentProfile = useMemo(() => {
     if (!currentProfileId) return playerProfiles[0] ?? null;
