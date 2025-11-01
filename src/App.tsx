@@ -1775,6 +1775,7 @@ function RPSDoodleAppInner(){
   const bootStartRef = useRef<number | null>(null);
   const bootAnimationRef = useRef<number | null>(null);
   const bootAdvancingRef = useRef(false);
+  const bootShouldAnimateRef = useRef(false); // Marks when the splash should fully animate.
   const rebootResumeRef = useRef<RebootResumeState | null>(null);
   const [pendingWelcomeExit, setPendingWelcomeExit] = useState<
     null | { reason: "setup" | "restore" | "dismiss" }
@@ -2455,32 +2456,51 @@ function RPSDoodleAppInner(){
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+
+    const cancelBootAnimation = () => {
+      if (bootAnimationRef.current !== null) {
+        window.cancelAnimationFrame(bootAnimationRef.current);
+        bootAnimationRef.current = null;
+      }
+    };
+
+    const resetBootAnimationState = () => {
+      cancelBootAnimation();
+      bootStartRef.current = null;
+      bootAdvancingRef.current = false;
+    };
+
     if (scene !== "BOOT") {
-      if (bootAnimationRef.current !== null) {
-        window.cancelAnimationFrame(bootAnimationRef.current);
-        bootAnimationRef.current = null;
-      }
-      bootStartRef.current = null;
+      resetBootAnimationState();
       setBootProgress(0);
       setBootReady(false);
-      bootAdvancingRef.current = false;
+      bootShouldAnimateRef.current = false;
       return;
     }
+
     if (welcomeActive) {
-      if (bootAnimationRef.current !== null) {
-        window.cancelAnimationFrame(bootAnimationRef.current);
-        bootAnimationRef.current = null;
-      }
-      bootStartRef.current = null;
+      resetBootAnimationState();
       setBootProgress(0);
       setBootReady(false);
-      bootAdvancingRef.current = false;
       return;
     }
-    bootAdvancingRef.current = false;
+
+    const shouldAnimateBoot =
+      bootShouldAnimateRef.current || !hasConsented || !currentProfile;
+    // Update the condition above to adjust which flows replay the splash screen.
+
+    if (!shouldAnimateBoot) {
+      resetBootAnimationState();
+      setBootProgress(100);
+      setBootReady(true);
+      return;
+    }
+
+    bootShouldAnimateRef.current = false;
+    resetBootAnimationState();
     setBootProgress(0);
     setBootReady(false);
-    bootStartRef.current = null;
+
     const minimumDuration = 5000;
     const step = (timestamp: number) => {
       if (bootStartRef.current === null) {
@@ -2501,12 +2521,9 @@ function RPSDoodleAppInner(){
     };
     bootAnimationRef.current = window.requestAnimationFrame(step);
     return () => {
-      if (bootAnimationRef.current !== null) {
-        window.cancelAnimationFrame(bootAnimationRef.current);
-        bootAnimationRef.current = null;
-      }
+      cancelBootAnimation();
     };
-  }, [scene, welcomeActive]);
+  }, [scene, welcomeActive, hasConsented, currentProfile]);
 
   const [predictorMode, setPredictorMode] = useState<boolean>(currentProfile?.predictorDefault ?? false);
   const [aiMode, setAiMode] = useState<AIMode>("normal");
@@ -2916,6 +2933,7 @@ function RPSDoodleAppInner(){
       setPendingWelcomeExit(null);
       setWelcomeOrigin(options.origin ?? null);
       setWelcomeActive(false);
+      bootShouldAnimateRef.current = Boolean(options.bootFirst); // Only animate when explicitly requested.
       setBootNext(options.bootNext ?? "AUTO");
       setScene("BOOT");
       if (options.bootFirst) {
