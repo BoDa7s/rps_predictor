@@ -743,7 +743,9 @@ export class CloudDataService {
         "id, user_id, session_id, stats_profile_id, match_id, client_round_id, round_number, played_at, mode, difficulty, best_of, player_move, ai_move, predicted_player_move, outcome, decision_policy, reason, ai_confidence, confidence_bucket, decision_time_ms, streak_ai, streak_you, mixer_trace, heuristic_trace",
       )
       .eq("user_id", userId)
-      .eq("stats_profile_id", statsProfileId);
+      .eq("stats_profile_id", statsProfileId)
+      .order("played_at", { ascending: true })
+      .order("round_number", { ascending: true });
     const rows = await handleSelect<RoundRow>(query, "select rounds");
     return rows
       .map(rowToRoundLog)
@@ -791,7 +793,9 @@ export class CloudDataService {
         "id, user_id, session_id, stats_profile_id, client_match_id, started_at, ended_at, mode, difficulty, best_of, rounds_played, score_you, score_ai, ai_win_rate, you_switched_rate, leaderboard_score, leaderboard_max_streak, leaderboard_round_count, leaderboard_timer_bonus, leaderboard_beat_confidence_bonus, leaderboard_type, notes",
       )
       .eq("user_id", userId)
-      .eq("stats_profile_id", statsProfileId);
+      .eq("stats_profile_id", statsProfileId)
+      .order("started_at", { ascending: true })
+      .order("ended_at", { ascending: true });
     const rows = await handleSelect<MatchRow>(query, "select matches");
     return rows
       .map(rowToMatchSummary)

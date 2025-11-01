@@ -27,7 +27,7 @@ declare module "@supabase/supabase-js" {
     upsert(values: Record<string, unknown>): Promise<{ error: unknown }>;
     select(columns: string): SupabaseQueryBuilder;
     eq(column: string, value: unknown): SupabaseQueryBuilder;
-    order(column: string, options?: { ascending?: boolean }): Promise<{ data: unknown; error: unknown }>;
+    order(column: string, options?: { ascending?: boolean }): SupabaseQueryBuilder;
     maybeSingle(): Promise<{ data: unknown; error: unknown }>;
   }
 

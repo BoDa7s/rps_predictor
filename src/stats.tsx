@@ -757,8 +757,20 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         ]);
         if (cancelled) return;
 
-        const aggregatedRounds = roundGroups.flat();
-        const rawMatches = matchGroups.flat();
+        const aggregatedRounds = roundGroups
+          .flat()
+          .sort((a, b) => a.t.localeCompare(b.t));
+        const rawMatches = matchGroups
+          .flat()
+          .sort((a, b) => {
+            const startDiff = a.startedAt.localeCompare(b.startedAt);
+            if (startDiff !== 0) return startDiff;
+            const endA = a.endedAt ?? "";
+            const endB = b.endedAt ?? "";
+            const endDiff = endA.localeCompare(endB);
+            if (endDiff !== 0) return endDiff;
+            return a.id.localeCompare(b.id);
+          });
         const migratedMatches = migrateMatchRecords(rawMatches);
         const aggregatedModelStates = modelGroup
           .filter((entry): entry is StoredPredictorModelState => Boolean(entry))
