@@ -406,11 +406,28 @@ function saveCurrentProfileId(storage: Storage | null, id: string | null) {
   }
 }
 
-function makeId(prefix: string) {
-  if (typeof crypto !== "undefined" && (crypto as any).randomUUID) {
-    return prefix + "-" + (crypto as any).randomUUID();
+function makeUuid() {
+  const globalCrypto =
+    typeof globalThis !== "undefined" && "crypto" in globalThis
+      ? (globalThis.crypto as { randomUUID?: () => string } | undefined)
+      : undefined;
+  if (globalCrypto?.randomUUID) {
+    return globalCrypto.randomUUID();
   }
-  return prefix + "-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+  const random = () => Math.floor(Math.random() * 0xffff)
+    .toString(16)
+    .padStart(4, "0");
+  const variant = () => (Math.floor(Math.random() * 0x3fff) | 0x8000)
+    .toString(16)
+    .padStart(4, "0");
+  const version = () => (Math.floor(Math.random() * 0x0fff) | 0x4000)
+    .toString(16)
+    .padStart(4, "0");
+  return `${random()}${random()}-${random()}-${version()}-${variant()}-${random()}${random()}${random()}`;
+}
+
+function makeId(prefix: string) {
+  return `${prefix}-${makeUuid()}`;
 }
 
 function mapRoundPatchToCloudUpdate(patch: Partial<RoundLog>): Partial<RoundRecord> {
@@ -564,7 +581,67 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   const [modelStates, setModelStates] = useState<StoredPredictorModelState[]>([]);
   const [modelStatesDirty, setModelStatesDirty] = useState(false);
   const sessionIdRef = useRef<string>("");
+  const sessionStartedAtRef = useRef<string>("");
+  const sessionOwnerRef = useRef<string | null>(null);
+  const clientSessionIdRef = useRef<string>("");
   const { currentPlayerId, currentPlayer } = usePlayers();
+
+  const ensureSession = useCallback((): string | null => {
+    if (!clientSessionIdRef.current) {
+      clientSessionIdRef.current = makeId("sess");
+    }
+
+    if (!isCloudMode) {
+      sessionOwnerRef.current = null;
+      if (!sessionStartedAtRef.current) {
+        sessionStartedAtRef.current = new Date().toISOString();
+      }
+      if (!sessionIdRef.current) {
+        sessionIdRef.current = makeId("sess");
+      }
+      return sessionIdRef.current;
+    }
+
+    const service = cloudDataService;
+    const userId = currentPlayerId;
+    if (!service || !userId) {
+      return null;
+    }
+
+    if (sessionOwnerRef.current && sessionOwnerRef.current !== userId) {
+      sessionIdRef.current = "";
+      sessionStartedAtRef.current = "";
+    }
+
+    if (!sessionStartedAtRef.current) {
+      sessionStartedAtRef.current = new Date().toISOString();
+    }
+
+    if (!sessionIdRef.current) {
+      const newSessionId = makeUuid();
+      sessionIdRef.current = newSessionId;
+      sessionOwnerRef.current = userId;
+      const startedAt = sessionStartedAtRef.current;
+      void service
+        .upsertSession({
+          id: newSessionId,
+          userId,
+          startedAt,
+          clientSessionId: clientSessionIdRef.current,
+          storageMode: "cloud",
+          lastEventAt: startedAt,
+        })
+        .catch(err => {
+          console.error("Failed to create cloud session", err);
+        });
+    }
+
+    return sessionIdRef.current;
+  }, [cloudDataService, currentPlayerId, isCloudMode]);
+
+  useEffect(() => {
+    ensureSession();
+  }, [ensureSession]);
 
   useEffect(() => {
     if (isCloudMode) return;
@@ -707,10 +784,6 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
     };
   }, [currentPlayerId, isCloudMode]);
-
-  if (!sessionIdRef.current) {
-    sessionIdRef.current = makeId("sess");
-  }
 
   const sessionId = sessionIdRef.current;
   const playerProfiles = useMemo(() => {
@@ -1088,6 +1161,11 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   const logRound = useCallback(
     (round: Omit<RoundLog, "id" | "sessionId" | "playerId" | "profileId">) => {
       if (!currentPlayerId || !currentProfile) return null;
+      const sessionId = ensureSession();
+      if (!sessionId) {
+        console.warn("Unable to log round: missing cloud session");
+        return null;
+      }
       const entry: RoundLog = {
         ...round,
         id: makeId("r"),
@@ -1107,20 +1185,42 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         return trimStart ? next.slice(trimStart) : next;
       });
       if (isCloudMode) {
-        void cloudDataService
-          ?.insertRounds([{ round: entry, roundNumber: existingCount + 1 }])
-          .catch(err => console.error("Failed to log cloud round", err));
+        const service = cloudDataService;
+        const roundNumber = existingCount + 1;
+        const now = new Date().toISOString();
+        const startedAt = sessionStartedAtRef.current || now;
+        void (async () => {
+          if (!service) return;
+          try {
+            await service.upsertSession({
+              id: sessionId,
+              userId: currentPlayerId,
+              startedAt,
+              clientSessionId: clientSessionIdRef.current,
+              storageMode: "cloud",
+              lastEventAt: now,
+            });
+            await service.insertRounds([{ round: entry, roundNumber }]);
+          } catch (err) {
+            console.error("Failed to log cloud round", err);
+          }
+        })();
       } else {
         setRoundsDirty(true);
       }
       return entry;
     },
-    [allRounds, currentPlayerId, currentProfile, isCloudMode, sessionId],
+    [allRounds, currentPlayerId, currentProfile, ensureSession, isCloudMode],
   );
 
   const logMatch = useCallback(
     (match: Omit<MatchSummary, "id" | "sessionId" | "playerId" | "profileId">) => {
       if (!currentPlayerId || !currentProfile) return null;
+      const sessionId = ensureSession();
+      if (!sessionId) {
+        console.warn("Unable to log match: missing cloud session");
+        return null;
+      }
       const entry: MatchSummary = {
         ...match,
         id: makeId("m"),
@@ -1130,15 +1230,31 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       };
       setAllMatches(prev => prev.concat(entry));
       if (isCloudMode) {
-        void cloudDataService?.insertMatches([entry]).catch(err => {
-          console.error("Failed to log cloud match", err);
-        });
+        const service = cloudDataService;
+        const now = new Date().toISOString();
+        const startedAt = sessionStartedAtRef.current || now;
+        void (async () => {
+          if (!service) return;
+          try {
+            await service.upsertSession({
+              id: sessionId,
+              userId: currentPlayerId,
+              startedAt,
+              clientSessionId: clientSessionIdRef.current,
+              storageMode: "cloud",
+              lastEventAt: now,
+            });
+            await service.insertMatches([entry]);
+          } catch (err) {
+            console.error("Failed to log cloud match", err);
+          }
+        })();
       } else {
         setMatchesDirty(true);
       }
       return entry;
     },
-    [currentPlayerId, currentProfile, isCloudMode, sessionId],
+    [currentPlayerId, currentProfile, ensureSession, isCloudMode],
   );
 
   const rounds = useMemo(() => {
