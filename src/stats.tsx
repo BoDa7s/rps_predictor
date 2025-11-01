@@ -430,6 +430,10 @@ function makeId(prefix: string) {
   return `${prefix}-${makeUuid()}`;
 }
 
+function makeStatsProfileId(isCloudMode: boolean | undefined) {
+  return isCloudMode ? makeUuid() : makeId("profile");
+}
+
 function mapRoundPatchToCloudUpdate(patch: Partial<RoundLog>): Partial<RoundRecord> {
   const update: Partial<RoundRecord> = {};
   if ("sessionId" in patch) {
@@ -710,7 +714,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
           const baseName = formatLineageBaseName(1);
           const createdAt = new Date().toISOString();
           const defaultProfile: StatsProfile = {
-            id: makeId("profile"),
+            id: makeStatsProfileId(true),
             playerId: userId,
             baseName,
             version: 1,
@@ -827,7 +831,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     if (playerProfiles.length === 0) {
       const baseName = formatLineageBaseName(1);
       const defaultProfile: StatsProfile = {
-        id: makeId("profile"),
+        id: makeStatsProfileId(isCloudMode),
         playerId: currentPlayerId,
         baseName,
         version: 1,
@@ -1032,7 +1036,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       const baseName = formatLineageBaseName(index);
       const version = highestVersion > 1 ? highestVersion : 1;
       const profile: StatsProfile = {
-        id: makeId("profile"),
+        id: makeStatsProfileId(isCloudMode),
         playerId: targetPlayerId,
         baseName,
         version,
@@ -1110,7 +1114,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       const baseName = normalizeBaseName(source.baseName ?? source.name);
       const nextVersion = sourceVersion + 1;
       const newProfile: StatsProfile = {
-        id: makeId("profile"),
+        id: makeStatsProfileId(isCloudMode),
         playerId: currentPlayerId,
         baseName,
         version: nextVersion,
