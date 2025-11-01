@@ -1812,6 +1812,7 @@ function RPSDoodleAppInner(){
   const signOutCompletionTimeoutRef = useRef<number | null>(null);
   const signOutCleanupStartedRef = useRef(false);
   const signOutProfileIdRef = useRef<string | null>(null);
+  const signOutNavigatePendingRef = useRef(false);
   const [helpGuideOpen, setHelpGuideOpen] = useState(false);
   const helpButtonRef = useRef<HTMLButtonElement | null>(null);
   const [helpCenterOpen, setHelpCenterOpen] = useState(false);
@@ -3045,12 +3046,7 @@ function RPSDoodleAppInner(){
           window.clearInterval(signOutProgressIntervalRef.current);
           signOutProgressIntervalRef.current = null;
         }
-        openWelcome({
-          announce: "Signing out complete. Returning to the welcome screen.",
-          resetPlayer: true,
-          origin: "settings",
-          bootFirst: true,
-        });
+        signOutNavigatePendingRef.current = true;
         if (signOutCompletionTimeoutRef.current !== null) {
           window.clearTimeout(signOutCompletionTimeoutRef.current);
         }
@@ -3076,13 +3072,19 @@ function RPSDoodleAppInner(){
         signOutCompletionTimeoutRef.current = null;
       }
     };
-  }, [
-    signOutActive,
-    openWelcome,
-    currentPlayer?.id,
-    setToastMessage,
-    setLive,
-  ]);
+  }, [signOutActive, currentPlayer?.id, setToastMessage, setLive]);
+
+  useEffect(() => {
+    if (!signOutActive && signOutNavigatePendingRef.current) {
+      signOutNavigatePendingRef.current = false;
+      openWelcome({
+        announce: "Signing out complete. Returning to the welcome screen.",
+        resetPlayer: true,
+        origin: "settings",
+        bootFirst: true,
+      });
+    }
+  }, [signOutActive, openWelcome]);
 
   const finishWelcomeFlow = useCallback(
     (reason: "setup" | "restore" | "dismiss") => {
@@ -4050,6 +4052,7 @@ function RPSDoodleAppInner(){
 
   const handleSignOutConfirm = useCallback(() => {
     if (signOutActive) return;
+    signOutNavigatePendingRef.current = false;
     setSignOutConfirmOpen(false);
     setSignOutActive(true);
     setLive("Signing out. Progress indicator running.");
