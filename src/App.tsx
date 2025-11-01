@@ -1810,6 +1810,7 @@ function RPSDoodleAppInner(){
   const [signOutProgress, setSignOutProgress] = useState(0);
   const signOutProgressIntervalRef = useRef<number | null>(null);
   const signOutCompletionTimeoutRef = useRef<number | null>(null);
+  const signOutProgressValueRef = useRef(0);
   const signOutCleanupStartedRef = useRef(false);
   const signOutProfileIdRef = useRef<string | null>(null);
   const [helpGuideOpen, setHelpGuideOpen] = useState(false);
@@ -3007,6 +3008,10 @@ function RPSDoodleAppInner(){
         window.clearTimeout(signOutCompletionTimeoutRef.current);
         signOutCompletionTimeoutRef.current = null;
       }
+      if (signOutProgressValueRef.current !== 0) {
+        signOutProgressValueRef.current = 0;
+      }
+      setSignOutProgress(0);
       signOutCleanupStartedRef.current = false;
       signOutProfileIdRef.current = null;
       return;
@@ -3035,37 +3040,44 @@ function RPSDoodleAppInner(){
       })();
     }
 
-    let progress = 0;
-    setSignOutProgress(0);
-    const step = () => {
-      progress = Math.min(100, progress + 8);
-      setSignOutProgress(progress);
-      if (progress >= 100) {
-        if (signOutProgressIntervalRef.current !== null) {
-          window.clearInterval(signOutProgressIntervalRef.current);
-          signOutProgressIntervalRef.current = null;
-        }
-        if (signOutCompletionTimeoutRef.current !== null) {
-          window.clearTimeout(signOutCompletionTimeoutRef.current);
-        }
-        signOutCompletionTimeoutRef.current = window.setTimeout(() => {
-          setSignOutActive(false);
-          setSignOutProgress(0);
-          openWelcome({
-            announce: "Signing out complete. Returning to the welcome screen.",
-            resetPlayer: true,
-            origin: "settings",
-            bootFirst: true,
-          });
+    if (
+      signOutProgressIntervalRef.current === null &&
+      signOutCompletionTimeoutRef.current === null
+    ) {
+      signOutProgressValueRef.current = 0;
+      setSignOutProgress(0);
+      const step = () => {
+        const nextProgress = Math.min(100, signOutProgressValueRef.current + 8);
+        signOutProgressValueRef.current = nextProgress;
+        setSignOutProgress(nextProgress);
+        if (nextProgress >= 100) {
+          if (signOutProgressIntervalRef.current !== null) {
+            window.clearInterval(signOutProgressIntervalRef.current);
+            signOutProgressIntervalRef.current = null;
+          }
           if (signOutCompletionTimeoutRef.current !== null) {
             window.clearTimeout(signOutCompletionTimeoutRef.current);
-            signOutCompletionTimeoutRef.current = null;
           }
-        }, 400);
-      }
-    };
-    signOutProgressIntervalRef.current = window.setInterval(step, 140);
-    step();
+          signOutCompletionTimeoutRef.current = window.setTimeout(() => {
+            setSignOutActive(false);
+            signOutProgressValueRef.current = 0;
+            setSignOutProgress(0);
+            openWelcome({
+              announce: "Signing out complete. Returning to the welcome screen.",
+              resetPlayer: true,
+              origin: "settings",
+              bootFirst: true,
+            });
+            if (signOutCompletionTimeoutRef.current !== null) {
+              window.clearTimeout(signOutCompletionTimeoutRef.current);
+              signOutCompletionTimeoutRef.current = null;
+            }
+          }, 400);
+        }
+      };
+      signOutProgressIntervalRef.current = window.setInterval(step, 140);
+      step();
+    }
     return () => {
       if (signOutProgressIntervalRef.current !== null) {
         window.clearInterval(signOutProgressIntervalRef.current);
@@ -3075,6 +3087,7 @@ function RPSDoodleAppInner(){
         window.clearTimeout(signOutCompletionTimeoutRef.current);
         signOutCompletionTimeoutRef.current = null;
       }
+      signOutProgressValueRef.current = 0;
     };
   }, [
     signOutActive,
