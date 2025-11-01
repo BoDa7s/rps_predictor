@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabaseClient, isSupabaseConfigured } from "../lib/supabaseClient";
 import { getPostAuthPath, DEPLOY_ENV } from "../lib/env";
-import { BOOT_ROUTE, TRAINING_ROUTE } from "../lib/routes";
+import { BOOT_ROUTE, MODES_ROUTE, TRAINING_ROUTE } from "../lib/routes";
 import {
   CONSENT_TEXT_VERSION,
   GRADE_OPTIONS,
@@ -602,9 +602,15 @@ function shouldStartTrainingAfterAuth(playerIdHint?: string | null): boolean {
 }
 
 function resolvePostAuthDestination(playerIdHint?: string | null): string {
-  const defaultPath = getPostAuthPath() || BOOT_ROUTE;
+  const defaultPath = getPostAuthPath();
   const requireTraining = shouldStartTrainingAfterAuth(playerIdHint ?? null);
-  return requireTraining ? TRAINING_ROUTE : defaultPath;
+  if (requireTraining) {
+    return TRAINING_ROUTE;
+  }
+  if (defaultPath === BOOT_ROUTE) {
+    return MODES_ROUTE;
+  }
+  return defaultPath;
 }
 
 function buildPlayerProfileFromForm(form: SignUpFormState): PlayerProfile {
