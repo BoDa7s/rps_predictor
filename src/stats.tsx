@@ -589,6 +589,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   const sessionStartedAtRef = useRef<string>("");
   const sessionOwnerRef = useRef<string | null>(null);
   const clientSessionIdRef = useRef<string>("");
+  const seededMatchIdsRef = useRef<Set<string>>(new Set());
   const { currentPlayerId, currentPlayer } = usePlayers();
 
   const ensureSession = useCallback((): string | null => {
@@ -647,6 +648,10 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     ensureSession();
   }, [ensureSession]);
+
+  useEffect(() => {
+    seededMatchIdsRef.current.clear();
+  }, [isCloudMode, currentPlayerId]);
 
   useEffect(() => {
     if (isCloudMode) {
@@ -1233,6 +1238,34 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
               storageMode: "cloud",
               lastEventAt: now,
             });
+            if (entry.matchId && currentProfile) {
+              const matchId = entry.matchId;
+              if (!seededMatchIdsRef.current.has(matchId)) {
+                seededMatchIdsRef.current.add(matchId);
+                const placeholderMatch: MatchSummary = {
+                  id: matchId,
+                  sessionId,
+                  clientId: matchId,
+                  playerId: currentPlayerId,
+                  profileId: currentProfile.id,
+                  startedAt: entry.t,
+                  endedAt: entry.t,
+                  mode: entry.mode,
+                  bestOf: entry.bestOf,
+                  difficulty: entry.difficulty,
+                  score: { you: 0, ai: 0 },
+                  rounds: 0,
+                  aiWinRate: 0,
+                  youSwitchedRate: 0,
+                };
+                try {
+                  await service.insertMatches([placeholderMatch]);
+                } catch (seedErr) {
+                  seededMatchIdsRef.current.delete(matchId);
+                  throw seedErr;
+                }
+              }
+            }
             await service.insertRounds([{ round: entry, roundNumber }]);
           } catch (err) {
             console.error("Failed to log cloud round", err);
