@@ -1211,9 +1211,11 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         playerId: currentPlayerId,
         profileId: currentProfile.id,
       };
-      const existingCount = allRounds.filter(
+      const roundsForProfile = allRounds.filter(
         r => r.playerId === currentPlayerId && (r.profileId ?? currentProfile.id) === currentProfile.id,
-      ).length;
+      );
+      const entryMatchId = entry.matchId ?? null;
+      const existingCount = roundsForProfile.filter(r => (r.matchId ?? null) === entryMatchId).length;
       setAllRounds(prev => {
         const next = prev.concat(entry);
         if (isCloudMode) {
