@@ -3,6 +3,7 @@ import { AIMode, BestOf, Mode, Move, Outcome } from "./gameTypes";
 import { usePlayers } from "./players";
 import { usePlayMode, type PlayMode } from "./lib/playMode";
 import { cloudDataService, isSupabaseUuid, type MatchRecord, type RoundRecord } from "./lib/cloudData";
+import { computeMatchScore } from "./leaderboard";
 
 export type SerializedExpertState =
   | { type: "FrequencyExpert"; window: number; alpha: number }
@@ -577,6 +578,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   const storage = useMemo(() => (storageScope ? getScopedStorage(storageScope) : null), [storageScope]);
 
   const [allRounds, setAllRounds] = useState<RoundLog[]>([]);
+  const allRoundsRef = useRef<RoundLog[]>([]);
   const [allMatches, setAllMatches] = useState<MatchSummary[]>([]);
   const [profiles, setProfiles] = useState<StatsProfile[]>([]);
   const [currentProfileId, setCurrentProfileId] = useState<string | null>(null);
@@ -608,6 +610,10 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     }
     return null;
   }, [isCloudMode, rawCurrentPlayerId]);
+
+  useEffect(() => {
+    allRoundsRef.current = allRounds;
+  }, [allRounds]);
 
   const ensureSession = useCallback((): string | null => {
     if (!clientSessionIdRef.current) {
@@ -1257,11 +1263,13 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       const existingCount = roundsForProfile.filter(r => (r.matchId ?? null) === entryMatchId).length;
       setAllRounds(prev => {
         const next = prev.concat(entry);
-        if (isCloudMode) {
-          return next;
+        let finalNext = next;
+        if (!isCloudMode) {
+          const trimStart = Math.max(0, next.length - MAX_ROUNDS);
+          finalNext = trimStart ? next.slice(trimStart) : next;
         }
-        const trimStart = Math.max(0, next.length - MAX_ROUNDS);
-        return trimStart ? next.slice(trimStart) : next;
+        allRoundsRef.current = finalNext;
+        return finalNext;
       });
       if (isCloudMode) {
         const service = cloudDataService;
@@ -1338,7 +1346,37 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         playerId: currentPlayerId,
         profileId: currentProfile.id,
       };
-      setAllMatches(prev => prev.concat(entry));
+      const asFiniteNumber = (value: unknown): number | null =>
+        typeof value === "number" && Number.isFinite(value) ? value : null;
+      let leaderboardPatch: Partial<MatchSummary> | null = null;
+      if (entry.mode === "challenge") {
+        const matchKey = entry.clientId ?? entry.id;
+        const matchRounds = matchKey
+          ? allRoundsRef.current.filter(round => {
+              if (round.playerId !== entry.playerId) return false;
+              if (round.profileId !== entry.profileId) return false;
+              const roundMatchId = round.matchId;
+              if (!roundMatchId) return false;
+              return roundMatchId === matchKey || roundMatchId === entry.id;
+            })
+          : [];
+        const breakdown = computeMatchScore(matchRounds);
+        const entryRoundCount = asFiniteNumber(entry.leaderboardRoundCount);
+        const fallbackRoundCount =
+          breakdown?.rounds ?? (matchRounds.length > 0 ? matchRounds.length : entry.rounds ?? 0);
+        const normalizedRoundCount = entryRoundCount ?? Math.max(0, Math.round(fallbackRoundCount));
+        leaderboardPatch = {
+          leaderboardScore: breakdown?.total ?? asFiniteNumber(entry.leaderboardScore) ?? 0,
+          leaderboardMaxStreak: breakdown?.maxStreak ?? asFiniteNumber(entry.leaderboardMaxStreak) ?? 0,
+          leaderboardRoundCount: normalizedRoundCount,
+          leaderboardTimerBonus: breakdown?.timerBonus ?? asFiniteNumber(entry.leaderboardTimerBonus) ?? 0,
+          leaderboardBeatConfidenceBonus:
+            breakdown?.beatConfidenceBonus ?? asFiniteNumber(entry.leaderboardBeatConfidenceBonus) ?? 0,
+          leaderboardType: "Challenge",
+        };
+      }
+      const enrichedEntry = leaderboardPatch ? { ...entry, ...leaderboardPatch } : entry;
+      setAllMatches(prev => prev.concat(enrichedEntry));
       if (isCloudMode) {
         const service = cloudDataService;
         const now = new Date().toISOString();
@@ -1354,7 +1392,14 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
               storageMode: "cloud",
               lastEventAt: now,
             });
-            await service.insertMatches([entry]);
+            await service.insertMatches([enrichedEntry]);
+            if (leaderboardPatch) {
+              // Supabase's matches table expects challenge rows to persist leaderboard aggregates.
+              const update = mapMatchPatchToCloudUpdate(leaderboardPatch);
+              if (Object.keys(update).length > 0) {
+                await service.updateMatchFields(currentPlayerId, enrichedEntry.id, update);
+              }
+            }
           } catch (err) {
             console.error("Failed to log cloud match", err);
           }
@@ -1362,7 +1407,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       } else {
         setMatchesDirty(true);
       }
-      return entry;
+      return enrichedEntry;
     },
     [currentPlayerId, currentProfile, ensureSession, isCloudMode],
   );

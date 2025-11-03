@@ -1,5 +1,5 @@
 import { AIMode } from "./gameTypes";
-import { RoundLog } from "./stats";
+import type { RoundLog } from "./stats";
 
 export interface MatchScoreBreakdown {
   total: number;
