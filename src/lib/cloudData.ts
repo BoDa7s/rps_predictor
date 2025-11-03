@@ -707,7 +707,9 @@ export class CloudDataService {
     if (rounds.length === 0) return;
     const client = ensureClient(this.client);
     const payload = rounds.map(roundLogToRow);
-    const mutation = client.from("rounds").upsert(payload as any);
+    const mutation = client
+      .from("rounds")
+      .upsert(payload as any, { onConflict: "client_round_id" });
     await handleMutation(mutation, "insert rounds");
   }
 
@@ -757,7 +759,9 @@ export class CloudDataService {
     if (matches.length === 0) return;
     const client = ensureClient(this.client);
     const payload = matches.map(matchSummaryToRow);
-    const mutation = client.from("matches").upsert(payload as any);
+    const mutation = client
+      .from("matches")
+      .upsert(payload as any, { onConflict: "client_match_id" });
     await handleMutation(mutation, "insert matches");
   }
 
