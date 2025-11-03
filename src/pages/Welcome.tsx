@@ -271,17 +271,45 @@ function loadStoredStatsProfiles(scope: StorageScope): StoredStatsProfileSnapsho
       if (!item || typeof item !== "object") {
         return;
       }
-      const snapshot = item as StoredStatsProfileSnapshot & { id?: unknown; playerId?: unknown };
+      const snapshot = item as StoredStatsProfileSnapshot & {
+        id?: unknown;
+        playerId?: unknown;
+        user_id?: unknown;
+        trainingCount?: unknown;
+        training_count?: unknown;
+        trained?: unknown;
+        training_completed?: unknown;
+      };
       const id = typeof snapshot.id === "string" ? snapshot.id : null;
-      const playerId = typeof snapshot.playerId === "string" ? snapshot.playerId : null;
+      const playerId =
+        typeof snapshot.playerId === "string"
+          ? snapshot.playerId
+          : typeof snapshot.user_id === "string"
+            ? snapshot.user_id
+            : null;
       if (!id || !playerId) {
         return;
       }
+      const trainingCountRaw = (() => {
+        if (typeof snapshot.trainingCount === "number" && Number.isFinite(snapshot.trainingCount)) {
+          return snapshot.trainingCount;
+        }
+        if (typeof snapshot.training_count === "number" && Number.isFinite(snapshot.training_count)) {
+          return snapshot.training_count;
+        }
+        return undefined;
+      })();
       const trainingCount =
-        typeof snapshot.trainingCount === "number" && Number.isFinite(snapshot.trainingCount)
-          ? snapshot.trainingCount
-          : undefined;
-      const trained = snapshot.trained === true ? true : snapshot.trained === false ? false : undefined;
+        trainingCountRaw === undefined ? undefined : Math.max(0, Math.floor(trainingCountRaw));
+      const trained = (() => {
+        if (snapshot.trained === true || snapshot.training_completed === true) {
+          return true;
+        }
+        if (snapshot.trained === false || snapshot.training_completed === false) {
+          return false;
+        }
+        return undefined;
+      })();
       sanitized.push({ id, playerId, trainingCount, trained });
     });
     return sanitized;
