@@ -1200,14 +1200,21 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       });
       setCurrentProfileId(newProfile.id);
       if (isCloudMode) {
-        void cloudDataService?.upsertStatsProfile(newProfile).catch(err => {
-          console.error("Failed to fork cloud stats profile", err);
-        });
-        if (updatedSource) {
-          void cloudDataService?.upsertStatsProfile(updatedSource).catch(err => {
-            console.error("Failed to update source profile during cloud fork", err);
-          });
-        }
+        void (async () => {
+          try {
+            await cloudDataService?.upsertStatsProfile(newProfile);
+          } catch (err) {
+            console.error("Failed to fork cloud stats profile", err);
+            return;
+          }
+          if (updatedSource) {
+            try {
+              await cloudDataService?.upsertStatsProfile(updatedSource);
+            } catch (err) {
+              console.error("Failed to update source profile during cloud fork", err);
+            }
+          }
+        })();
       } else {
         setProfilesDirty(true);
         saveCurrentProfileId(storage, newProfile.id);
