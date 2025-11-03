@@ -85,7 +85,17 @@ function mulberry32(a:number){
 const MOVES: Move[] = ["rock", "paper", "scissors"];
 const MODES: Mode[] = ["challenge","practice"];
 
-const modeToRoute = (mode: Mode): string => (mode === "challenge" ? CHALLENGE_ROUTE : PRACTICE_ROUTE);
+const modeToRoute = (mode: Mode): string => {
+  switch (mode) {
+    case "challenge":
+      return CHALLENGE_ROUTE;
+    case "training":
+      return TRAINING_ROUTE;
+    case "practice":
+    default:
+      return PRACTICE_ROUTE;
+  }
+};
 
 const DIFFICULTY_INFO: Record<AIMode, { label: string; helper: string }> = {
   fair: { label: "Fair", helper: "Gentle counterplay tuned for learning." },
@@ -1425,6 +1435,7 @@ function ModeCard({
       <div className="text-sm text-slate-600 mt-1">
         {mode === "challenge" && "Timed rounds, high stakes—can you outsmart the AI?"}
         {mode === "practice" && "No score; experiment and learn."}
+        {mode === "training" && "Guided warm-up that teaches the AI your style."}
       </div>
       <span className="ink-pop" />
       {disabledReason && (
@@ -2821,7 +2832,7 @@ function RPSDoodleAppInner(){
   }, [currentProfile?.id]);
   const clearCountdown = ()=>{ if (countdownRef.current!==null){ clearInterval(countdownRef.current); countdownRef.current=null; } };
   const startCountdown = ()=>{
-    const modeForTiming: Mode = selectedMode ?? "practice";
+    const modeForTiming: Mode = trainingActive ? "training" : selectedMode ?? "practice";
     const interval = matchTimings[modeForTiming].countdownTickMs;
     setPhase("countdown");
     setCount(3);
@@ -2875,8 +2886,11 @@ function RPSDoodleAppInner(){
       setTrainingActive,
     ],
   );
-  const showMatchScoreBadge = !trainingActive && (selectedMode ?? "practice") === "challenge";
-  const hudInsightDisabled = (selectedMode ?? "practice") === "practice" && !predictorMode;
+  const modeLabel = (m:Mode)=> m.charAt(0).toUpperCase()+m.slice(1);
+  const activeMatchMode: Mode = trainingActive ? "training" : selectedMode ?? "practice";
+  const showMatchScoreBadge = !trainingActive && activeMatchMode === "challenge";
+  const hudInsightDisabled =
+    (activeMatchMode === "practice" || activeMatchMode === "training") && !predictorMode;
   const showResultsScoreBadge = showMatchScoreBadge && matchScoreTotal !== null;
   const resultMascot = useMemo((): { variant: RobotVariant; alt: string } => {
     if (resultBanner === "Victory") {
@@ -2892,8 +2906,6 @@ function RPSDoodleAppInner(){
   }, [resultBanner]);
   const hideUiDuringModeTransition = scene === "MODE" && selectedMode !== null;
   const [wipeRun, setWipeRun] = useState(false);
-  const modeLabel = (m:Mode)=> m.charAt(0).toUpperCase()+m.slice(1);
-  const activeMatchMode: Mode = selectedMode ?? "practice";
   const matchModeBadgeTheme =
     activeMatchMode === "challenge"
       ? "border-rose-200 bg-rose-100 text-rose-700"
@@ -3269,9 +3281,10 @@ function RPSDoodleAppInner(){
     const reason = describeDecision(policy, mixerTrace, heuristicTrace, playerMove, aiMove);
     const confBucket = confidenceBucket(confidence);
     const decisionTimeMs = typeof lastDecisionMsRef.current === "number" ? lastDecisionMsRef.current : undefined;
+    const roundMode: Mode = trainingActive ? "training" : selectedMode ?? "practice";
     const logged = logRound({
       t: now,
-      mode: selectedMode ?? "practice",
+      mode: roundMode,
       matchId: currentMatchIdRef.current,
       bestOf,
       difficulty: aiMode,
@@ -3291,7 +3304,7 @@ function RPSDoodleAppInner(){
     if (logged) {
       currentMatchRoundsRef.current = [...currentMatchRoundsRef.current, logged];
       setLiveInsightRounds([...currentMatchRoundsRef.current]);
-      const activeMode: Mode = selectedMode ?? "practice";
+      const activeMode: Mode = trainingActive ? "training" : selectedMode ?? "practice";
       if (activeMode === "challenge") {
         const breakdown = computeMatchScore(currentMatchRoundsRef.current);
         const nextTotal = breakdown?.total ?? 0;
@@ -3351,7 +3364,7 @@ function RPSDoodleAppInner(){
     roundStartRef.current = readyAt;
     lastDecisionMsRef.current = null;
     const currentMatchId = currentMatchIdRef.current;
-    const matchMode: Mode = selectedMode ?? "practice";
+    const matchMode: Mode = trainingActive ? "training" : selectedMode ?? "practice";
     devInstrumentation.roundReady({
       matchId: currentMatchId,
       roundNumber: round,
@@ -3362,7 +3375,17 @@ function RPSDoodleAppInner(){
       playerId: currentPlayer?.id ?? null,
       profileId: currentProfile?.id ?? null,
     });
-  }, [scene, phase, round, selectedMode, aiMode, bestOf, currentPlayer?.id, currentProfile?.id]);
+  }, [
+    scene,
+    phase,
+    round,
+    selectedMode,
+    trainingActive,
+    aiMode,
+    bestOf,
+    currentPlayer?.id,
+    currentProfile?.id,
+  ]);
 
   useEffect(() => {
     const parts: string[] = [scene];
@@ -4580,7 +4603,7 @@ function RPSDoodleAppInner(){
     aiStreakRef.current = 0;
     youStreakRef.current = 0;
     matchStartRef.current = new Date().toISOString();
-    const matchMode: Mode = mode ?? selectedMode ?? "practice";
+    const matchMode: Mode = trainingActive ? "training" : mode ?? selectedMode ?? "practice";
     const matchId = makeMatchId();
     currentMatchIdRef.current = matchId;
     if (matchMode === "challenge") {
@@ -4682,7 +4705,7 @@ function RPSDoodleAppInner(){
   function reveal(){
     const player = playerPick; if (!player) return;
     const ai = aiChoose(); setAiPick(ai); setAiHistory(h=>[...h, ai]); setPhase("reveal");
-    const modeForTiming: Mode = selectedMode ?? "practice";
+    const modeForTiming: Mode = trainingActive ? "training" : selectedMode ?? "practice";
     const holdMs = matchTimings[modeForTiming].revealHoldMs;
     setTimeout(()=>{
       const res = resolveOutcome(player, ai); setOutcome(res); setPhase("resolve");
@@ -4856,18 +4879,18 @@ function RPSDoodleAppInner(){
   useEffect(()=>{ if (phase === "selected"){ const t = setTimeout(()=>{ if (phase === "selected") startCountdown(); }, 500); return ()=> clearTimeout(t); } }, [phase]);
   useEffect(()=>{
     if (phase !== "countdown") return;
-    const modeForTiming: Mode = selectedMode ?? "practice";
+    const modeForTiming: Mode = trainingActive ? "training" : selectedMode ?? "practice";
     const interval = matchTimings[modeForTiming].countdownTickMs;
     const failSafeMs = Math.max(interval * 4, interval * 3 + 600);
     const t = setTimeout(()=>{ if (phase === "countdown"){ clearCountdown(); reveal(); } }, failSafeMs);
     return ()=> clearTimeout(t);
-  }, [phase, selectedMode, matchTimings]);
+  }, [phase, selectedMode, trainingActive, matchTimings]);
   useEffect(()=>{ return ()=> clearCountdown(); },[]);
 
   // Next round or end match
   useEffect(() => {
     if (phase !== "feedback") return;
-    const modeForTiming: Mode = selectedMode ?? "practice";
+    const modeForTiming: Mode = trainingActive ? "training" : selectedMode ?? "practice";
     const delayBase = matchTimings[modeForTiming].resultBannerMs;
     const delay = trainingActive
       ? Math.min(delayBase, 600)
@@ -4889,7 +4912,7 @@ function RPSDoodleAppInner(){
         const totalRounds = outcomesHist.length;
         const aiWins = outcomesHist.filter(o => o === "lose").length;
         const switchRate = computeSwitchRate(lastMoves);
-        const matchMode: Mode = selectedMode ?? "practice";
+        const matchMode: Mode = trainingActive ? "training" : selectedMode ?? "practice";
         const leaderboardEligible = matchMode === "challenge";
         const matchScore = leaderboardEligible ? computeMatchScore(currentMatchRoundsRef.current) : null;
         logMatch({
@@ -4941,7 +4964,7 @@ function RPSDoodleAppInner(){
     if (phase !== "feedback") return;
     if (!outcome) return;
     if (trainingActive) return;
-    const modeForReaction: Mode = selectedMode ?? "practice";
+    const modeForReaction: Mode = trainingActive ? "training" : selectedMode ?? "practice";
     const reaction: RobotReaction = modeForReaction === "challenge"
       ? outcome === "win"
         ? {
@@ -5006,7 +5029,7 @@ function RPSDoodleAppInner(){
 
   useEffect(() => {
     if (scene !== "RESULTS" || !resultBanner) return;
-    const modeForReaction: Mode = selectedMode ?? "practice";
+    const modeForReaction: Mode = trainingActive ? "training" : selectedMode ?? "practice";
     const reaction: RobotReaction = (() => {
       if (modeForReaction === "practice") {
         return resultBanner === "Victory"
@@ -5046,7 +5069,15 @@ function RPSDoodleAppInner(){
       startRobotRest(restDuration, "result");
     }, reactionDuration);
     robotResultTimeoutRef.current = timeoutId;
-  }, [scene, resultBanner, selectedMode, matchTimings, clearRobotReactionTimers, startRobotRest]);
+  }, [
+    scene,
+    resultBanner,
+    selectedMode,
+    trainingActive,
+    matchTimings,
+    clearRobotReactionTimers,
+    startRobotRest,
+  ]);
 
   useEffect(() => {
     if (scene === "RESULTS" || scene === "MATCH" || scene === "MODE") return;
@@ -5083,7 +5114,11 @@ function RPSDoodleAppInner(){
     setScene("MODE");
     navigateIfNeeded(MODES_ROUTE, { replace: false });
   }
-  function goToMatch(){ clearTimers(); startMatch(selectedMode ?? "practice"); }
+  function goToMatch(){
+    const modeToStart: Mode = trainingActive ? "training" : selectedMode ?? "practice";
+    clearTimers();
+    startMatch(modeToStart);
+  }
 
   // ---- Mode selection flow ----
   function beginModeTransition(mode: Mode): boolean {
@@ -7140,6 +7175,7 @@ function RPSDoodleAppInner(){
                           >
                             <option value="all">All</option>
                             <option value="practice">Practice</option>
+                            <option value="training">Training</option>
                             <option value="challenge">Challenge</option>
                           </select>
                         </label>
@@ -7255,9 +7291,9 @@ function RPSDoodleAppInner(){
                                   <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 ${outcomeStyle.badge}`}>
                                     {outcomeStyle.label}
                                   </span>
-                                  {round.mode === "practice" ? (
+                                  {round.mode === "practice" || round.mode === "training" ? (
                                     <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-600">
-                                      No score — Practice
+                                      {round.mode === "training" ? "Training run" : "No score — Practice"}
                                     </span>
                                   ) : (
                                     <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-600 capitalize">
@@ -7356,7 +7392,9 @@ function RPSDoodleAppInner(){
                                     <td className="px-3 py-2 text-xs text-slate-600">
                                       {round.mode === "practice"
                                         ? "Practice · No score — Practice"
-                                        : `${round.mode} · ${round.difficulty}`}
+                                        : round.mode === "training"
+                                          ? "Training · Training run"
+                                          : `${round.mode} · ${round.difficulty}`}
                                     </td>
                                     <td className="px-3 py-2 text-xs text-slate-600">{round.reason || "—"}</td>
                                     <td className="px-3 py-2 text-xs text-slate-500">
@@ -7376,7 +7414,8 @@ function RPSDoodleAppInner(){
                           </table>
                         </div>
                         <p className="text-xs text-slate-500">
-                          Practice rows show “No score — Practice.” Challenge rows list the mode and difficulty you faced.
+                          Practice and training rows show “No score” badges. Challenge rows list the mode and difficulty you
+                          faced.
                         </p>
                       </div>
                     )}

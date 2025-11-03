@@ -574,7 +574,7 @@ function DeltaBadge({ value }: { value: number | null }) {
   return <span style={{ color, fontWeight: 600 }}>{`${sign}${value.toFixed(0)}`}</span>;
 }
 
-const MODE_CHOICES: Mode[] = ["practice", "challenge"];
+const MODE_CHOICES: Mode[] = ["practice", "training", "challenge"];
 const DIFFICULTY_CHOICES: AIMode[] = ["fair", "normal", "ruthless"];
 
 function titleCase(value: string): string {

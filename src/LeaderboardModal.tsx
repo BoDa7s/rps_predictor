@@ -20,6 +20,7 @@ interface LeaderboardModalProps {
 const MODE_LABELS: Record<Mode, string> = {
   challenge: "Challenge",
   practice: "Practice",
+  training: "Training",
 };
 
 const DIFFICULTY_LABELS: Record<AIMode, string> = {

@@ -321,7 +321,7 @@ function saveModelStates(storage: Storage | null, states: StoredPredictorModelSt
 function migrateMatchRecords(matches: MatchSummary[]): { matches: MatchSummary[]; changed: boolean } {
   let changed = false;
   const migrated = matches.map(match => {
-    if (match.mode === "practice") {
+    if (match.mode === "practice" || match.mode === "training") {
       if (match.leaderboardType !== PRACTICE_LEGACY_TYPE) {
         changed = true;
         return { ...match, leaderboardType: PRACTICE_LEGACY_TYPE } satisfies MatchSummary;

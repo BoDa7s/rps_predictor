@@ -31,6 +31,15 @@ export const MATCH_TIMING_DEFAULTS: MatchTimings = {
     robotResultReactionMs: 10000,
     robotResultRestMs: 120000,
   },
+  training: {
+    countdownTickMs: 800,
+    revealHoldMs: 1600,
+    resultBannerMs: 1600,
+    robotRoundReactionMs: 10000,
+    robotRoundRestMs: 120000,
+    robotResultReactionMs: 10000,
+    robotResultRestMs: 120000,
+  },
 };
 
 const STORAGE_KEY = "rps_match_timings_v1";
@@ -85,6 +94,27 @@ export function normalizeMatchTimings(input: Partial<Record<Mode, Partial<ModeTi
       robotResultRestMs: sanitizeNumber(
         input.practice?.robotResultRestMs,
         MATCH_TIMING_DEFAULTS.practice.robotResultRestMs,
+      ),
+    },
+    training: {
+      countdownTickMs: sanitizeNumber(input.training?.countdownTickMs, MATCH_TIMING_DEFAULTS.training.countdownTickMs),
+      revealHoldMs: sanitizeNumber(input.training?.revealHoldMs, MATCH_TIMING_DEFAULTS.training.revealHoldMs),
+      resultBannerMs: sanitizeNumber(input.training?.resultBannerMs, MATCH_TIMING_DEFAULTS.training.resultBannerMs),
+      robotRoundReactionMs: sanitizeNumber(
+        input.training?.robotRoundReactionMs,
+        MATCH_TIMING_DEFAULTS.training.robotRoundReactionMs,
+      ),
+      robotRoundRestMs: sanitizeNumber(
+        input.training?.robotRoundRestMs,
+        MATCH_TIMING_DEFAULTS.training.robotRoundRestMs,
+      ),
+      robotResultReactionMs: sanitizeNumber(
+        input.training?.robotResultReactionMs,
+        MATCH_TIMING_DEFAULTS.training.robotResultReactionMs,
+      ),
+      robotResultRestMs: sanitizeNumber(
+        input.training?.robotResultRestMs,
+        MATCH_TIMING_DEFAULTS.training.robotResultRestMs,
       ),
     },
   };

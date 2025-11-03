@@ -28,6 +28,7 @@ function cloneTimings(value: MatchTimings): MatchTimings {
   return {
     challenge: { ...value.challenge },
     practice: { ...value.practice },
+    training: { ...value.training },
   };
 }
 
@@ -45,7 +46,7 @@ type TimingField = keyof MatchTimings["challenge"];
 
 function countTimingDifferences(base: MatchTimings, compare: MatchTimings): number {
   let changes = 0;
-  (["challenge", "practice"] as const).forEach(mode => {
+  (["challenge", "practice", "training"] as const).forEach(mode => {
     (Object.keys(base[mode]) as TimingField[]).forEach(field => {
       if (base[mode][field] !== compare[mode][field]) {
         changes += 1;
@@ -77,7 +78,7 @@ interface RoundSearchFilters {
   mode: string;
 }
 
-const MODE_OPTIONS: Mode[] = ["practice", "challenge"];
+const MODE_OPTIONS: Mode[] = ["practice", "training", "challenge"];
 const DIFFICULTY_OPTIONS: AIMode[] = ["fair", "normal", "ruthless"];
 const FILTER_DEFAULTS: ControlFilters = {
   playerId: null,
@@ -939,7 +940,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     handleSelectPlayer(null);
   }, [selectedPlayer, handlePlayerDelete, handleSelectPlayer]);
 
-  const handleTimingFieldChange = useCallback((mode: "challenge" | "practice", field: TimingField, raw: string) => {
+  const handleTimingFieldChange = useCallback((mode: Mode, field: TimingField, raw: string) => {
     const nextValue = Number.parseFloat(raw);
     setTimingDraft(prev => {
       if (!Number.isFinite(nextValue)) return prev;
@@ -1592,7 +1593,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
                         gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
                       }}
                     >
-                      {(["challenge", "practice"] as const).map(mode => (
+                      {(["challenge", "practice", "training"] as const).map(mode => (
                         <fieldset
                           key={mode}
                           style={{
