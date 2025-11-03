@@ -579,6 +579,8 @@ function sessionRowToCloudSession(row: SessionRow & { id: string }): CloudSessio
 }
 
 function sessionInputToRow(input: SessionUpsertInput): SessionRow {
+  const storageMode = input.storageMode ?? "cloud";
+
   return {
     id: input.id,
     user_id: input.userId,
@@ -586,7 +588,7 @@ function sessionInputToRow(input: SessionUpsertInput): SessionRow {
     primary_stats_profile_id: input.primaryStatsProfileId ?? null,
     device_id: input.deviceId ?? null,
     client_session_id: input.clientSessionId ?? null,
-    storage_mode: input.storageMode ?? null,
+    storage_mode: storageMode,
     started_at: input.startedAt,
     ended_at: input.endedAt ?? null,
     last_event_at: input.lastEventAt ?? null,
