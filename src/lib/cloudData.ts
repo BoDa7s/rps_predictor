@@ -73,6 +73,52 @@ export type DemographicsProfileUpsert = DemographicsProfileInsert;
 
 export type StatsProfileUpsert = StatsProfileInsert;
 
+function formatStatsProfileLineage(index: number): string {
+  const normalizedIndex = Number.isFinite(index) ? Math.max(1, Math.floor(index)) : 1;
+  return normalizedIndex <= 1 ? "Primary" : `Primary ${normalizedIndex}`;
+}
+
+function normalizeStatsProfileBaseName(value: Maybe<string>): string {
+  const input = (value ?? "").replace(/\s+v\d+$/i, "").trim();
+  if (!input) return "Primary";
+  const primaryMatch = input.match(/^primary(?:\s+(\d+))?$/i);
+  if (primaryMatch) {
+    const parsed = primaryMatch[1] ? Number.parseInt(primaryMatch[1], 10) : 1;
+    const lineageIndex = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+    return formatStatsProfileLineage(lineageIndex);
+  }
+  return input;
+}
+
+function makeStatsProfileDisplayName(baseName: string, version: number): string {
+  const normalizedBase = normalizeStatsProfileBaseName(baseName);
+  if (!Number.isFinite(version) || version <= 1) {
+    return normalizedBase;
+  }
+  const normalizedVersion = Math.max(1, Math.floor(version));
+  return `${normalizedBase} v${normalizedVersion}`;
+}
+
+function coercePositiveInteger(value: Maybe<number>, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const normalized = Math.floor(value);
+    if (normalized > 0) {
+      return normalized;
+    }
+  }
+  return fallback;
+}
+
+function coerceNonNegativeInteger(value: Maybe<number>, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const normalized = Math.floor(value);
+    if (normalized >= 0) {
+      return normalized;
+    }
+  }
+  return fallback;
+}
+
 export interface RoundInsertInput {
   round: RoundLog;
   roundNumber: number;
@@ -239,25 +285,67 @@ function statsProfileRowToStatsProfile(row: StatsProfileRow): StatsProfile | nul
 }
 
 function statsProfileToUpsert(profile: StatsProfile): StatsProfileUpsert {
-  return {
-    id: profile.id,
-    user_id: profile.user_id,
-    demographics_profile_id: profile.demographics_profile_id ?? null,
-    base_name: profile.base_name,
-    profile_version: profile.profile_version,
-    display_name: profile.display_name,
-    training_count: profile.training_count,
-    training_completed: profile.training_completed,
-    predictor_default: profile.predictor_default,
-    seen_post_training_cta: profile.seen_post_training_cta,
-    previous_profile_id: profile.previous_profile_id ?? null,
-    next_profile_id: profile.next_profile_id ?? null,
-    archived: profile.archived,
-    metadata: profile.metadata,
-    created_at: profile.created_at,
-    updated_at: profile.updated_at,
-    version: profile.version,
+  const userIdRaw = typeof profile.user_id === "string" ? profile.user_id : "";
+  const user_id = userIdRaw.trim();
+  if (!isSupabaseUuid(user_id)) {
+    throw new Error("Stats profile payload requires a valid user_id");
+  }
+
+  const statsProfileId = asUuid(profile.id ?? undefined);
+  const demographicsProfileId = asUuid(profile.demographics_profile_id ?? undefined);
+  const previousProfileId = asUuid(profile.previous_profile_id ?? undefined);
+  const nextProfileId = asUuid(profile.next_profile_id ?? undefined);
+
+  const baseNameInput =
+    typeof profile.base_name === "string" && profile.base_name.trim().length > 0
+      ? profile.base_name
+      : profile.display_name;
+  const base_name = normalizeStatsProfileBaseName(baseNameInput);
+
+  const profile_version = coercePositiveInteger(profile.profile_version, 1);
+  const display_name = (() => {
+    if (typeof profile.display_name === "string" && profile.display_name.trim().length > 0) {
+      return profile.display_name.trim();
+    }
+    return makeStatsProfileDisplayName(base_name, profile_version);
+  })();
+
+  const training_count = coerceNonNegativeInteger(profile.training_count, 0);
+  const metadata: StatsProfileUpsert["metadata"] =
+    profile.metadata && typeof profile.metadata === "object"
+      ? (profile.metadata as StatsProfileUpsert["metadata"])
+      : ({} as StatsProfileUpsert["metadata"]);
+  const version = coercePositiveInteger(profile.version, 1);
+
+  const payload: StatsProfileUpsert = {
+    user_id,
+    base_name,
+    profile_version,
+    display_name,
+    training_count,
+    training_completed: profile.training_completed === true,
+    predictor_default: profile.predictor_default === true,
+    seen_post_training_cta: profile.seen_post_training_cta === true,
+    archived: profile.archived === true,
+    metadata,
+    version,
   };
+
+  if (statsProfileId) {
+    payload.id = statsProfileId;
+    if (previousProfileId) {
+      payload.previous_profile_id = previousProfileId;
+    }
+    if (nextProfileId) {
+      payload.next_profile_id = nextProfileId;
+    }
+  }
+
+  if (demographicsProfileId === user_id) {
+    payload.demographics_profile_id = demographicsProfileId;
+  }
+
+  return payload;
 }
 
 function roundLogToRow({ round, roundNumber }: RoundInsertInput): RoundInsert {
