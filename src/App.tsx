@@ -3548,7 +3548,9 @@ function RPSDoodleAppInner(){
     }
 
     if (routeIsModes) {
-      if (scene !== "MODE" || selectedMode !== null || wipeRun) {
+      const launchingMode =
+        scene === "MODE" && selectedMode !== null && !escapeToModesRef.current;
+      if (!launchingMode && (scene !== "MODE" || selectedMode !== null || wipeRun)) {
         goToMode();
       }
       return;
