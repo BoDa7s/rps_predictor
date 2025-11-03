@@ -337,10 +337,22 @@ function loadProfiles(storage: Storage | null): StatsProfile[] {
     if (!Array.isArray(parsed)) return [];
     return parsed.map((item: StatsProfile | any) => {
       const fallbackName = typeof item?.name === "string" ? item.name : PRIMARY_BASE;
-      const base_name = normalizeBaseName(typeof item?.baseName === "string" ? item.baseName : fallbackName);
+      const baseNameSource =
+        typeof item?.base_name === "string"
+          ? item.base_name
+          : typeof item?.baseName === "string"
+            ? item.baseName
+            : fallbackName;
+      const base_name = normalizeBaseName(baseNameSource);
       const profile_version = (() => {
-        if (typeof item?.version === "number" && Number.isFinite(item.version)) {
-          return Math.max(1, Math.floor(item.version));
+        const rawVersion =
+          typeof item?.profile_version === "number" && Number.isFinite(item.profile_version)
+            ? item.profile_version
+            : typeof item?.version === "number" && Number.isFinite(item.version)
+              ? item.version
+              : null;
+        if (rawVersion !== null) {
+          return Math.max(1, Math.floor(rawVersion));
         }
         const match = fallbackName.match(/ v(\d+)$/i);
         if (match) {
@@ -349,37 +361,84 @@ function loadProfiles(storage: Storage | null): StatsProfile[] {
         }
         return 1;
       })();
-      const created_at =
-        typeof item?.createdAt === "string" ? item.createdAt : new Date().toISOString();
-      const updated_at = typeof item?.updated_at === "string" ? item.updated_at : created_at;
+      const created_at = (() => {
+        if (typeof item?.created_at === "string") return item.created_at;
+        if (typeof item?.createdAt === "string") return item.createdAt;
+        return new Date().toISOString();
+      })();
+      const updated_at = (() => {
+        if (typeof item?.updated_at === "string") return item.updated_at;
+        if (typeof item?.updatedAt === "string") return item.updatedAt;
+        return created_at;
+      })();
       const metadata =
         item && typeof item.metadata === "object" && item.metadata !== null ? item.metadata : {};
       const archived = item?.archived === true;
+      const training_count = (() => {
+        const candidate =
+          typeof item?.training_count === "number" && Number.isFinite(item.training_count)
+            ? item.training_count
+            : typeof item?.trainingCount === "number" && Number.isFinite(item.trainingCount)
+              ? item.trainingCount
+              : 0;
+        return Math.max(0, Math.floor(candidate));
+      })();
+      const training_completed = (() => {
+        if (typeof item?.training_completed === "boolean") {
+          return item.training_completed;
+        }
+        return item?.trained === true;
+      })();
+      const predictor_default = (() => {
+        if (typeof item?.predictor_default === "boolean") {
+          return item.predictor_default;
+        }
+        return item?.predictorDefault !== undefined ? Boolean(item.predictorDefault) : false;
+      })();
+      const seen_post_training_cta = (() => {
+        if (typeof item?.seen_post_training_cta === "boolean") {
+          return item.seen_post_training_cta;
+        }
+        return item?.seenPostTrainingCTA !== undefined ? Boolean(item.seenPostTrainingCTA) : false;
+      })();
       return {
         id: typeof item?.id === "string" ? item.id : makeId("profile"),
-        user_id: typeof item?.playerId === "string" ? item.playerId : "",
+        user_id:
+          typeof item?.user_id === "string"
+            ? item.user_id
+            : typeof item?.playerId === "string"
+              ? item.playerId
+              : "",
         demographics_profile_id:
-          typeof item?.demographics_profile_id === "string" ? item.demographics_profile_id : null,
+          typeof item?.demographics_profile_id === "string"
+            ? item.demographics_profile_id
+            : typeof item?.demographicsProfileId === "string"
+              ? item.demographicsProfileId
+              : null,
         base_name,
         profile_version,
         display_name: makeProfileDisplayName(base_name, profile_version),
-        training_count: typeof item?.trainingCount === "number" ? item.trainingCount : 0,
-        training_completed: item?.trained === true,
-        predictor_default:
-          item?.predictorDefault !== undefined ? Boolean(item.predictorDefault) : false,
-        seen_post_training_cta:
-          item?.seenPostTrainingCTA !== undefined ? Boolean(item.seenPostTrainingCTA) : false,
+        training_count,
+        training_completed,
+        predictor_default,
+        seen_post_training_cta,
         previous_profile_id:
-          typeof item?.previousProfileId === "string" ? item.previousProfileId : null,
-        next_profile_id: typeof item?.nextProfileId === "string" ? item.nextProfileId : null,
+          typeof item?.previous_profile_id === "string"
+            ? item.previous_profile_id
+            : typeof item?.previousProfileId === "string"
+              ? item.previousProfileId
+              : null,
+        next_profile_id:
+          typeof item?.next_profile_id === "string"
+            ? item.next_profile_id
+            : typeof item?.nextProfileId === "string"
+              ? item.nextProfileId
+              : null,
         archived,
         metadata,
         created_at,
         updated_at,
-        version:
-          typeof item?.version === "number" && Number.isFinite(item.version)
-            ? Math.max(1, Math.floor(item.version))
-            : 1,
+        version: profile_version,
       } satisfies StatsProfile;
     });
   } catch (err) {
