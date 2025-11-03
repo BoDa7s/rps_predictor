@@ -24,7 +24,10 @@ declare module "@supabase/supabase-js" {
   }
 
   export interface SupabaseQueryBuilder {
-    upsert(values: Record<string, unknown>): Promise<{ error: unknown }>;
+    upsert(
+      values: Record<string, unknown> | Record<string, unknown>[],
+      options?: { onConflict?: string },
+    ): Promise<{ error: unknown }>;
     select(columns: string): SupabaseQueryBuilder;
     eq(column: string, value: unknown): SupabaseQueryBuilder;
     order(column: string, options?: { ascending?: boolean }): SupabaseQueryBuilder;
