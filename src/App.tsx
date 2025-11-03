@@ -1538,6 +1538,10 @@ function RPSDoodleAppInner(){
     if (normalizedPathname === PRACTICE_ROUTE) return "practice";
     return null;
   }, [normalizedPathname]);
+  const initialRouteModeRef = useRef<Mode | null>(null);
+  if (initialRouteModeRef.current === null && routeMode) {
+    initialRouteModeRef.current = routeMode;
+  }
   const routeIsModes = normalizedPathname === MODES_ROUTE;
   const routeIsTraining = normalizedPathname === TRAINING_ROUTE;
   const routeIsWelcome = normalizedPathname === WELCOME_ROUTE;
@@ -3428,7 +3432,15 @@ function RPSDoodleAppInner(){
     }
 
     setForceTrainingPrompt(false);
-    navigateIfNeeded(MODES_ROUTE);
+    const requestedMode = initialRouteModeRef.current;
+    const canLaunchRequestedMode =
+      requestedMode !== null && (requestedMode !== "challenge" || predictorMode);
+    if (canLaunchRequestedMode) {
+      navigateIfNeeded(modeToRoute(requestedMode));
+    } else {
+      navigateIfNeeded(MODES_ROUTE);
+    }
+    initialRouteModeRef.current = null;
     setScene("MODE");
     finish();
   }, [
@@ -3444,6 +3456,7 @@ function RPSDoodleAppInner(){
     applyRebootResumeState,
     setBootNext,
     navigateIfNeeded,
+    predictorMode,
   ]);
 
   useEffect(() => {
@@ -3541,11 +3554,11 @@ function RPSDoodleAppInner(){
       }
       const inActiveMatch =
         selectedMode === routeMode && (scene === "MATCH" || scene === "RESULTS");
-      const launching = scene === "MODE" && selectedMode === routeMode && wipeRun;
+      const launching = scene === "MODE" && selectedMode === routeMode;
       if (inActiveMatch || launching) {
         return;
       }
-      if (scene !== "MODE" || selectedMode !== null) {
+      if (scene !== "MODE" || (selectedMode !== null && selectedMode !== routeMode)) {
         goToMode();
       }
       beginModeTransition(routeMode);
