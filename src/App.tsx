@@ -3495,46 +3495,12 @@ function RPSDoodleAppInner(){
     setForceTrainingPrompt,
   ]);
 
-  const desiredPath = useMemo(() => {
-    if (escapeToModesRef.current) {
-      return MODES_ROUTE;
-    }
-    if (scene === "BOOT") {
-      return routeIsBoot ? normalizedPathname : BOOT_ROUTE;
-    }
-    if (welcomeActive) {
-      return WELCOME_ROUTE;
-    }
-    if (trainingActive || needsTraining) {
-      return TRAINING_ROUTE;
-    }
-    if (scene === "MODE") {
-      if (selectedMode) {
-        return modeToRoute(selectedMode);
-      }
-      if (routeMode) {
-        return modeToRoute(routeMode);
-      }
-      return MODES_ROUTE;
-    }
-    if (scene === "MATCH" || scene === "RESULTS") {
-      return modeToRoute(selectedMode ?? routeMode ?? "practice");
-    }
-    return MODES_ROUTE;
-  }, [
-    scene,
-    welcomeActive,
-    trainingActive,
-    needsTraining,
-    selectedMode,
-    routeMode,
-    routeIsBoot,
-    normalizedPathname,
-  ]);
-
-  useEffect(() => {
-    navigateIfNeeded(desiredPath);
-  }, [desiredPath, navigateIfNeeded]);
+  const updateRouteForMode = useCallback(
+    (mode: Mode) => {
+      navigateIfNeeded(modeToRoute(mode), { replace: false });
+    },
+    [navigateIfNeeded],
+  );
 
   useEffect(() => {
     if (normalizedPathname === MODES_ROUTE && escapeToModesRef.current) {
@@ -5089,6 +5055,7 @@ function RPSDoodleAppInner(){
     setWipeRun(false);
     setSelectedMode(null);
     setScene("MODE");
+    navigateIfNeeded(MODES_ROUTE, { replace: false });
   }
   function goToMatch(){ clearTimers(); startMatch(selectedMode ?? "practice"); }
 
@@ -5122,7 +5089,9 @@ function RPSDoodleAppInner(){
     return true;
   }
   function handleModeSelect(mode: Mode){
-    beginModeTransition(mode);
+    if (beginModeTransition(mode)) {
+      updateRouteForMode(mode);
+    }
   }
   function startSceneWipe(mode: Mode){
     setWipeRun(true);
