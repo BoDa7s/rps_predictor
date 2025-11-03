@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { AIMode, BestOf, Mode, Move, Outcome } from "./gameTypes";
 import { usePlayers } from "./players";
 import { usePlayMode, type PlayMode } from "./lib/playMode";
-import { cloudDataService, type MatchRecord, type RoundRecord } from "./lib/cloudData";
+import { cloudDataService, isSupabaseUuid, type MatchRecord, type RoundRecord } from "./lib/cloudData";
 
 export type SerializedExpertState =
   | { type: "FrequencyExpert"; window: number; alpha: number }
@@ -591,7 +591,23 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   const sessionOwnerRef = useRef<string | null>(null);
   const clientSessionIdRef = useRef<string>("");
   const seededMatchIdsRef = useRef<Set<string>>(new Set());
-  const { currentPlayerId, currentPlayer } = usePlayers();
+  const missingCloudUserWarnedRef = useRef(false);
+  const { currentPlayerId: rawCurrentPlayerId, currentPlayer } = usePlayers();
+  const currentPlayerId = useMemo(() => {
+    if (!isCloudMode) {
+      missingCloudUserWarnedRef.current = false;
+      return rawCurrentPlayerId;
+    }
+    if (isSupabaseUuid(rawCurrentPlayerId)) {
+      missingCloudUserWarnedRef.current = false;
+      return rawCurrentPlayerId;
+    }
+    if (rawCurrentPlayerId && !missingCloudUserWarnedRef.current) {
+      console.warn("Cloud stats unavailable: Supabase user ID is not ready yet");
+      missingCloudUserWarnedRef.current = true;
+    }
+    return null;
+  }, [isCloudMode, rawCurrentPlayerId]);
 
   const ensureSession = useCallback((): string | null => {
     if (!clientSessionIdRef.current) {
@@ -1056,6 +1072,10 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     (playerIdOverride?: string) => {
       const targetPlayerId = playerIdOverride ?? currentPlayerId;
       if (!targetPlayerId) return null;
+      if (isCloudMode && !isSupabaseUuid(targetPlayerId)) {
+        console.warn("Cannot create cloud stats profile until Supabase user ID is available");
+        return null;
+      }
       const targetProfiles = profiles.filter(profile => profile.playerId === targetPlayerId);
       const highestVersion = targetProfiles.reduce(
         (max, profile) => Math.max(max, typeof profile.version === "number" ? profile.version : 1),

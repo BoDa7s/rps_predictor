@@ -19,6 +19,10 @@ function asUuid(value: Maybe<string>): string | undefined {
   return UUID_PATTERN.test(trimmed) ? trimmed : undefined;
 }
 
+export function isSupabaseUuid(value: Maybe<string>): value is string {
+  return Boolean(asUuid(value));
+}
+
 function isGrade(value: Maybe<string>): value is Grade {
   if (!value) return false;
   return GRADE_OPTIONS.includes(value as Grade);
