@@ -1528,13 +1528,19 @@ function RPSDoodleAppInner(){
   const { players, currentPlayer, hasConsented, createPlayer, updatePlayer, setCurrentPlayer } = usePlayers();
   const location = useLocation();
   const navigate = useNavigate();
+  const normalizePathname = useCallback((value: string) => {
+    if (value === "/") return "/";
+    return value.replace(/\/+$/, "") || "/";
+  }, []);
+
   const navigateIfNeeded = useCallback(
     (target: string, options: { replace?: boolean } = { replace: true }) => {
-      const nextPath = target;
-      if (location.pathname === nextPath) return;
+      const nextPath = normalizePathname(target);
+      const currentPath = normalizePathname(location.pathname);
+      if (currentPath === nextPath) return;
       navigate(nextPath, { replace: options.replace ?? true });
     },
-    [location.pathname, navigate],
+    [location.pathname, navigate, normalizePathname],
   );
   const initialWelcomePreferenceRef = useRef<WelcomePreference | null>(null);
   if (initialWelcomePreferenceRef.current === null) {
@@ -4980,6 +4986,13 @@ function RPSDoodleAppInner(){
     clearCountdown();
     clearTimers();
     resetMatch();
+    closeInsightPanel({ restoreFocus: false, persistPreference: false, announce: null });
+    setStatsOpen(false);
+    setLeaderboardOpen(false);
+    setSettingsOpen(false);
+    setHelpCenterOpen(false);
+    setHelpGuideOpen(false);
+    setDeveloperOpen(false);
     setWipeRun(false);
     setSelectedMode(null);
     setScene("MODE");
