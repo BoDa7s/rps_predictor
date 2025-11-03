@@ -2596,14 +2596,24 @@ function RPSDoodleAppInner(){
   const postTrainingLockActive = postTrainingCtaOpen;
 
   const acknowledgePostTrainingCta = useCallback(() => {
-    if (!postTrainingCtaOpen) return false;
-    setPostTrainingCtaOpen(false);
-    setPostTrainingCtaAcknowledged(true);
-    if (currentProfile && !currentProfile.seenPostTrainingCTA) {
-      updateStatsProfile(currentProfile.id, { seenPostTrainingCTA: true });
+    const wasOpen = postTrainingCtaOpen;
+    const wasAcknowledged = postTrainingCtaAcknowledged;
+    if (wasOpen) {
+      setPostTrainingCtaOpen(false);
     }
-    return true;
-  }, [currentProfile, postTrainingCtaOpen, updateStatsProfile]);
+    if (!wasAcknowledged) {
+      setPostTrainingCtaAcknowledged(true);
+      if (currentProfile && !currentProfile.seenPostTrainingCTA) {
+        updateStatsProfile(currentProfile.id, { seenPostTrainingCTA: true });
+      }
+    }
+    return wasOpen || !wasAcknowledged;
+  }, [
+    currentProfile,
+    postTrainingCtaAcknowledged,
+    postTrainingCtaOpen,
+    updateStatsProfile,
+  ]);
 
   const handleEnablePredictorForChallenge = useCallback(() => {
     if (predictorMode) return;
@@ -2936,6 +2946,7 @@ function RPSDoodleAppInner(){
       setOutcome(undefined);
       setResultBanner(null);
       setSelectedMode(null);
+      initialRouteModeRef.current = null;
       setWipeRun(false);
       setPlayerScore(0);
       setAiScore(0);
@@ -3041,6 +3052,7 @@ function RPSDoodleAppInner(){
       setWipeRun,
       setLive,
       navigateIfNeeded,
+      initialRouteModeRef,
     ],
   );
 
@@ -5058,7 +5070,7 @@ function RPSDoodleAppInner(){
       showChallengeNeedsPredictorPrompt();
       return false;
     }
-    if (postTrainingCtaOpen) {
+    if (postTrainingCtaOpen || !postTrainingCtaAcknowledged) {
       acknowledgePostTrainingCta();
     }
     const alreadyActive = selectedMode === mode && (scene === "MATCH" || scene === "RESULTS");
