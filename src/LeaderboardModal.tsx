@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { useStats } from "./stats";
 import { usePlayers } from "./players";
 import { AIMode, Mode } from "./gameTypes";
+import { usePlayMode } from "./lib/playMode";
 import {
   aggregateLeaderboardEntries,
   collectLeaderboardEntries,
@@ -48,6 +49,7 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
   const modalRef = useRef<HTMLDivElement | null>(null);
   const { adminMatches, adminRounds } = useStats();
   const { players } = usePlayers();
+  const { mode: playMode } = usePlayMode();
 
   useEffect(() => {
     if (!open) return;
@@ -96,6 +98,10 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
   );
 
   const showEmptyState = rowsToDisplay.length === 0;
+  const subtitle =
+    playMode === "cloud"
+      ? "Best challenge scores saved to your cloud account."
+      : "Best match scores on this device.";
 
   if (!open) return null;
 
@@ -123,7 +129,7 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-2xl font-bold">Leaderboard</h2>
-              <p className="text-sm text-slate-200">Best match scores on this device.</p>
+              <p className="text-sm text-slate-200">{subtitle}</p>
             </div>
             <button
               onClick={onClose}
