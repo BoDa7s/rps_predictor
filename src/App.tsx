@@ -3456,6 +3456,21 @@ function RPSDoodleAppInner(){
     navigateIfNeeded,
   ]);
 
+  useEffect(() => {
+    if (location.pathname !== MODES_ROUTE) return;
+    if (scene === "MODE") return;
+    if (scene === "BOOT") return;
+    if (welcomeActive) return;
+    if (trainingActive || needsTraining) return;
+    goToMode();
+  }, [
+    location.pathname,
+    scene,
+    welcomeActive,
+    trainingActive,
+    needsTraining,
+  ]);
+
   const statsTabs = [
     { key: "overview", label: "Overview" },
     { key: "rounds", label: "Rounds" },
