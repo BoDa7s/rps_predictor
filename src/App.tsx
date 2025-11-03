@@ -1584,6 +1584,8 @@ function RPSDoodleAppInner(){
   const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
   const toastReaderCloseRef = useRef<HTMLButtonElement | null>(null);
   const wasSettingsOpenRef = useRef(false);
+  const timersRef = useRef<number[]>([]);
+  const escapeToModesRef = useRef(false);
   const [roundPage, setRoundPage] = useState(0);
   const decisionTraceRef = useRef<PendingDecision | null>(null);
   const aiStreakRef = useRef(0);
@@ -5029,8 +5031,6 @@ function RPSDoodleAppInner(){
   function tryVibrate(ms:number){ if ((navigator as any).vibrate) (navigator as any).vibrate(ms); }
   function bannerColor(){ if (resultBanner === "Victory") return "bg-green-500"; if (resultBanner === "Defeat") return "bg-rose-500"; return "bg-amber-500"; }
   // navigation + timer guards to avoid stuck overlays when returning to MODE
-  const timersRef = useRef<number[]>([]);
-  const escapeToModesRef = useRef(false);
   const addT = (fn:()=>void, ms:number)=>{ const id = window.setTimeout(fn, ms); timersRef.current.push(id); return id; };
   const clearTimers = ()=>{ timersRef.current.forEach(id=> clearTimeout(id)); timersRef.current = []; };
   function goToMode(){
