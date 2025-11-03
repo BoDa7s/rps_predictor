@@ -5083,14 +5083,10 @@ function RPSDoodleAppInner(){
     addT(() => {
       audio.whooshShort();
     }, 140);
-    const modeLaunchDelay = reduceMotion ? 0 : 140;
-    if (modeLaunchDelay <= 0) {
+    const graphicBudget = 1400;
+    addT(() => {
       startSceneWipe(mode);
-    } else {
-      addT(() => {
-        startSceneWipe(mode);
-      }, modeLaunchDelay);
-    }
+    }, graphicBudget);
     return true;
   }
   function handleModeSelect(mode: Mode){
