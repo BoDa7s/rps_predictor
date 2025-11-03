@@ -292,7 +292,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     () =>
       players
         .map(player => {
-          const relatedProfiles = adminProfiles.filter(profile => profile.playerId === player.id);
+          const relatedProfiles = adminProfiles.filter(profile => profile.user_id === player.id);
           const relatedMatches = adminMatches.filter(match => match.playerId === player.id);
           const relatedRounds = adminRounds.filter(round => round.playerId === player.id);
           let lastPlayed: string | null = null;
@@ -373,10 +373,10 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
             filters.playerId,
             filters.profileId ?? null,
             selectedPlayer?.playerName ?? null,
-            selectedProfile?.name ?? null,
+            selectedProfile?.display_name ?? null,
           )
         : null,
-    [filters.playerId, filters.profileId, selectedPlayer?.playerName, selectedProfile?.name],
+    [filters.playerId, filters.profileId, selectedPlayer?.playerName, selectedProfile?.display_name],
   );
   const autoCaptureEnabled = useAutoCapture(instrumentationScope);
   const handleLiveStatusChange = useCallback((status: { running: boolean; label: string | null }) => {
@@ -391,13 +391,13 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
   );
   const jumpProfileOptions = useMemo(() => {
     if (!jumpSelection.playerId) return [] as StatsProfile[];
-    return adminProfiles.filter(profile => profile.playerId === jumpSelection.playerId);
+    return adminProfiles.filter(profile => profile.user_id === jumpSelection.playerId);
   }, [jumpSelection.playerId, adminProfiles]);
   const overrideDisplay = useMemo(() => {
     if (!overrideState) return null;
     const playerName = playerMap.get(overrideState.active.playerId)?.playerName ?? "Unknown player";
     const profileLabel = overrideState.active.profileId
-      ? profileMap.get(overrideState.active.profileId)?.name ?? overrideState.active.profileId
+      ? profileMap.get(overrideState.active.profileId)?.display_name ?? overrideState.active.profileId
       : "Default profile";
     return `${playerName} • ${profileLabel}`;
   }, [overrideState, playerMap, profileMap]);
@@ -415,7 +415,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     : null;
   const jumpSelectedProfileName = jumpSelection.playerId
     ? jumpSelection.profileId
-      ? profileMap.get(jumpSelection.profileId)?.name ?? "Unknown profile"
+      ? profileMap.get(jumpSelection.profileId)?.display_name ?? "Unknown profile"
       : "Default profile"
     : null;
   const timingConfirmTitle =
@@ -446,16 +446,16 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
       setPendingProfileSelection(null);
       return;
     }
-    if (profile.playerId !== currentPlayerId) return;
+    if (profile.user_id !== currentPlayerId) return;
     selectProfile(pendingProfileSelection);
     setPendingProfileSelection(null);
   }, [pendingProfileSelection, profileMap, currentPlayerId, selectProfile, ready]);
 
   const profilesForList = useMemo(() => {
     const scopedProfiles = filters.playerId
-      ? adminProfiles.filter(profile => profile.playerId === filters.playerId)
+      ? adminProfiles.filter(profile => profile.user_id === filters.playerId)
       : adminProfiles;
-    return scopedProfiles.slice().sort((a, b) => a.name.localeCompare(b.name));
+    return scopedProfiles.slice().sort((a, b) => a.display_name.localeCompare(b.display_name));
   }, [adminProfiles, filters.playerId]);
 
   const filteredMatches = useMemo(() => {
@@ -480,7 +480,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
         const playerName = playerMap.get(match.playerId)?.playerName?.toLowerCase() ?? "";
         if (playerTerm && !playerName.includes(playerTerm)) return false;
 
-        const profileName = profileMap.get(match.profileId)?.name?.toLowerCase() ?? "";
+        const profileName = profileMap.get(match.profileId)?.display_name?.toLowerCase() ?? "";
         if (profileTerm && !profileName.includes(profileTerm)) return false;
 
         if (modeTerm && !match.mode.toLowerCase().includes(modeTerm)) return false;
@@ -609,7 +609,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
   useEffect(() => {
     if (!filters.profileId) return;
     const profile = profileMap.get(filters.profileId);
-    if (!profile || (filters.playerId && profile.playerId !== filters.playerId)) {
+    if (!profile || (filters.playerId && profile.user_id !== filters.playerId)) {
       setFilters(prev => ({
         ...prev,
         profileId: null,
@@ -655,7 +655,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
         ...prev,
         playerId,
         profileId:
-          playerId && prev.profileId && profileMap.get(prev.profileId)?.playerId === playerId ? prev.profileId : null,
+          playerId && prev.profileId && profileMap.get(prev.profileId)?.user_id === playerId ? prev.profileId : null,
         dateRange: { ...prev.dateRange },
       }));
       setRoundMatchFilter(null);
@@ -682,7 +682,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
       if (!profile) return;
       setFilters(prev => ({
         ...prev,
-        playerId: profile.playerId,
+        playerId: profile.user_id,
         profileId: profile.id,
         dateRange: { ...prev.dateRange },
       }));
@@ -781,7 +781,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     setJumpSelection(prev => ({
       playerId: playerId || null,
       profileId:
-        prev.profileId && profileMap.get(prev.profileId)?.playerId === playerId ? prev.profileId : null,
+        prev.profileId && profileMap.get(prev.profileId)?.user_id === playerId ? prev.profileId : null,
     }));
   }, [profileMap]);
 
@@ -801,7 +801,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     if (!jumpSelection.playerId) return;
     const targetPlayerId = jumpSelection.playerId;
     const profileCandidate =
-      jumpSelection.profileId && profileMap.get(jumpSelection.profileId)?.playerId === targetPlayerId
+      jumpSelection.profileId && profileMap.get(jumpSelection.profileId)?.user_id === targetPlayerId
         ? jumpSelection.profileId
         : null;
     const originPlayerId = overrideState?.origin.playerId ?? currentPlayerId ?? null;
@@ -843,7 +843,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     if (!selectedPlayer || typeof window === "undefined") return;
     const payload = {
       player: selectedPlayer,
-      profiles: adminProfiles.filter(profile => profile.playerId === selectedPlayer.id),
+      profiles: adminProfiles.filter(profile => profile.user_id === selectedPlayer.id),
       matches: adminMatches.filter(match => match.playerId === selectedPlayer.id),
       rounds: adminRounds.filter(round => round.playerId === selectedPlayer.id),
     };
@@ -858,33 +858,41 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
       matches: adminMatches.filter(match => match.profileId === selectedProfile.id),
       rounds: adminRounds.filter(round => round.profileId === selectedProfile.id),
     };
-    const filename = `${makeSlug(selectedProfile.name || "profile")}_profile.json`;
+    const filename = `${makeSlug(selectedProfile.display_name || "profile")}_profile.json`;
     downloadJson(filename, payload);
   }, [selectedProfile, adminMatches, adminRounds]);
 
   const handleResetProfileTraining = useCallback(async () => {
     if (!selectedProfile) return;
     if (typeof window !== "undefined" && !window.confirm("Reset training progress for this profile?")) return;
-    updateProfile(selectedProfile.id, { trainingCount: 0, trained: false });
+    updateProfile(selectedProfile.id, { training_count: 0, training_completed: false });
     await recordAudit({ action: "reset-profile-training", target: selectedProfile.id });
   }, [selectedProfile, updateProfile, recordAudit]);
 
   const handleRenameProfile = useCallback(async () => {
     if (!selectedProfile) return;
     if (typeof window === "undefined") return;
-    const nextName = window.prompt("Rename profile", selectedProfile.name);
+    const nextName = window.prompt("Rename profile", selectedProfile.display_name);
     if (!nextName) return;
     const trimmed = nextName.trim();
-    if (!trimmed || trimmed === selectedProfile.name) return;
-    updateProfile(selectedProfile.id, { name: trimmed });
-    await recordAudit({ action: "rename-profile", target: selectedProfile.id, notes: JSON.stringify({ name: trimmed }) });
+    if (!trimmed || trimmed === selectedProfile.display_name) return;
+    updateProfile(selectedProfile.id, { display_name: trimmed });
+    await recordAudit({
+      action: "rename-profile",
+      target: selectedProfile.id,
+      notes: JSON.stringify({ name: trimmed }),
+    });
   }, [selectedProfile, updateProfile, recordAudit]);
 
   const handleCreateProfileForPlayer = useCallback(async () => {
     if (!selectedPlayer) return;
     const created = createProfile(selectedPlayer.id);
     if (!created) return;
-    await recordAudit({ action: "create-profile", target: created.id, notes: JSON.stringify({ playerId: created.playerId }) });
+    await recordAudit({
+      action: "create-profile",
+      target: created.id,
+      notes: JSON.stringify({ playerId: created.user_id }),
+    });
     handleSelectProfile(created.id);
   }, [selectedPlayer, createProfile, recordAudit, handleSelectProfile]);
 
@@ -1187,7 +1195,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
                   <option value="">Auto-select default profile</option>
                   {jumpProfileOptions.map(profile => (
                     <option key={profile.id} value={profile.id}>
-                      {profile.name}
+                      {profile.display_name}
                     </option>
                   ))}
                 </select>
@@ -1557,7 +1565,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
                   difficultyFilter={filters.difficulty}
                   dateRange={filters.dateRange}
                   playerName={selectedPlayer?.playerName ?? null}
-                  profileName={selectedProfile?.name ?? null}
+                  profileName={selectedProfile?.display_name ?? null}
                   source={instrumentationSource}
                   onSourceChange={setInstrumentationSource}
                   autoCaptureEnabled={autoCaptureEnabled}
@@ -1828,7 +1836,7 @@ function ContextHeader({
     chips.push({ key: "player", label: `Player: ${player.playerName} (${player.grade})`, onClear: onClearPlayer });
   }
   if (profile) {
-    chips.push({ key: "profile", label: `Profile: ${profile.name}`, onClear: onClearProfile });
+    chips.push({ key: "profile", label: `Profile: ${profile.display_name}`, onClear: onClearProfile });
   }
   if (filters.mode) {
     chips.push({ key: "mode", label: `Mode: ${capitalize(filters.mode)}`, onClear: onClearMode });
@@ -1983,7 +1991,7 @@ function FilterBar({
             <option value="">All profiles</option>
             {profileOptions.map(option => (
               <option key={option.id} value={option.id}>
-                {option.name}
+                {option.display_name}
               </option>
             ))}
           </select>
@@ -2209,7 +2217,7 @@ function ProfilesPanel({ profiles, summaries, selectedProfileId, onSelect, playe
           profiles.map(profile => {
             const selected = profile.id === selectedProfileId;
             const summary = summaries.get(profile.id);
-            const owner = playerMap.get(profile.playerId);
+            const owner = playerMap.get(profile.user_id);
             return (
               <button
                 key={profile.id}
@@ -2228,7 +2236,7 @@ function ProfilesPanel({ profiles, summaries, selectedProfileId, onSelect, playe
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
                   <div>
-                    <strong style={{ fontSize: "0.95rem" }}>{profile.name}</strong>
+                    <strong style={{ fontSize: "0.95rem" }}>{profile.display_name}</strong>
                     <div style={{ fontSize: "0.75rem", opacity: 0.7 }}>
                       {owner ? `Player: ${owner.playerName}` : "Unassigned"}
                     </div>
@@ -2353,9 +2361,9 @@ function ContextSummary({
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
             <div>
-              <h3 style={{ margin: 0 }}>{profile.name}</h3>
+              <h3 style={{ margin: 0 }}>{profile.display_name}</h3>
               <p style={{ margin: 0, fontSize: "0.75rem", opacity: 0.7 }}>
-                Training {profile.trained ? "complete" : `${profile.trainingCount}/10`}
+                Training {profile.training_completed ? "complete" : `${profile.training_count}/10`}
               </p>
             </div>
             <CopyIdButton id={profile.id} />
@@ -2539,7 +2547,7 @@ function MatchesSection({
               matches.map(match => {
                 const selected = match.id === selectedMatchId;
                 const playerName = playerMap.get(match.playerId)?.playerName ?? match.playerId;
-                const profileName = profileMap.get(match.profileId)?.name ?? match.profileId;
+                const profileName = profileMap.get(match.profileId)?.display_name ?? match.profileId;
                 return (
                   <tr
                     key={match.id}
@@ -2873,7 +2881,7 @@ function RoundsSection({
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", opacity: 0.85 }}>
             <span>Player: {playerMap.get(focusedRound.playerId)?.playerName ?? focusedRound.playerId}</span>
-            <span>Profile: {profileMap.get(focusedRound.profileId)?.name ?? focusedRound.profileId}</span>
+            <span>Profile: {profileMap.get(focusedRound.profileId)?.display_name ?? focusedRound.profileId}</span>
             <span>Outcome: {capitalize(focusedRound.outcome)}</span>
             <span>Player move: {formatMove(focusedRound.player)}</span>
             <span>AI move: {formatMove(focusedRound.ai)}</span>
@@ -3051,7 +3059,7 @@ function resolveAuditTarget(
   }
   if (lowered.includes("profile")) {
     const entity = maps.profileMap.get(target);
-    return { label: entity ? entity.name : target, id: target };
+    return { label: entity ? entity.display_name : target, id: target };
   }
   if (lowered.includes("match")) {
     const entity = maps.matchMap.get(target);

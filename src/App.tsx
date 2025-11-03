@@ -2298,9 +2298,9 @@ function RPSDoodleAppInner(){
       playerId: currentPlayer?.id ?? null,
       playerName: currentPlayer?.playerName ?? null,
       profileId: currentProfile?.id ?? null,
-      profileName: currentProfile?.name ?? null,
+      profileName: currentProfile?.display_name ?? null,
     });
-  }, [currentPlayer?.id, currentPlayer?.playerName, currentProfile?.id, currentProfile?.name]);
+  }, [currentPlayer?.id, currentPlayer?.playerName, currentProfile?.id, currentProfile?.display_name]);
   useEffect(() => {
     if (!toastMessage) return;
     if (toastReaderOpen) return;
@@ -2586,17 +2586,17 @@ function RPSDoodleAppInner(){
     };
   }, [scene, welcomeActive, hasConsented, currentProfile]);
 
-  const [predictorMode, setPredictorMode] = useState<boolean>(currentProfile?.predictorDefault ?? false);
+  const [predictorMode, setPredictorMode] = useState<boolean>(currentProfile?.predictor_default ?? false);
   const [aiMode, setAiMode] = useState<AIMode>("normal");
   const [difficultyHint, setDifficultyHint] = useState<string>(DIFFICULTY_INFO["normal"].helper);
   const TRAIN_ROUNDS = 10;
-  const trainingCount = currentProfile?.trainingCount ?? 0;
-  const isTrained = currentProfile?.trained ?? false;
+  const trainingCount = currentProfile?.training_count ?? 0;
+  const isTrained = currentProfile?.training_completed ?? false;
   const previousTrainingCountRef = useRef(trainingCount);
   const [trainingCalloutQueue, setTrainingCalloutQueue] = useState<string[]>([]);
   const [postTrainingCtaOpen, setPostTrainingCtaOpen] = useState(false);
   const [postTrainingCtaAcknowledged, setPostTrainingCtaAcknowledged] = useState(
-    currentProfile?.seenPostTrainingCTA ?? false,
+    currentProfile?.seen_post_training_cta ?? false,
   );
   const welcomeSlideCount = 0;
   const showMainUi = !welcomeActive && scene !== "BOOT";
@@ -2617,8 +2617,8 @@ function RPSDoodleAppInner(){
     }
     if (!wasAcknowledged) {
       setPostTrainingCtaAcknowledged(true);
-      if (currentProfile && !currentProfile.seenPostTrainingCTA) {
-        updateStatsProfile(currentProfile.id, { seenPostTrainingCTA: true });
+      if (currentProfile && !currentProfile.seen_post_training_cta) {
+        updateStatsProfile(currentProfile.id, { seen_post_training_cta: true });
       }
     }
     return wasOpen || !wasAcknowledged;
@@ -2633,20 +2633,20 @@ function RPSDoodleAppInner(){
     if (predictorMode) return;
     setPredictorMode(true);
     if (currentProfile) {
-      updateStatsProfile(currentProfile.id, { predictorDefault: true });
+      updateStatsProfile(currentProfile.id, { predictor_default: true });
     }
     setLive("AI predictor enabled. Challenge unlocked.");
   }, [currentProfile, predictorMode, setLive, updateStatsProfile]);
 
   useEffect(() => {
-    setPostTrainingCtaAcknowledged(currentProfile?.seenPostTrainingCTA ?? false);
+    setPostTrainingCtaAcknowledged(currentProfile?.seen_post_training_cta ?? false);
   }, [currentProfile?.id]);
 
   useEffect(() => {
-    if (currentProfile?.seenPostTrainingCTA && !postTrainingCtaAcknowledged) {
+    if (currentProfile?.seen_post_training_cta && !postTrainingCtaAcknowledged) {
       setPostTrainingCtaAcknowledged(true);
     }
-  }, [currentProfile?.seenPostTrainingCTA, postTrainingCtaAcknowledged]);
+  }, [currentProfile?.seen_post_training_cta, postTrainingCtaAcknowledged]);
 
   useEffect(() => {
     if (scene !== "MATCH") {
@@ -2938,7 +2938,7 @@ function RPSDoodleAppInner(){
       }
       setPredictorMode(checked);
       if (currentProfile) {
-        updateStatsProfile(currentProfile.id, { predictorDefault: checked });
+        updateStatsProfile(currentProfile.id, { predictor_default: checked });
       }
     },
     [currentProfile, scene, selectedMode, showModernToast, updateStatsProfile],
@@ -3353,9 +3353,9 @@ function RPSDoodleAppInner(){
       if (predictorMode) setPredictorMode(false);
       return;
     }
-    const preferred = currentProfile?.predictorDefault ?? false;
+    const preferred = currentProfile?.predictor_default ?? false;
     setPredictorMode(preferred);
-  }, [currentProfile?.id, currentProfile?.predictorDefault, needsTraining, trainingActive, predictorMode]);
+  }, [currentProfile?.id, currentProfile?.predictor_default, needsTraining, trainingActive, predictorMode]);
 
   useEffect(() => {
     if (scene !== "MATCH") return;
@@ -4237,9 +4237,9 @@ function RPSDoodleAppInner(){
     if (!created) return;
     setCreateProfileDialogOpen(false);
     setCreateProfileDialogAcknowledged(false);
-    const message = `New profile created: ${created.name}. Training starts now (${TRAIN_ROUNDS} rounds). Your previous results remain available in Statistics.`;
+    const message = `New profile created: ${created.display_name}. Training starts now (${TRAIN_ROUNDS} rounds). Your previous results remain available in Statistics.`;
     setToastMessage(message);
-    setLive(`New statistics profile created: ${created.name}. Training starts now (${TRAIN_ROUNDS} rounds). Previous results remain available in Statistics.`);
+    setLive(`New statistics profile created: ${created.display_name}. Training starts now (${TRAIN_ROUNDS} rounds). Previous results remain available in Statistics.`);
   }, [createStatsProfile, setToastMessage, setLive, TRAIN_ROUNDS]);
 
   const performCsvExport = useCallback(() => {
@@ -4249,11 +4249,11 @@ function RPSDoodleAppInner(){
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    const profileSegment = sanitizeForFile(currentProfile.name || "profile") || "profile";
+    const profileSegment = sanitizeForFile(currentProfile.display_name || "profile") || "profile";
     a.download = `rps-${profileSegment}-rounds.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    const label = currentProfile.name ? ` for ${currentProfile.name}` : "";
+    const label = currentProfile.display_name ? ` for ${currentProfile.display_name}` : "";
     setToastMessage(`CSV export ready${label}. Check your downloads.`);
     setLive(`Rounds exported as CSV${label}. Download starting.`);
   }, [currentPlayer, currentProfile, exportRoundsCsv, hasExportData, sanitizeForFile, setLive, setToastMessage]);
@@ -4626,7 +4626,7 @@ function RPSDoodleAppInner(){
       playerId: currentPlayer?.id ?? null,
       profileId: currentProfile?.id ?? null,
       playerName: currentPlayer?.playerName ?? null,
-      profileName: currentProfile?.name ?? null,
+      profileName: currentProfile?.display_name ?? null,
     });
     if (mode) setSelectedMode(mode);
     setScene("MATCH");
@@ -4650,7 +4650,7 @@ function RPSDoodleAppInner(){
       if (forked) {
         createdNewProfile = true;
       } else {
-        updateStatsProfile(currentProfile.id, { trainingCount: 0, trained: false });
+        updateStatsProfile(currentProfile.id, { training_count: 0, training_completed: false });
       }
       clearModelStateForProfile(currentProfile.id);
     }
@@ -4731,8 +4731,8 @@ function RPSDoodleAppInner(){
         if (trainingActive && currentProfile) {
           const nextCount = Math.min(TRAIN_ROUNDS, trainingCount + 1);
           updateStatsProfile(currentProfile.id, {
-            trainingCount: nextCount,
-            trained: nextCount >= TRAIN_ROUNDS ? true : currentProfile.trained,
+            training_count: nextCount,
+            training_completed: nextCount >= TRAIN_ROUNDS ? true : currentProfile.training_completed,
           });
         }
         setPhase("feedback");
@@ -4802,8 +4802,8 @@ function RPSDoodleAppInner(){
     if (!trainingActive) return;
     if (trainingCount < TRAIN_ROUNDS) return;
     setTrainingActive(false);
-    if (currentProfile && !currentProfile.trained) {
-      updateStatsProfile(currentProfile.id, { trained: true });
+    if (currentProfile && !currentProfile.training_completed) {
+      updateStatsProfile(currentProfile.id, { training_completed: true });
     }
     trainingAnnouncementsRef.current.clear();
   }, [trainingActive, trainingCount, currentProfile, updateStatsProfile]);
@@ -4821,7 +4821,7 @@ function RPSDoodleAppInner(){
 
   useEffect(() => {
     if (previousTrainingCountRef.current < TRAIN_ROUNDS && trainingCount >= TRAIN_ROUNDS) {
-      if (currentProfile && !currentProfile.seenPostTrainingCTA && !postTrainingCtaAcknowledged) {
+      if (currentProfile && !currentProfile.seen_post_training_cta && !postTrainingCtaAcknowledged) {
         setPostTrainingCtaOpen(true);
         setHelpGuideOpen(false);
         setLive("Training complete. You’re ready for Modes.");
@@ -4855,7 +4855,7 @@ function RPSDoodleAppInner(){
       }
       return;
     }
-    if (currentProfile.trainingCount >= TRAIN_ROUNDS && !currentProfile.seenPostTrainingCTA) {
+    if (currentProfile.training_count >= TRAIN_ROUNDS && !currentProfile.seen_post_training_cta) {
       if (!postTrainingCtaOpen) {
         setPostTrainingCtaOpen(true);
         setHelpGuideOpen(false);
@@ -6001,8 +6001,10 @@ function RPSDoodleAppInner(){
                               {!currentProfile && <option value="">Select a profile…</option>}
                               {statsProfiles.map(profile => (
                                 <option key={profile.id} value={profile.id}>
-                                  {profile.name}
-                                  {!profile.trained && (profile.trainingCount ?? 0) < TRAIN_ROUNDS ? " • Training required" : ""}
+                                  {profile.display_name}
+                                  {!profile.training_completed && (profile.training_count ?? 0) < TRAIN_ROUNDS
+                                    ? " • Training required"
+                                    : ""}
                                 </option>
                               ))}
                             </>
@@ -6949,7 +6951,12 @@ function RPSDoodleAppInner(){
                     <div className="text-sm font-semibold text-slate-800">Active statistics profile</div>
                     <div className="text-xs text-slate-500">
                       {currentProfile ? (
-                        <span>{currentProfile.name}{(!currentProfile.trained && currentProfile.trainingCount < TRAIN_ROUNDS) ? ' • Training required' : ''}</span>
+                        <span>
+                          {currentProfile.display_name}
+                          {!currentProfile.training_completed && currentProfile.training_count < TRAIN_ROUNDS
+                            ? " • Training required"
+                            : ""}
+                        </span>
                       ) : 'No profile selected.'}
                     </div>
                   </div>
@@ -6958,7 +6965,7 @@ function RPSDoodleAppInner(){
                       <span>Profile</span>
                       <select value={currentProfile?.id ?? ''} onChange={e => handleSelectProfile(e.target.value)} className="border rounded px-2 py-1" disabled={!statsProfiles.length} data-dev-label="stats.profile.select">
                         {statsProfiles.map(profile => (
-                          <option key={profile.id} value={profile.id}>{profile.name}</option>
+                          <option key={profile.id} value={profile.id}>{profile.display_name}</option>
                         ))}
                       </select>
                     </label>

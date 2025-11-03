@@ -3,6 +3,7 @@ import { AIMode, BestOf, Mode, Move, Outcome } from "./gameTypes";
 import { usePlayers } from "./players";
 import { usePlayMode, type PlayMode } from "./lib/playMode";
 import { cloudDataService, isSupabaseUuid, type MatchRecord, type RoundRecord } from "./lib/cloudData";
+import type { StatsProfileRow } from "./lib/database.types";
 import { computeMatchScore } from "./leaderboard";
 
 export type SerializedExpertState =
@@ -135,33 +136,23 @@ export interface MatchSummary {
   leaderboardType?: "Challenge" | "Practice Legacy";
 }
 
-export interface StatsProfile {
-  id: string;
-  playerId: string;
-  name: string;
-  createdAt: string;
-  trainingCount: number;
-  trained: boolean;
-  predictorDefault: boolean;
-  seenPostTrainingCTA: boolean;
-  baseName: string;
-  version: number;
-  previousProfileId?: string | null;
-  nextProfileId?: string | null;
-}
+export type StatsProfile = StatsProfileRow;
 
 type StatsProfileUpdate = Partial<
   Pick<
     StatsProfile,
-    | "name"
-    | "trainingCount"
-    | "trained"
-    | "predictorDefault"
-    | "seenPostTrainingCTA"
-    | "baseName"
-    | "version"
-    | "previousProfileId"
-    | "nextProfileId"
+    | "display_name"
+    | "training_count"
+    | "training_completed"
+    | "predictor_default"
+    | "seen_post_training_cta"
+    | "base_name"
+    | "profile_version"
+    | "previous_profile_id"
+    | "next_profile_id"
+    | "archived"
+    | "metadata"
+    | "updated_at"
   >
 >;
 
@@ -234,7 +225,7 @@ function normalizeBaseName(name: string): string {
   return trimmed;
 }
 
-function makeProfileDisplayName(baseName: string, version: number): string {
+export function makeProfileDisplayName(baseName: string, version: number): string {
   const normalizedBase = normalizeBaseName(baseName);
   if (version <= 1) return normalizedBase;
   return `${normalizedBase} v${version}`;
@@ -346,8 +337,8 @@ function loadProfiles(storage: Storage | null): StatsProfile[] {
     if (!Array.isArray(parsed)) return [];
     return parsed.map((item: StatsProfile | any) => {
       const fallbackName = typeof item?.name === "string" ? item.name : PRIMARY_BASE;
-      const baseName = normalizeBaseName(typeof item?.baseName === "string" ? item.baseName : fallbackName);
-      const version = (() => {
+      const base_name = normalizeBaseName(typeof item?.baseName === "string" ? item.baseName : fallbackName);
+      const profile_version = (() => {
         if (typeof item?.version === "number" && Number.isFinite(item.version)) {
           return Math.max(1, Math.floor(item.version));
         }
@@ -358,19 +349,37 @@ function loadProfiles(storage: Storage | null): StatsProfile[] {
         }
         return 1;
       })();
+      const created_at =
+        typeof item?.createdAt === "string" ? item.createdAt : new Date().toISOString();
+      const updated_at = typeof item?.updated_at === "string" ? item.updated_at : created_at;
+      const metadata =
+        item && typeof item.metadata === "object" && item.metadata !== null ? item.metadata : {};
+      const archived = item?.archived === true;
       return {
         id: typeof item?.id === "string" ? item.id : makeId("profile"),
-        playerId: typeof item?.playerId === "string" ? item.playerId : "",
-        baseName,
-        version,
-        name: makeProfileDisplayName(baseName, version),
-        createdAt: typeof item?.createdAt === "string" ? item.createdAt : new Date().toISOString(),
-        trainingCount: typeof item?.trainingCount === "number" ? item.trainingCount : 0,
-        trained: Boolean(item?.trained),
-        predictorDefault: item?.predictorDefault !== undefined ? Boolean(item.predictorDefault) : false,
-        seenPostTrainingCTA: item?.seenPostTrainingCTA !== undefined ? Boolean(item.seenPostTrainingCTA) : false,
-        previousProfileId: typeof item?.previousProfileId === "string" ? item.previousProfileId : null,
-        nextProfileId: typeof item?.nextProfileId === "string" ? item.nextProfileId : null,
+        user_id: typeof item?.playerId === "string" ? item.playerId : "",
+        demographics_profile_id:
+          typeof item?.demographics_profile_id === "string" ? item.demographics_profile_id : null,
+        base_name,
+        profile_version,
+        display_name: makeProfileDisplayName(base_name, profile_version),
+        training_count: typeof item?.trainingCount === "number" ? item.trainingCount : 0,
+        training_completed: item?.trained === true,
+        predictor_default:
+          item?.predictorDefault !== undefined ? Boolean(item.predictorDefault) : false,
+        seen_post_training_cta:
+          item?.seenPostTrainingCTA !== undefined ? Boolean(item.seenPostTrainingCTA) : false,
+        previous_profile_id:
+          typeof item?.previousProfileId === "string" ? item.previousProfileId : null,
+        next_profile_id: typeof item?.nextProfileId === "string" ? item.nextProfileId : null,
+        archived,
+        metadata,
+        created_at,
+        updated_at,
+        version:
+          typeof item?.version === "number" && Number.isFinite(item.version)
+            ? Math.max(1, Math.floor(item.version))
+            : 1,
       } satisfies StatsProfile;
     });
   } catch (err) {
@@ -493,10 +502,10 @@ function mapRoundPatchToCloudUpdate(patch: Partial<RoundLog>): Partial<RoundReco
     update.streak_you = patch.streakYou ?? null;
   }
   if ("mixer" in patch) {
-    update.mixer_trace = patch.mixer ?? null;
+    update.mixer_trace = (patch.mixer ?? null) as RoundRecord["mixer_trace"];
   }
   if ("heuristic" in patch) {
-    update.heuristic_trace = patch.heuristic ?? null;
+    update.heuristic_trace = (patch.heuristic ?? null) as RoundRecord["heuristic_trace"];
   }
   return update;
 }
@@ -739,15 +748,39 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       try {
         const rawProfiles = await service.loadStatsProfiles(userId);
         let normalizedProfiles = rawProfiles.map(profile => {
-          const baseName = normalizeBaseName(profile.baseName ?? profile.name);
-          const rawVersion = profile.version ?? 1;
-          const version =
-            typeof rawVersion === "number" && Number.isFinite(rawVersion) ? Math.max(1, Math.floor(rawVersion)) : 1;
+          const base_name = normalizeBaseName(profile.base_name ?? profile.display_name);
+          const profile_version = Math.max(
+            1,
+            Math.floor(
+              typeof profile.profile_version === "number" && Number.isFinite(profile.profile_version)
+                ? profile.profile_version
+                : 1,
+            ),
+          );
+          const display_name = makeProfileDisplayName(base_name, profile_version);
+          const metadata: StatsProfile["metadata"] =
+            profile.metadata !== null && profile.metadata !== undefined
+              ? (profile.metadata as StatsProfile["metadata"])
+              : ({} as StatsProfile["metadata"]);
           return {
             ...profile,
-            baseName,
-            version,
-            name: makeProfileDisplayName(baseName, version),
+            base_name,
+            profile_version,
+            display_name,
+            training_count:
+              typeof profile.training_count === "number" ? profile.training_count : 0,
+            training_completed: profile.training_completed === true,
+            predictor_default: profile.predictor_default === true,
+            seen_post_training_cta: profile.seen_post_training_cta === true,
+            previous_profile_id: profile.previous_profile_id ?? null,
+            next_profile_id: profile.next_profile_id ?? null,
+            archived: profile.archived === true,
+            metadata,
+            updated_at: profile.updated_at ?? profile.created_at,
+            version:
+              typeof profile.version === "number" && Number.isFinite(profile.version)
+                ? Math.max(1, Math.floor(profile.version))
+                : 1,
           } satisfies StatsProfile;
         });
         if (normalizedProfiles.length === 0) {
@@ -755,17 +788,22 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
           const createdAt = new Date().toISOString();
           const defaultProfile: StatsProfile = {
             id: makeStatsProfileId(true),
-            playerId: userId,
-            baseName,
+            user_id: userId,
+            demographics_profile_id: null,
+            base_name: baseName,
+            profile_version: 1,
+            display_name: makeProfileDisplayName(baseName, 1),
+            training_count: 0,
+            training_completed: false,
+            predictor_default: true,
+            seen_post_training_cta: false,
+            previous_profile_id: null,
+            next_profile_id: null,
+            archived: false,
+            metadata: {} as StatsProfile["metadata"],
+            created_at: createdAt,
+            updated_at: createdAt,
             version: 1,
-            name: makeProfileDisplayName(baseName, 1),
-            createdAt,
-            trainingCount: 0,
-            trained: false,
-            predictorDefault: true,
-            seenPostTrainingCTA: false,
-            previousProfileId: null,
-            nextProfileId: null,
           };
           try {
             await service.upsertStatsProfile(defaultProfile);
@@ -818,7 +856,8 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
           if (prev && normalizedProfiles.some(profile => profile.id === prev)) {
             return prev;
           }
-          const preferred = normalizedProfiles.find(profile => profile.predictorDefault) ?? normalizedProfiles[0] ?? null;
+          const preferred =
+            normalizedProfiles.find(profile => profile.predictor_default) ?? normalizedProfiles[0] ?? null;
           return preferred?.id ?? null;
         });
       } catch (err) {
@@ -846,28 +885,43 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   const sessionId = sessionIdRef.current;
   const playerProfiles = useMemo(() => {
     if (!currentPlayerId) return [] as StatsProfile[];
-    const filtered = profiles.filter(p => p.playerId === currentPlayerId);
+    const filtered = profiles.filter(p => p.user_id === currentPlayerId);
     const normalized = filtered.map(profile => {
-      const baseName = normalizeBaseName(profile.baseName ?? profile.name);
-      const rawVersion = profile.version;
-      const version = typeof rawVersion === "number" && Number.isFinite(rawVersion) ? Math.max(1, Math.floor(rawVersion)) : 1;
+      const base_name = normalizeBaseName(profile.base_name ?? profile.display_name);
+      const profile_version = Math.max(
+        1,
+        Math.floor(
+          typeof profile.profile_version === "number" && Number.isFinite(profile.profile_version)
+            ? profile.profile_version
+            : 1,
+        ),
+      );
+      const display_name = makeProfileDisplayName(base_name, profile_version);
       return {
         ...profile,
-        baseName,
-        version,
-        name: makeProfileDisplayName(baseName, version),
+        base_name,
+        profile_version,
+        display_name,
+        training_count: typeof profile.training_count === "number" ? profile.training_count : 0,
+        training_completed: profile.training_completed === true,
+        predictor_default: profile.predictor_default === true,
+        seen_post_training_cta: profile.seen_post_training_cta === true,
+        previous_profile_id: profile.previous_profile_id ?? null,
+        next_profile_id: profile.next_profile_id ?? null,
+        archived: profile.archived === true,
+        updated_at: profile.updated_at ?? profile.created_at,
       } satisfies StatsProfile;
     });
     normalized.sort((a, b) => {
-      const indexDiff = getLineageIndex(a.baseName) - getLineageIndex(b.baseName);
+      const indexDiff = getLineageIndex(a.base_name) - getLineageIndex(b.base_name);
       if (indexDiff !== 0) return indexDiff;
-      const versionDiff = (b.version ?? 1) - (a.version ?? 1);
+      const versionDiff = (b.profile_version ?? 1) - (a.profile_version ?? 1);
       if (versionDiff !== 0) return versionDiff;
-      if (getLineageIndex(a.baseName) === Number.MAX_SAFE_INTEGER) {
-        const baseCompare = a.baseName.localeCompare(b.baseName);
+      if (getLineageIndex(a.base_name) === Number.MAX_SAFE_INTEGER) {
+        const baseCompare = a.base_name.localeCompare(b.base_name);
         if (baseCompare !== 0) return baseCompare;
       }
-      return (a.createdAt || "").localeCompare(b.createdAt || "");
+      return (a.created_at || "").localeCompare(b.created_at || "");
     });
     return normalized;
   }, [profiles, currentPlayerId]);
@@ -887,19 +941,25 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       const baseName = formatLineageBaseName(1);
+      const timestamp = new Date().toISOString();
       const defaultProfile: StatsProfile = {
         id: makeStatsProfileId(isCloudMode),
-        playerId: currentPlayerId,
-        baseName,
+        user_id: currentPlayerId,
+        demographics_profile_id: null,
+        base_name: baseName,
+        profile_version: 1,
+        display_name: makeProfileDisplayName(baseName, 1),
+        training_count: 0,
+        training_completed: false,
+        predictor_default: Boolean(isCloudMode),
+        seen_post_training_cta: false,
+        previous_profile_id: null,
+        next_profile_id: null,
+        archived: false,
+        metadata: {} as StatsProfile["metadata"],
+        created_at: timestamp,
+        updated_at: timestamp,
         version: 1,
-        name: makeProfileDisplayName(baseName, 1),
-        createdAt: new Date().toISOString(),
-        trainingCount: 0,
-        trained: false,
-        predictorDefault: isCloudMode,
-        seenPostTrainingCTA: false,
-        previousProfileId: null,
-        nextProfileId: null,
       };
       setProfiles(prev => prev.concat(defaultProfile));
       if (isCloudMode) {
@@ -1082,13 +1142,13 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         console.warn("Cannot create cloud stats profile until Supabase user ID is available");
         return null;
       }
-      const targetProfiles = profiles.filter(profile => profile.playerId === targetPlayerId);
+      const targetProfiles = profiles.filter(profile => profile.user_id === targetPlayerId);
       const highestVersion = targetProfiles.reduce(
-        (max, profile) => Math.max(max, typeof profile.version === "number" ? profile.version : 1),
+        (max, profile) => Math.max(max, typeof profile.profile_version === "number" ? profile.profile_version : 1),
         1
       );
       const existingBaseNames = new Set(
-        targetProfiles.map(profile => normalizeBaseName(profile.baseName ?? profile.name))
+        targetProfiles.map(profile => normalizeBaseName(profile.base_name ?? profile.display_name))
       );
       let index = 1;
       while (existingBaseNames.has(formatLineageBaseName(index))) {
@@ -1096,19 +1156,25 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       }
       const baseName = formatLineageBaseName(index);
       const version = highestVersion > 1 ? highestVersion : 1;
+      const timestamp = new Date().toISOString();
       const profile: StatsProfile = {
         id: makeStatsProfileId(isCloudMode),
-        playerId: targetPlayerId,
-        baseName,
-        version,
-        name: makeProfileDisplayName(baseName, version),
-        createdAt: new Date().toISOString(),
-        trainingCount: 0,
-        trained: false,
-        predictorDefault: false,
-        seenPostTrainingCTA: false,
-        previousProfileId: null,
-        nextProfileId: null,
+        user_id: targetPlayerId,
+        demographics_profile_id: null,
+        base_name: baseName,
+        profile_version: version,
+        display_name: makeProfileDisplayName(baseName, version),
+        training_count: 0,
+        training_completed: false,
+        predictor_default: false,
+        seen_post_training_cta: false,
+        previous_profile_id: null,
+        next_profile_id: null,
+        archived: false,
+        metadata: {} as StatsProfile["metadata"],
+        created_at: timestamp,
+        updated_at: timestamp,
+        version: 1,
       };
       setProfiles(prev => prev.concat(profile));
       if (isCloudMode) {
@@ -1132,19 +1198,41 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   const updateProfile = useCallback(
     (id: string, patch: StatsProfileUpdate) => {
       let updatedProfile: StatsProfile | null = null;
+      const timestamp = new Date().toISOString();
       setProfiles(prev =>
         prev.map(p => {
           if (p.id !== id) return p;
-          const next = { ...p, ...patch } as StatsProfile;
-          if (patch.baseName || patch.version) {
-            const baseName = normalizeBaseName(patch.baseName ?? next.baseName);
-            const rawVersion = patch.version ?? next.version ?? 1;
-            const version =
-              typeof rawVersion === "number" && Number.isFinite(rawVersion) ? Math.max(1, Math.floor(rawVersion)) : 1;
-            next.baseName = baseName;
-            next.version = version;
-            next.name = makeProfileDisplayName(baseName, version);
+          const next: StatsProfile = {
+            ...p,
+            ...patch,
+          };
+          const baseNameInput = patch.base_name ?? next.base_name;
+          const normalizedBase = normalizeBaseName(baseNameInput);
+          const rawVersion =
+            typeof (patch.profile_version ?? next.profile_version) === "number"
+              ? Number(patch.profile_version ?? next.profile_version)
+              : 1;
+          const profileVersion = Math.max(
+            1,
+            Math.floor(Number.isFinite(rawVersion) ? rawVersion : 1),
+          );
+          next.base_name = normalizedBase;
+          next.profile_version = profileVersion;
+          next.display_name = makeProfileDisplayName(normalizedBase, profileVersion);
+          next.training_count =
+            typeof next.training_count === "number" && Number.isFinite(next.training_count)
+              ? next.training_count
+              : 0;
+          next.training_completed = next.training_completed === true;
+          next.predictor_default = next.predictor_default === true;
+          next.seen_post_training_cta = next.seen_post_training_cta === true;
+          next.previous_profile_id = next.previous_profile_id ?? null;
+          next.next_profile_id = next.next_profile_id ?? null;
+          next.archived = next.archived === true;
+          if (!next.metadata || typeof next.metadata !== "object") {
+            next.metadata = {} as StatsProfile["metadata"];
           }
+          next.updated_at = patch.updated_at ?? timestamp;
           updatedProfile = next;
           return next;
         }),
@@ -1165,47 +1253,60 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   const forkProfileVersion = useCallback(
     (id: string) => {
       if (!currentPlayerId) return null;
-      const source = profiles.find(p => p.id === id && p.playerId === currentPlayerId);
+      const source = profiles.find(p => p.id === id && p.user_id === currentPlayerId);
       if (!source) return null;
-      const sourceVersionRaw = source.version;
+      const sourceVersionRaw = source.profile_version;
       const sourceVersion =
         typeof sourceVersionRaw === "number" && Number.isFinite(sourceVersionRaw)
           ? Math.max(1, Math.floor(sourceVersionRaw))
           : 1;
-      const baseName = normalizeBaseName(source.baseName ?? source.name);
+      const baseName = normalizeBaseName(source.base_name ?? source.display_name);
       const nextVersion = sourceVersion + 1;
-      const newProfileDefault = Boolean(source.predictorDefault);
+      const newProfileDefault = Boolean(source.predictor_default);
+      const timestamp = new Date().toISOString();
       const newProfile: StatsProfile = {
         id: makeStatsProfileId(isCloudMode),
-        playerId: currentPlayerId,
-        baseName,
-        version: nextVersion,
-        name: makeProfileDisplayName(baseName, nextVersion),
-        createdAt: new Date().toISOString(),
-        trainingCount: 0,
-        trained: false,
-        predictorDefault: newProfileDefault,
-        seenPostTrainingCTA: false,
-        previousProfileId: source.id,
-        nextProfileId: null,
+        user_id: currentPlayerId,
+        demographics_profile_id: source.demographics_profile_id ?? null,
+        base_name: baseName,
+        profile_version: nextVersion,
+        display_name: makeProfileDisplayName(baseName, nextVersion),
+        training_count: 0,
+        training_completed: false,
+        predictor_default: newProfileDefault,
+        seen_post_training_cta: false,
+        previous_profile_id: source.id,
+        next_profile_id: null,
+        archived: false,
+        metadata: {} as StatsProfile["metadata"],
+        created_at: timestamp,
+        updated_at: timestamp,
+        version: 1,
       };
-      let updatedSource: StatsProfile | null = null;
+      const pendingUpdates: StatsProfile[] = [];
       setProfiles(prev => {
         const updated = prev.map(p => {
           if (p.id === source.id) {
             const next: StatsProfile = {
               ...p,
-              baseName,
-              version: sourceVersion,
-              name: makeProfileDisplayName(baseName, sourceVersion),
-              predictorDefault: newProfileDefault ? false : p.predictorDefault,
-              nextProfileId: newProfile.id,
+              base_name: baseName,
+              profile_version: sourceVersion,
+              display_name: makeProfileDisplayName(baseName, sourceVersion),
+              predictor_default: newProfileDefault ? false : p.predictor_default,
+              next_profile_id: newProfile.id,
+              updated_at: timestamp,
             };
-            updatedSource = next;
+            pendingUpdates.push(next);
             return next;
           }
-          if (newProfileDefault && p.predictorDefault) {
-            return { ...p, predictorDefault: false };
+          if (newProfileDefault && p.predictor_default) {
+            const next: StatsProfile = {
+              ...p,
+              predictor_default: false,
+              updated_at: timestamp,
+            };
+            pendingUpdates.push(next);
+            return next;
           }
           return p;
         });
@@ -1216,19 +1317,18 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         void (async () => {
           const service = cloudDataService;
           if (!service) return;
-          if (updatedSource) {
-            try {
-              await service.upsertStatsProfile(updatedSource);
-            } catch (err) {
-              console.error("Failed to update source profile during cloud fork", err);
-              return;
-            }
-          }
           try {
             await service.upsertStatsProfile(newProfile);
           } catch (err) {
             console.error("Failed to fork cloud stats profile", err);
             return;
+          }
+          for (const entry of pendingUpdates) {
+            try {
+              await service.upsertStatsProfile(entry);
+            } catch (err) {
+              console.error("Failed to update related profile during cloud fork", err);
+            }
           }
         })();
       } else {
@@ -1530,7 +1630,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     const age = currentPlayer?.age != null ? currentPlayer.age : "";
     const school = currentPlayer?.school ?? "";
     const prior = currentPlayer?.priorExperience ?? "";
-    const profileName = currentProfile?.name ?? "";
+    const profileName = currentProfile?.display_name ?? "";
     rounds.forEach(r => {
       lines.push([
         r.playerId,

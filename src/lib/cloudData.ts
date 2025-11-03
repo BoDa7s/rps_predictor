@@ -1,4 +1,20 @@
 import { supabaseClient, type SupabaseClient } from "./supabaseClient";
+import type {
+  AiStateInsert,
+  AiStateRow,
+  DemographicsProfileInsert,
+  DemographicsProfileRow,
+  MatchInsert,
+  MatchRow,
+  RoundInsert,
+  RoundRow,
+  SessionInsert,
+  SessionRow,
+  StatsProfileInsert,
+  StatsProfileRow,
+  UserSettingInsert,
+  UserSettingRow,
+} from "./database.types";
 import type { PlayerProfile, Grade } from "../players";
 import { CONSENT_TEXT_VERSION, GRADE_OPTIONS, sanitizeAge } from "../players";
 import type {
@@ -53,166 +69,13 @@ function splitPlayerName(name: Maybe<string>): { firstName: string | null; lastI
   };
 }
 
-export interface DemographicsProfileRow {
-  user_id: string;
-  username: string | null;
-  first_name: string | null;
-  last_initial: string | null;
-  grade: string | null;
-  school: string | null;
-  created_at: string | null;
-  age: string | null;
-  prior_experience: string | null;
-  training_completed: boolean | null;
-  training_count: number | null;
-  storage_mode?: string | null;
-  updated_at?: string | null;
-  preferences?: unknown;
-  consent_version: string | null;
-  consent_granted_at: string | null;
-  last_promoted_at?: string | null;
-}
+export type DemographicsProfileUpsert = DemographicsProfileInsert;
 
-export type DemographicsProfileUpsert = Pick<
-  DemographicsProfileRow,
-  | "user_id"
-  | "username"
-  | "first_name"
-  | "last_initial"
-  | "grade"
-  | "school"
-  | "age"
-  | "prior_experience"
-  | "consent_version"
-  | "consent_granted_at"
-  | "training_completed"
-  | "training_count"
->;
-
-export interface StatsProfileRow {
-  id: string;
-  user_id: string;
-  demographics_profile_id: string | null;
-  base_name: string | null;
-  profile_version: number | null;
-  display_name: string | null;
-  training_count: number | null;
-  training_completed: boolean | null;
-  predictor_default: boolean | null;
-  seen_post_training_cta: boolean | null;
-  previous_profile_id: string | null;
-  next_profile_id: string | null;
-  archived: boolean | null;
-  metadata?: unknown;
-  created_at: string | null;
-  updated_at?: string | null;
-  version: number | null;
-}
-
-export type StatsProfileUpsert = Pick<
-  StatsProfileRow,
-  | "id"
-  | "user_id"
-  | "base_name"
-  | "display_name"
-  | "training_count"
-  | "training_completed"
-  | "predictor_default"
-  | "seen_post_training_cta"
-  | "previous_profile_id"
-  | "next_profile_id"
-  | "archived"
-  | "version"
-  | "profile_version"
-> & { created_at?: string };
-
-export interface RoundRow {
-  id?: string;
-  user_id: string;
-  session_id: string;
-  stats_profile_id: string;
-  match_id: string | null;
-  client_round_id: string | null;
-  round_number: number;
-  played_at: string;
-  mode: string;
-  difficulty: string;
-  best_of: number;
-  player_move: string;
-  ai_move: string;
-  predicted_player_move: string | null;
-  outcome: string;
-  decision_policy: string;
-  reason: string | null;
-  ai_confidence: number | null;
-  confidence_bucket: string | null;
-  decision_time_ms: number | null;
-  response_time_ms?: number | null;
-  response_speed_ms?: number | null;
-  inter_round_delay_ms?: number | null;
-  ready_at?: string | null;
-  first_interaction_at?: string | null;
-  move_selected_at?: string | null;
-  completed_at?: string | null;
-  interactions?: number | null;
-  clicks?: number | null;
-  streak_ai: number | null;
-  streak_you: number | null;
-  ai_state?: unknown;
-  mixer_trace: unknown;
-  heuristic_trace: unknown;
-  metadata?: unknown;
-  created_at?: string | null;
-  updated_at?: string | null;
-  version?: number | null;
-}
+export type StatsProfileUpsert = StatsProfileInsert;
 
 export interface RoundInsertInput {
   round: RoundLog;
   roundNumber: number;
-}
-
-export interface MatchRow {
-  id?: string;
-  user_id: string;
-  session_id: string;
-  stats_profile_id: string;
-  client_match_id: string | null;
-  started_at: string;
-  ended_at: string | null;
-  mode: string;
-  difficulty: string;
-  best_of: number;
-  rounds_played: number;
-  score_you: number;
-  score_ai: number;
-  ai_win_rate: number | null;
-  you_switched_rate: number | null;
-  leaderboard_score: number | null;
-  leaderboard_max_streak: number | null;
-  leaderboard_round_count: number | null;
-  leaderboard_timer_bonus: number | null;
-  leaderboard_beat_confidence_bonus: number | null;
-  leaderboard_type: string | null;
-  notes: string | null;
-  metadata?: unknown;
-  created_at?: string | null;
-  updated_at?: string | null;
-  version?: number | null;
-}
-
-export interface AiStateRow {
-  id?: string;
-  user_id: string;
-  stats_profile_id: string;
-  model_version: number;
-  rounds_seen: number;
-  state: unknown;
-  needs_rebuild: boolean;
-  last_round_id: string | null;
-  version: number | null;
-  created_at?: string | null;
-  updated_at: string;
 }
 
 export type AiStateUpsertInput = StoredPredictorModelState & {
@@ -222,26 +85,6 @@ export type AiStateUpsertInput = StoredPredictorModelState & {
   id?: string;
   version?: number;
 };
-
-export interface SessionRow {
-  id?: string;
-  user_id: string;
-  demographics_profile_id: string | null;
-  primary_stats_profile_id: string | null;
-  device_id: string | null;
-  client_session_id: string | null;
-  storage_mode: string | null;
-  started_at: string;
-  ended_at: string | null;
-  last_event_at: string | null;
-  session_label: string | null;
-  client_version: string | null;
-  locale: string | null;
-  metadata: unknown;
-  created_at?: string | null;
-  updated_at?: string | null;
-  version?: number | null;
-}
 
 export interface CloudSession {
   id: string;
@@ -266,21 +109,6 @@ export type SessionUpsertInput = Partial<CloudSession> & {
   startedAt: string;
   id?: string;
 };
-
-export interface UserSettingRow {
-  id?: string;
-  user_id: string;
-  stats_profile_id: string | null;
-  session_id: string | null;
-  scope: string;
-  key: string;
-  value: unknown;
-  version: number;
-  created_at?: string | null;
-  updated_at?: string | null;
-  profile_scope_id?: string | null;
-  session_scope_id?: string | null;
-}
 
 export interface UserSetting {
   id: string;
@@ -367,61 +195,77 @@ function statsProfileRowToStatsProfile(row: StatsProfileRow): StatsProfile | nul
   if (!row || typeof row !== "object") return null;
   if (!row.id || !row.user_id) return null;
   if (row.archived) return null;
-  const createdAt = coerceTimestamp(row.created_at);
-  const baseName = row.base_name?.trim() || "primary";
-  const displayName = row.display_name?.trim() || baseName || "Primary";
-  const rawVersion = Number.isFinite(row.version)
-    ? Number(row.version)
-    : Number.isFinite(row.profile_version)
-      ? Number(row.profile_version)
-      : 1;
-  const version = Math.max(1, Math.floor(rawVersion));
-  const trainingCount = typeof row.training_count === "number" ? row.training_count : 0;
-  const trained = row.training_completed === true;
-  const predictorDefault = row.predictor_default === true;
-  const seenCTA = row.seen_post_training_cta === true;
+
+  const base_name = (row.base_name?.trim() || "primary") as StatsProfile["base_name"];
+  const display_name = (row.display_name?.trim() || base_name || "Primary") as StatsProfile["display_name"];
+  const profile_version = Math.max(
+    1,
+    Math.floor(Number.isFinite(row.profile_version) ? Number(row.profile_version) : 1),
+  ) as StatsProfile["profile_version"];
+  const created_at = coerceTimestamp(row.created_at) as StatsProfile["created_at"];
+  const updated_at = coerceTimestamp(row.updated_at) as StatsProfile["updated_at"];
+  const training_count = typeof row.training_count === "number" ? row.training_count : 0;
+  const training_completed = row.training_completed === true;
+  const predictor_default = row.predictor_default === true;
+  const seen_post_training_cta = row.seen_post_training_cta === true;
+  const previous_profile_id = row.previous_profile_id ?? null;
+  const next_profile_id = row.next_profile_id ?? null;
+  const archived = Boolean(row.archived);
+  const metadata: StatsProfile["metadata"] =
+    row.metadata !== null && row.metadata !== undefined
+      ? (row.metadata as StatsProfile["metadata"])
+      : ({} as StatsProfile["metadata"]);
+  const version = Math.max(1, Math.floor(Number.isFinite(row.version) ? Number(row.version) : 1));
 
   return {
     id: row.id,
-    playerId: row.user_id,
-    name: displayName,
-    createdAt,
-    trainingCount,
-    trained,
-    predictorDefault,
-    seenPostTrainingCTA: seenCTA,
-    baseName,
+    user_id: row.user_id,
+    demographics_profile_id: row.demographics_profile_id ?? null,
+    base_name,
+    profile_version,
+    display_name,
+    training_count,
+    training_completed,
+    predictor_default,
+    seen_post_training_cta,
+    previous_profile_id,
+    next_profile_id,
+    archived,
+    metadata,
+    created_at,
+    updated_at,
     version,
-    previousProfileId: row.previous_profile_id,
-    nextProfileId: row.next_profile_id,
   };
 }
 
 function statsProfileToUpsert(profile: StatsProfile): StatsProfileUpsert {
   return {
     id: profile.id,
-    user_id: profile.playerId,
-    base_name: profile.baseName,
-    display_name: profile.name,
-    training_count: profile.trainingCount,
-    training_completed: profile.trained,
-    predictor_default: profile.predictorDefault,
-    seen_post_training_cta: profile.seenPostTrainingCTA,
-    previous_profile_id: profile.previousProfileId ?? null,
-    next_profile_id: profile.nextProfileId ?? null,
-    archived: false,
+    user_id: profile.user_id,
+    demographics_profile_id: profile.demographics_profile_id ?? null,
+    base_name: profile.base_name,
+    profile_version: profile.profile_version,
+    display_name: profile.display_name,
+    training_count: profile.training_count,
+    training_completed: profile.training_completed,
+    predictor_default: profile.predictor_default,
+    seen_post_training_cta: profile.seen_post_training_cta,
+    previous_profile_id: profile.previous_profile_id ?? null,
+    next_profile_id: profile.next_profile_id ?? null,
+    archived: profile.archived,
+    metadata: profile.metadata,
+    created_at: profile.created_at,
+    updated_at: profile.updated_at,
     version: profile.version,
-    profile_version: profile.version,
-    created_at: profile.createdAt,
   };
 }
 
-function roundLogToRow({ round, roundNumber }: RoundInsertInput): RoundRow {
+function roundLogToRow({ round, roundNumber }: RoundInsertInput): RoundInsert {
   const predicted =
     round.policy === "mixer"
       ? round.mixer?.counter ?? null
       : round.heuristic?.predicted ?? null;
-  const row: RoundRow = {
+  const row: RoundInsert = {
     user_id: round.playerId,
     session_id: round.sessionId,
     stats_profile_id: round.profileId,
@@ -429,22 +273,22 @@ function roundLogToRow({ round, roundNumber }: RoundInsertInput): RoundRow {
     client_round_id: round.id,
     round_number: roundNumber,
     played_at: round.t,
-    mode: round.mode,
-    difficulty: round.difficulty,
+    mode: round.mode as RoundInsert["mode"],
+    difficulty: round.difficulty as RoundInsert["difficulty"],
     best_of: round.bestOf,
-    player_move: round.player,
-    ai_move: round.ai,
-    predicted_player_move: predicted,
-    outcome: round.outcome,
-    decision_policy: round.policy,
+    player_move: round.player as RoundInsert["player_move"],
+    ai_move: round.ai as RoundInsert["ai_move"],
+    predicted_player_move: predicted as RoundInsert["predicted_player_move"],
+    outcome: round.outcome as RoundInsert["outcome"],
+    decision_policy: round.policy as RoundInsert["decision_policy"],
     reason: round.reason ?? null,
     ai_confidence: round.confidence ?? null,
-    confidence_bucket: round.confidenceBucket ?? null,
+    confidence_bucket: (round.confidenceBucket ?? null) as RoundInsert["confidence_bucket"],
     decision_time_ms: round.decisionTimeMs ?? null,
     streak_ai: Number.isFinite(round.streakAI) ? round.streakAI : null,
     streak_you: Number.isFinite(round.streakYou) ? round.streakYou : null,
-    mixer_trace: round.mixer ?? null,
-    heuristic_trace: round.heuristic ?? null,
+    mixer_trace: (round.mixer ?? null) as RoundInsert["mixer_trace"],
+    heuristic_trace: (round.heuristic ?? null) as RoundInsert["heuristic_trace"],
   };
   const rowId = asUuid(round.id);
   if (rowId) {
@@ -486,16 +330,16 @@ function rowToRoundLog(row: RoundRow): RoundLog | null {
   };
 }
 
-function matchSummaryToRow(match: MatchSummary): MatchRow {
-  const row: MatchRow = {
+function matchSummaryToRow(match: MatchSummary): MatchInsert {
+  const row: MatchInsert = {
     user_id: match.playerId,
     session_id: match.sessionId,
     stats_profile_id: match.profileId,
     client_match_id: match.clientId ?? match.id,
     started_at: match.startedAt,
     ended_at: match.endedAt ?? null,
-    mode: match.mode,
-    difficulty: match.difficulty,
+    mode: match.mode as MatchInsert["mode"],
+    difficulty: match.difficulty as MatchInsert["difficulty"],
     best_of: match.bestOf,
     rounds_played: match.rounds,
     score_you: match.score.you,
@@ -558,11 +402,11 @@ function aiStateRowToModel(row: AiStateRow): StoredPredictorModelState {
     modelVersion: row.model_version,
     updatedAt: row.updated_at,
     roundsSeen: row.rounds_seen,
-    state: row.state as StoredPredictorModelState["state"],
+    state: row.state as unknown as StoredPredictorModelState["state"],
   };
 }
 
-function sessionRowToCloudSession(row: SessionRow & { id: string }): CloudSession {
+function sessionRowToCloudSession(row: SessionRow): CloudSession {
   return {
     id: row.id,
     userId: row.user_id,
@@ -582,7 +426,7 @@ function sessionRowToCloudSession(row: SessionRow & { id: string }): CloudSessio
   };
 }
 
-function sessionInputToRow(input: SessionUpsertInput): SessionRow {
+function sessionInputToRow(input: SessionUpsertInput): SessionInsert {
   const storageMode = input.storageMode ?? "cloud";
 
   return {
@@ -592,18 +436,18 @@ function sessionInputToRow(input: SessionUpsertInput): SessionRow {
     primary_stats_profile_id: input.primaryStatsProfileId ?? null,
     device_id: input.deviceId ?? null,
     client_session_id: input.clientSessionId ?? null,
-    storage_mode: storageMode,
+    storage_mode: storageMode as SessionInsert["storage_mode"],
     started_at: input.startedAt,
     ended_at: input.endedAt ?? null,
     last_event_at: input.lastEventAt ?? null,
     session_label: input.sessionLabel ?? null,
     client_version: input.clientVersion ?? null,
     locale: input.locale ?? null,
-    metadata: input.metadata ?? {},
+    metadata: (input.metadata ?? {}) as SessionInsert["metadata"],
   };
 }
 
-function userSettingRowToModel(row: UserSettingRow & { id: string }): UserSetting {
+function userSettingRowToModel(row: UserSettingRow): UserSetting {
   return {
     id: row.id,
     userId: row.user_id,
@@ -618,15 +462,15 @@ function userSettingRowToModel(row: UserSettingRow & { id: string }): UserSettin
   };
 }
 
-function userSettingInputToRow(input: UserSettingUpsertInput): UserSettingRow {
+function userSettingInputToRow(input: UserSettingUpsertInput): UserSettingInsert {
   return {
     id: input.id,
     user_id: input.userId,
     stats_profile_id: input.statsProfileId ?? null,
     session_id: input.sessionId ?? null,
-    scope: input.scope ?? "global",
+    scope: (input.scope ?? "global") as UserSettingInsert["scope"],
     key: input.key,
-    value: input.value,
+    value: input.value as UserSettingInsert["value"],
     version: input.version ?? 1,
   };
 }
@@ -719,14 +563,16 @@ export class CloudDataService {
     const mapped = rows
       .map(statsProfileRowToStatsProfile)
       .filter((entry): entry is StatsProfile => Boolean(entry));
-    mapped.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    mapped.sort((a, b) => a.created_at.localeCompare(b.created_at));
     return mapped;
   }
 
   async upsertStatsProfile(profile: StatsProfile): Promise<void> {
     const client = ensureClient(this.client);
     const payload = statsProfileToUpsert(profile);
-    const mutation = client.from("stats_profiles").upsert(payload);
+    const mutation = client
+      .from("stats_profiles")
+      .upsert(payload, { onConflict: "user_id,base_name,profile_version" });
     await handleMutation(mutation, "upsert stats profile");
   }
 
@@ -735,7 +581,7 @@ export class CloudDataService {
     const client = ensureClient(this.client);
     const payload = rounds.map(roundLogToRow);
     const withPrimaryKey = payload.filter(
-      (row): row is RoundRow & { id: string } => typeof row.id === "string" && row.id.length > 0,
+      (row): row is RoundInsert & { id: string } => typeof row.id === "string" && row.id.length > 0,
     );
     const withoutPrimaryKey = payload.filter(row => !row.id);
 
@@ -797,7 +643,7 @@ export class CloudDataService {
     const client = ensureClient(this.client);
     const payload = matches.map(matchSummaryToRow);
     const withPrimaryKey = payload.filter(
-      (row): row is MatchRow & { id: string } => typeof row.id === "string" && row.id.length > 0,
+      (row): row is MatchInsert & { id: string } => typeof row.id === "string" && row.id.length > 0,
     );
     const withoutPrimaryKey = payload.filter(row => !row.id);
 
@@ -867,13 +713,13 @@ export class CloudDataService {
       typeof rawVersion === "number" && Number.isFinite(rawVersion)
         ? Math.max(1, Math.floor(rawVersion))
         : 1;
-    const payload: AiStateRow = {
+    const payload: AiStateInsert = {
       id: input.id,
       user_id: input.userId,
       stats_profile_id: input.profileId,
       model_version: input.modelVersion,
       rounds_seen: input.roundsSeen,
-      state: input.state,
+      state: input.state as unknown as AiStateInsert["state"],
       needs_rebuild: input.needsRebuild ?? false,
       last_round_id: input.lastRoundId ?? null,
       version,
@@ -921,7 +767,7 @@ export class CloudDataService {
         "id, user_id, demographics_profile_id, primary_stats_profile_id, device_id, client_session_id, storage_mode, started_at, ended_at, last_event_at, session_label, client_version, locale, metadata, version",
       )
       .eq("user_id", userId);
-    const rows = await handleSelect<SessionRow & { id: string }>(query, "select sessions");
+    const rows = await handleSelect<SessionRow>(query, "select sessions");
     return rows.map(sessionRowToCloudSession);
   }
 
@@ -934,7 +780,7 @@ export class CloudDataService {
     if (key) {
       builder = builder.eq("key", key);
     }
-    const rows = await handleSelect<UserSettingRow & { id: string }>(builder, "select user settings");
+    const rows = await handleSelect<UserSettingRow>(builder, "select user settings");
     return rows.map(userSettingRowToModel);
   }
 

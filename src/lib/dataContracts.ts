@@ -1,3 +1,12 @@
+import type {
+  AiStateRow,
+  DemographicsProfileRow,
+  RoundRow,
+  SessionRow,
+  StatsCounterRow,
+  StatsProfileRow,
+} from "./database.types";
+
 export type UiSurfaceKey =
   | "profileHeader"
   | "modeTiles"
@@ -5,85 +14,72 @@ export type UiSurfaceKey =
   | "liveStats"
   | "aiInsights";
 
-export interface DemographicsProfileRecord {
-  user_id: string;
-  first_name: string | null;
-  last_initial: string | null;
-  grade: string | null;
-  training_completed: boolean | null;
-  training_count: number | null;
-}
+export type DemographicsProfileRecord = Pick<
+  DemographicsProfileRow,
+  "user_id" | "first_name" | "last_initial" | "grade" | "training_completed" | "training_count"
+>;
 
-export interface StatsProfileRecord {
-  id: string;
-  user_id: string;
-  base_name: string;
-  display_name: string;
-  profile_version: number;
-  training_completed: boolean;
-  training_count: number;
-  predictor_default: boolean;
-  seen_post_training_cta: boolean;
-  previous_profile_id: string | null;
-  next_profile_id: string | null;
-  created_at: string;
-}
+export type StatsProfileRecord = StatsProfileRow;
 
-export interface SessionRecord {
-  id: string;
-  user_id: string;
-  primary_stats_profile_id: string | null;
-  client_session_id: string | null;
-  started_at: string;
-  ended_at: string | null;
-  last_event_at: string | null;
-}
+export type SessionRecord = Pick<
+  SessionRow,
+  | "id"
+  | "user_id"
+  | "primary_stats_profile_id"
+  | "client_session_id"
+  | "started_at"
+  | "ended_at"
+  | "last_event_at"
+>;
 
-export interface RoundRecord {
-  id: string;
-  user_id: string;
-  stats_profile_id: string;
-  session_id: string;
-  match_id: string | null;
-  client_round_id: string | null;
-  round_number: number;
-  played_at: string;
-  mode: string;
-  difficulty: string;
-  best_of: number;
-  player_move: string;
-  ai_move: string;
-  predicted_player_move: string | null;
-  outcome: string;
-  ai_confidence: number | null;
-  confidence_bucket: string | null;
-  decision_policy: string;
-  reason: string | null;
-}
+export type RoundRecord = Pick<
+  RoundRow,
+  | "id"
+  | "user_id"
+  | "stats_profile_id"
+  | "session_id"
+  | "match_id"
+  | "client_round_id"
+  | "round_number"
+  | "played_at"
+  | "mode"
+  | "difficulty"
+  | "best_of"
+  | "player_move"
+  | "ai_move"
+  | "predicted_player_move"
+  | "outcome"
+  | "ai_confidence"
+  | "confidence_bucket"
+  | "decision_policy"
+  | "reason"
+>;
 
-export interface AiStateRecord {
-  id: string;
-  user_id: string;
-  stats_profile_id: string;
-  model_version: number;
-  rounds_seen: number;
-  state: unknown;
-  needs_rebuild: boolean;
-  updated_at: string;
-  version: number;
-}
+export type AiStateRecord = Pick<
+  AiStateRow,
+  | "id"
+  | "user_id"
+  | "stats_profile_id"
+  | "model_version"
+  | "rounds_seen"
+  | "state"
+  | "needs_rebuild"
+  | "updated_at"
+  | "version"
+>;
 
-export interface StatsCounterRecord {
-  id: string;
-  user_id: string;
-  stats_profile_id: string;
-  key: string;
-  value_numeric: number | null;
-  value_integer: number | null;
-  value_json: unknown;
-  sample_count: number | null;
-  updated_at: string;
-}
+export type StatsCounterRecord = Pick<
+  StatsCounterRow,
+  | "id"
+  | "user_id"
+  | "stats_profile_id"
+  | "key"
+  | "value_numeric"
+  | "value_integer"
+  | "value_json"
+  | "sample_count"
+  | "updated_at"
+>;
 
 export interface UiDataContractDescriptor {
   tables: Array<{

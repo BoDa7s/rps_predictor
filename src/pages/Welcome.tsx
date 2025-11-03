@@ -29,6 +29,7 @@ import {
 } from "../lib/localSession";
 import { usePlayMode, type PlayMode } from "../lib/playMode";
 import type { StatsProfile } from "../stats";
+import { makeProfileDisplayName } from "../stats";
 
 const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => String(5 + index));
 
@@ -416,39 +417,83 @@ async function hydrateCloudPlayerState(session: Session, seed?: CloudProfileSeed
           return;
         }
         const id = typeof profileEntry.id === "string" ? profileEntry.id : null;
-        const playerIdValue = typeof profileEntry.playerId === "string" ? profileEntry.playerId : null;
+        const playerIdValue =
+          typeof (profileEntry as StatsProfile).user_id === "string"
+            ? (profileEntry as StatsProfile).user_id
+            : typeof (profileEntry as any).playerId === "string"
+              ? (profileEntry as any).playerId
+              : null;
         if (!id || !playerIdValue) {
           return;
         }
         const baseNameValue =
-          typeof profileEntry.baseName === "string" && profileEntry.baseName.trim()
-            ? profileEntry.baseName
-            : "primary";
-        const versionValue = Number.isFinite(profileEntry.version)
-          ? Math.max(1, Math.floor(Number(profileEntry.version)))
-          : 1;
+          typeof (profileEntry as StatsProfile).base_name === "string" && (profileEntry as StatsProfile).base_name.trim()
+            ? (profileEntry as StatsProfile).base_name
+            : typeof (profileEntry as any).baseName === "string" && (profileEntry as any).baseName.trim()
+              ? (profileEntry as any).baseName
+              : "primary";
+        const versionValue = Number.isFinite((profileEntry as StatsProfile).profile_version)
+          ? Math.max(1, Math.floor(Number((profileEntry as StatsProfile).profile_version)))
+          : Number.isFinite((profileEntry as any).version)
+            ? Math.max(1, Math.floor(Number((profileEntry as any).version)))
+            : 1;
+        const createdAtValue =
+          typeof (profileEntry as StatsProfile).created_at === "string"
+            ? (profileEntry as StatsProfile).created_at
+            : typeof (profileEntry as any).createdAt === "string"
+              ? (profileEntry as any).createdAt
+              : new Date().toISOString();
+        const updatedAtValue =
+          typeof (profileEntry as StatsProfile).updated_at === "string"
+            ? (profileEntry as StatsProfile).updated_at
+            : createdAtValue;
         const sanitizedEntry: StatsProfile = {
           id,
-          playerId: playerIdValue,
-          name:
-            typeof profileEntry.name === "string" && profileEntry.name.trim()
-              ? profileEntry.name
-              : baseNameValue,
-          createdAt:
-            typeof profileEntry.createdAt === "string"
-              ? profileEntry.createdAt
-              : new Date().toISOString(),
-          trainingCount: Number.isFinite(profileEntry.trainingCount)
-            ? Number(profileEntry.trainingCount)
-            : 0,
-          trained: profileEntry.trained === true,
-          predictorDefault: profileEntry.predictorDefault === true,
-          seenPostTrainingCTA: profileEntry.seenPostTrainingCTA === true,
-          baseName: baseNameValue,
-          version: versionValue,
-          previousProfileId:
-            typeof profileEntry.previousProfileId === "string" ? profileEntry.previousProfileId : null,
-          nextProfileId: typeof profileEntry.nextProfileId === "string" ? profileEntry.nextProfileId : null,
+          user_id: playerIdValue,
+          demographics_profile_id:
+            typeof (profileEntry as StatsProfile).demographics_profile_id === "string"
+              ? (profileEntry as StatsProfile).demographics_profile_id
+              : null,
+          base_name: baseNameValue,
+          profile_version: versionValue,
+          display_name:
+            typeof (profileEntry as StatsProfile).display_name === "string" && (profileEntry as StatsProfile).display_name.trim()
+              ? (profileEntry as StatsProfile).display_name
+              : makeProfileDisplayName(baseNameValue, versionValue),
+          training_count: Number.isFinite((profileEntry as StatsProfile).training_count)
+            ? Number((profileEntry as StatsProfile).training_count)
+            : Number.isFinite((profileEntry as any).trainingCount)
+              ? Number((profileEntry as any).trainingCount)
+              : 0,
+          training_completed:
+            (profileEntry as StatsProfile).training_completed === true || (profileEntry as any).trained === true,
+          predictor_default:
+            (profileEntry as StatsProfile).predictor_default === true || (profileEntry as any).predictorDefault === true,
+          seen_post_training_cta:
+            (profileEntry as StatsProfile).seen_post_training_cta === true ||
+            (profileEntry as any).seenPostTrainingCTA === true,
+          previous_profile_id:
+            typeof (profileEntry as StatsProfile).previous_profile_id === "string"
+              ? (profileEntry as StatsProfile).previous_profile_id
+              : typeof (profileEntry as any).previousProfileId === "string"
+                ? (profileEntry as any).previousProfileId
+                : null,
+          next_profile_id:
+            typeof (profileEntry as StatsProfile).next_profile_id === "string"
+              ? (profileEntry as StatsProfile).next_profile_id
+              : typeof (profileEntry as any).nextProfileId === "string"
+                ? (profileEntry as any).nextProfileId
+                : null,
+          archived: (profileEntry as StatsProfile).archived === true,
+          metadata:
+            (profileEntry as StatsProfile).metadata && typeof (profileEntry as StatsProfile).metadata === "object"
+              ? (profileEntry as StatsProfile).metadata
+              : {} as StatsProfile["metadata"],
+          created_at: createdAtValue,
+          updated_at: updatedAtValue,
+          version: Number.isFinite((profileEntry as StatsProfile).version)
+            ? Math.max(1, Math.floor(Number((profileEntry as StatsProfile).version)))
+            : 1,
         };
         sanitized.push(sanitizedEntry);
       });
@@ -462,25 +507,31 @@ async function hydrateCloudPlayerState(session: Session, seed?: CloudProfileSeed
       : 0;
     const fallbackTrained = demographics?.training_completed === true;
     const fallbackId = `${userId}-primary-profile`;
+    const timestamp = new Date().toISOString();
     return [
       {
         id: fallbackId,
-        playerId: userId,
-        name: "Primary",
-        createdAt: new Date().toISOString(),
-        trainingCount: fallbackTrainingCount,
-        trained: fallbackTrained,
-        predictorDefault: true,
-        seenPostTrainingCTA: false,
-        baseName: "primary",
+        user_id: userId,
+        demographics_profile_id: null,
+        base_name: "primary",
+        profile_version: 1,
+        display_name: "Primary",
+        training_count: fallbackTrainingCount,
+        training_completed: fallbackTrained,
+        predictor_default: true,
+        seen_post_training_cta: false,
+        previous_profile_id: null,
+        next_profile_id: null,
+        archived: false,
+        metadata: {} as StatsProfile["metadata"],
+        created_at: timestamp,
+        updated_at: timestamp,
         version: 1,
-        previousProfileId: null,
-        nextProfileId: null,
       },
     ];
   })();
 
-  const filteredStats = normalizedStats.filter(entry => entry.playerId === userId);
+  const filteredStats = normalizedStats.filter(entry => entry.user_id === userId);
 
   return {
     playerId: userId,
@@ -536,18 +587,18 @@ function shouldStartTrainingFromProfiles(playerIdHint: string | null, profiles: 
   if (!playerIdHint) {
     return false;
   }
-  const candidates = profiles.filter(profile => profile.playerId === playerIdHint);
+  const candidates = profiles.filter(profile => profile.user_id === playerIdHint);
   if (candidates.length === 0) {
     return true;
   }
-  const preferred = candidates.find(profile => profile.predictorDefault) ?? candidates[0];
-  if (preferred.trained === true) {
+  const preferred = candidates.find(profile => profile.predictor_default) ?? candidates[0];
+  if (preferred.training_completed === true) {
     return false;
   }
-  if (preferred.trained === false) {
+  if (preferred.training_completed === false) {
     return true;
   }
-  const trainingCount = Number.isFinite(preferred.trainingCount) ? Number(preferred.trainingCount) : 0;
+  const trainingCount = Number.isFinite(preferred.training_count) ? Number(preferred.training_count) : 0;
   return trainingCount < TRAINING_ROUNDS_REQUIRED;
 }
 
