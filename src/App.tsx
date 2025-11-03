@@ -51,7 +51,14 @@ import botSad96 from "./assets/mascot/bot-sad-96.svg";
 import HelpCenter, { type HelpQuestion } from "./HelpCenter";
 import { supabaseClient, isSupabaseConfigured } from "./lib/supabaseClient";
 import { clearActiveLocalSession } from "./lib/localSession";
-import { BOOT_ROUTE, MODES_ROUTE, TRAINING_ROUTE, WELCOME_ROUTE } from "./lib/routes";
+import {
+  BOOT_ROUTE,
+  CHALLENGE_ROUTE,
+  MODES_ROUTE,
+  PRACTICE_ROUTE,
+  TRAINING_ROUTE,
+  WELCOME_ROUTE,
+} from "./lib/routes";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -77,6 +84,8 @@ function mulberry32(a:number){
 // Types
 const MOVES: Move[] = ["rock", "paper", "scissors"];
 const MODES: Mode[] = ["challenge","practice"];
+
+const modeToRoute = (mode: Mode): string => (mode === "challenge" ? CHALLENGE_ROUTE : PRACTICE_ROUTE);
 
 const DIFFICULTY_INFO: Record<AIMode, { label: string; helper: string }> = {
   fair: { label: "Fair", helper: "Gentle counterplay tuned for learning." },
@@ -1575,6 +1584,9 @@ function RPSDoodleAppInner(){
   const [trainingActive, setTrainingActive] = useState<boolean>(false);
   const [forceTrainingPrompt, setForceTrainingPrompt] = useState(false);
   const trainingRouteHandledRef = useRef(false);
+  const practiceRouteHandledRef = useRef(false);
+  const challengeRouteHandledRef = useRef(false);
+  const startMatchCallableRef = useRef<(mode?: Mode, opts?: { silent?: boolean }) => void>(() => {});
   useEffect(() => {
     const trainingRouteActive = location.pathname === TRAINING_ROUTE;
     if (trainingRouteActive) {
@@ -3374,6 +3386,9 @@ function RPSDoodleAppInner(){
       if (resumeState) {
         if (resumeState.trainingActive) {
           navigateIfNeeded(TRAINING_ROUTE);
+        } else if (resumeState.scene === "MATCH" || resumeState.scene === "RESULTS") {
+          const resumeMode: Mode = resumeState.mode ?? "practice";
+          navigateIfNeeded(modeToRoute(resumeMode));
         } else {
           navigateIfNeeded(MODES_ROUTE);
         }
@@ -3446,6 +3461,11 @@ function RPSDoodleAppInner(){
       navigateIfNeeded(TRAINING_ROUTE);
       return;
     }
+    if (scene === "MATCH" || scene === "RESULTS") {
+      const activeMode: Mode = selectedMode ?? "practice";
+      navigateIfNeeded(modeToRoute(activeMode));
+      return;
+    }
     navigateIfNeeded(MODES_ROUTE);
   }, [
     scene,
@@ -3454,6 +3474,7 @@ function RPSDoodleAppInner(){
     needsTraining,
     location.pathname,
     navigateIfNeeded,
+    selectedMode,
   ]);
 
   const statsTabs = [
@@ -3983,6 +4004,53 @@ function RPSDoodleAppInner(){
     setToastConfirm(null);
     setLive("Challenge needs the AI predictor. Turn it on from settings.");
   }, [setLive, setToastConfirm, setToastMessage, showModernToast]);
+  useEffect(() => {
+    const handleModeRoute = (
+      route: string,
+      mode: Mode,
+      ref: React.MutableRefObject<boolean>,
+    ) => {
+      if (location.pathname !== route) {
+        ref.current = false;
+        return;
+      }
+      if (scene === "BOOT" || welcomeActive) {
+        ref.current = false;
+        return;
+      }
+      if (trainingActive || needsTraining) {
+        navigateIfNeeded(TRAINING_ROUTE);
+        ref.current = false;
+        return;
+      }
+      if (mode === "challenge" && !predictorMode) {
+        showChallengeNeedsPredictorPrompt();
+        navigateIfNeeded(MODES_ROUTE);
+        ref.current = false;
+        return;
+      }
+      if (selectedMode !== mode) {
+        setSelectedMode(mode);
+      }
+      if (scene === "MODE") {
+        startMatchCallableRef.current(mode, { silent: true });
+      }
+      ref.current = true;
+    };
+
+    handleModeRoute(PRACTICE_ROUTE, "practice", practiceRouteHandledRef);
+    handleModeRoute(CHALLENGE_ROUTE, "challenge", challengeRouteHandledRef);
+  }, [
+    location.pathname,
+    scene,
+    welcomeActive,
+    trainingActive,
+    needsTraining,
+    predictorMode,
+    selectedMode,
+    navigateIfNeeded,
+    showChallengeNeedsPredictorPrompt,
+  ]);
 
   const handleDisabledInsightClick = useCallback(() => {
     showModernToast({
@@ -4455,6 +4523,7 @@ function RPSDoodleAppInner(){
     youStreakRef.current = 0;
     matchStartRef.current = new Date().toISOString();
     const matchMode: Mode = mode ?? selectedMode ?? "practice";
+    ensureModeRoute(matchMode);
     const matchId = makeMatchId();
     currentMatchIdRef.current = matchId;
     if (matchMode === "challenge") {
@@ -4900,6 +4969,13 @@ function RPSDoodleAppInner(){
   const timersRef = useRef<number[]>([]);
   const addT = (fn:()=>void, ms:number)=>{ const id = window.setTimeout(fn, ms); timersRef.current.push(id); return id; };
   const clearTimers = ()=>{ timersRef.current.forEach(id=> clearTimeout(id)); timersRef.current = []; };
+  const ensureModeRoute = useCallback(
+    (mode: Mode) => {
+      if (trainingActive || needsTraining) return;
+      navigateIfNeeded(modeToRoute(mode));
+    },
+    [trainingActive, needsTraining, navigateIfNeeded],
+  );
   function goToMode(){
     clearCountdown();
     clearTimers();
@@ -4907,6 +4983,7 @@ function RPSDoodleAppInner(){
     setWipeRun(false);
     setSelectedMode(null);
     setScene("MODE");
+    navigateIfNeeded(MODES_ROUTE);
   }
   function goToMatch(){ clearTimers(); startMatch(selectedMode ?? "practice"); }
 
@@ -4921,10 +4998,16 @@ function RPSDoodleAppInner(){
       acknowledgePostTrainingCta();
     }
     armAudio(); audio.cardSelect(); setSelectedMode(mode); setLive(`${modeLabel(mode)} mode selected. Loading match.`);
+    ensureModeRoute(mode);
     addT(()=>{ audio.whooshShort(); }, 140); // morph start cue
     const graphicBudget = 1400; addT(()=>{ startSceneWipe(mode); }, graphicBudget);
   }
-  function startSceneWipe(mode: Mode){ setWipeRun(true); audio.crossFadeMusic(0.3); addT(()=>{ setWipeRun(false); startMatch(mode); }, 400); }
+  function startSceneWipe(mode: Mode){
+    ensureModeRoute(mode);
+    setWipeRun(true);
+    audio.crossFadeMusic(0.3);
+    addT(()=>{ setWipeRun(false); startMatch(mode); }, 400);
+  }
 
   // ---- DEV SELF-TESTS (run once in dev) ----
   useEffect(()=>{
@@ -4944,6 +5027,8 @@ function RPSDoodleAppInner(){
     ["rock","rock","paper","rock","rock"].forEach((m,i)=>{ const d = mix.predict(ctx); const top = (Object.keys(d) as Move[]).reduce((a,b)=> d[a]>d[b]?a:b); console.assert(["rock","paper","scissors"].includes(top), "dist valid"); mix.update(ctx, m as Move); ctx = { ...ctx, playerMoves:[...ctx.playerMoves, m as Move] } });
     console.groupEnd();
   },[]);
+
+  startMatchCallableRef.current = startMatch;
 
   return (
     <div className="relative flex min-h-screen flex-col select-none overflow-x-hidden overflow-y-auto" style={{ fontSize: `${textScale*16}px` }}>

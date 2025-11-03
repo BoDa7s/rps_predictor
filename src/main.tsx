@@ -3,7 +3,14 @@ import ReactDOM from "react-dom/client";
 import { createBrowserRouter, Navigate, Outlet, RouterProvider } from "react-router-dom";
 import RPSDoodleApp from "./App";
 import Welcome from "./pages/Welcome";
-import { BOOT_ROUTE, MODES_ROUTE, TRAINING_ROUTE, WELCOME_ROUTE } from "./lib/routes";
+import {
+  BOOT_ROUTE,
+  CHALLENGE_ROUTE,
+  MODES_ROUTE,
+  PRACTICE_ROUTE,
+  TRAINING_ROUTE,
+  WELCOME_ROUTE,
+} from "./lib/routes";
 import "./index.css";
 import { PlayModeProvider } from "./lib/playMode";
 
@@ -20,7 +27,7 @@ function AppRouteMarker(): JSX.Element | null {
   return null;
 }
 
-const appChildPaths = [BOOT_ROUTE, MODES_ROUTE, TRAINING_ROUTE]
+const appChildPaths = [BOOT_ROUTE, MODES_ROUTE, TRAINING_ROUTE, CHALLENGE_ROUTE, PRACTICE_ROUTE]
   .map(route => (route.startsWith("/") ? route.slice(1) : route))
   .filter(route => route.length > 0);
 
