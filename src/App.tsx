@@ -1532,6 +1532,16 @@ function RPSDoodleAppInner(){
     if (value === "/") return "/";
     return value.replace(/\/+$/, "") || "/";
   }, []);
+  const normalizedPathname = useMemo(() => normalizePathname(location.pathname), [location.pathname, normalizePathname]);
+  const routeMode: Mode | null = useMemo(() => {
+    if (normalizedPathname === CHALLENGE_ROUTE) return "challenge";
+    if (normalizedPathname === PRACTICE_ROUTE) return "practice";
+    return null;
+  }, [normalizedPathname]);
+  const routeIsModes = normalizedPathname === MODES_ROUTE;
+  const routeIsTraining = normalizedPathname === TRAINING_ROUTE;
+  const routeIsWelcome = normalizedPathname === WELCOME_ROUTE;
+  const routeIsBoot = normalizedPathname === BOOT_ROUTE;
 
   const navigateIfNeeded = useCallback(
     (target: string, options: { replace?: boolean } = { replace: true }) => {
@@ -1590,8 +1600,6 @@ function RPSDoodleAppInner(){
   const [trainingActive, setTrainingActive] = useState<boolean>(false);
   const [forceTrainingPrompt, setForceTrainingPrompt] = useState(false);
   const trainingRouteHandledRef = useRef(false);
-  const practiceRouteHandledRef = useRef(false);
-  const challengeRouteHandledRef = useRef(false);
   const startMatchCallableRef = useRef<(mode?: Mode, opts?: { silent?: boolean }) => void>(() => {});
   useEffect(() => {
     const trainingRouteActive = location.pathname === TRAINING_ROUTE;
@@ -3459,32 +3467,112 @@ function RPSDoodleAppInner(){
     setForceTrainingPrompt,
   ]);
 
-  useEffect(() => {
-    if (scene === "BOOT") return;
-    if (welcomeActive) return;
-    if (location.pathname === WELCOME_ROUTE) return;
+  const desiredPath = useMemo(() => {
+    if (escapeToModesRef.current) {
+      return MODES_ROUTE;
+    }
+    if (scene === "BOOT") {
+      return routeIsBoot ? normalizedPathname : BOOT_ROUTE;
+    }
+    if (welcomeActive) {
+      return WELCOME_ROUTE;
+    }
     if (trainingActive || needsTraining) {
-      navigateIfNeeded(TRAINING_ROUTE);
-      return;
+      return TRAINING_ROUTE;
+    }
+    if (scene === "MODE") {
+      if (selectedMode) {
+        return modeToRoute(selectedMode);
+      }
+      if (routeMode) {
+        return modeToRoute(routeMode);
+      }
+      return MODES_ROUTE;
     }
     if (scene === "MATCH" || scene === "RESULTS") {
-      if (normalizePathname(location.pathname) === MODES_ROUTE) {
-        return;
-      }
-      const activeMode: Mode = selectedMode ?? "practice";
-      navigateIfNeeded(modeToRoute(activeMode));
-      return;
+      return modeToRoute(selectedMode ?? routeMode ?? "practice");
     }
-    navigateIfNeeded(MODES_ROUTE);
+    return MODES_ROUTE;
   }, [
     scene,
     welcomeActive,
     trainingActive,
     needsTraining,
-    location.pathname,
-    navigateIfNeeded,
     selectedMode,
-    normalizePathname,
+    routeMode,
+    routeIsBoot,
+    normalizedPathname,
+  ]);
+
+  useEffect(() => {
+    navigateIfNeeded(desiredPath);
+  }, [desiredPath, navigateIfNeeded]);
+
+  useEffect(() => {
+    if (normalizedPathname === MODES_ROUTE && escapeToModesRef.current) {
+      escapeToModesRef.current = false;
+    }
+  }, [normalizedPathname]);
+
+  useEffect(() => {
+    if (scene === "BOOT") return;
+    if (welcomeActive) return;
+    if (routeIsBoot) return;
+    if (routeIsWelcome) return;
+
+    if (routeIsTraining) {
+      if (!trainingActive && needsTraining) {
+        setTrainingActive(true);
+      }
+      return;
+    }
+
+    if (routeMode) {
+      if (trainingActive || needsTraining) {
+        return;
+      }
+      if (escapeToModesRef.current) {
+        return;
+      }
+      if (routeMode === "challenge" && !predictorMode) {
+        showChallengeNeedsPredictorPrompt();
+        goToMode();
+        return;
+      }
+      const inActiveMatch =
+        selectedMode === routeMode && (scene === "MATCH" || scene === "RESULTS");
+      const launching = scene === "MODE" && selectedMode === routeMode && wipeRun;
+      if (inActiveMatch || launching) {
+        return;
+      }
+      if (scene !== "MODE" || selectedMode !== null) {
+        goToMode();
+      }
+      beginModeTransition(routeMode);
+      return;
+    }
+
+    if (routeIsModes) {
+      if (scene !== "MODE" || selectedMode !== null || wipeRun) {
+        goToMode();
+      }
+      return;
+    }
+  }, [
+    scene,
+    welcomeActive,
+    routeIsBoot,
+    routeIsWelcome,
+    routeIsTraining,
+    routeIsModes,
+    routeMode,
+    trainingActive,
+    needsTraining,
+    predictorMode,
+    selectedMode,
+    wipeRun,
+    goToMode,
+    showChallengeNeedsPredictorPrompt,
   ]);
 
   const statsTabs = [
@@ -4004,7 +4092,7 @@ function RPSDoodleAppInner(){
     );
   }, [postTrainingLockActive, setLive]);
 
-  const showChallengeNeedsPredictorPrompt = useCallback(() => {
+  function showChallengeNeedsPredictorPrompt(){
     showModernToast({
       variant: "danger",
       title: "Enable AI predictor to play Challenge",
@@ -4013,54 +4101,7 @@ function RPSDoodleAppInner(){
     setToastMessage(null);
     setToastConfirm(null);
     setLive("Challenge needs the AI predictor. Turn it on from settings.");
-  }, [setLive, setToastConfirm, setToastMessage, showModernToast]);
-  useEffect(() => {
-    const handleModeRoute = (
-      route: string,
-      mode: Mode,
-      ref: React.MutableRefObject<boolean>,
-    ) => {
-      if (location.pathname !== route) {
-        ref.current = false;
-        return;
-      }
-      if (scene === "BOOT" || welcomeActive) {
-        ref.current = false;
-        return;
-      }
-      if (trainingActive || needsTraining) {
-        navigateIfNeeded(TRAINING_ROUTE);
-        ref.current = false;
-        return;
-      }
-      if (mode === "challenge" && !predictorMode) {
-        showChallengeNeedsPredictorPrompt();
-        navigateIfNeeded(MODES_ROUTE);
-        ref.current = false;
-        return;
-      }
-      if (selectedMode !== mode) {
-        setSelectedMode(mode);
-      }
-      if (scene === "MODE") {
-        startMatchCallableRef.current(mode, { silent: true });
-      }
-      ref.current = true;
-    };
-
-    handleModeRoute(PRACTICE_ROUTE, "practice", practiceRouteHandledRef);
-    handleModeRoute(CHALLENGE_ROUTE, "challenge", challengeRouteHandledRef);
-  }, [
-    location.pathname,
-    scene,
-    welcomeActive,
-    trainingActive,
-    needsTraining,
-    predictorMode,
-    selectedMode,
-    navigateIfNeeded,
-    showChallengeNeedsPredictorPrompt,
-  ]);
+  }
 
   const handleDisabledInsightClick = useCallback(() => {
     showModernToast({
@@ -4533,7 +4574,6 @@ function RPSDoodleAppInner(){
     youStreakRef.current = 0;
     matchStartRef.current = new Date().toISOString();
     const matchMode: Mode = mode ?? selectedMode ?? "practice";
-    ensureModeRoute(matchMode);
     const matchId = makeMatchId();
     currentMatchIdRef.current = matchId;
     if (matchMode === "challenge") {
@@ -4977,16 +5017,11 @@ function RPSDoodleAppInner(){
   function bannerColor(){ if (resultBanner === "Victory") return "bg-green-500"; if (resultBanner === "Defeat") return "bg-rose-500"; return "bg-amber-500"; }
   // navigation + timer guards to avoid stuck overlays when returning to MODE
   const timersRef = useRef<number[]>([]);
+  const escapeToModesRef = useRef(false);
   const addT = (fn:()=>void, ms:number)=>{ const id = window.setTimeout(fn, ms); timersRef.current.push(id); return id; };
   const clearTimers = ()=>{ timersRef.current.forEach(id=> clearTimeout(id)); timersRef.current = []; };
-  const ensureModeRoute = useCallback(
-    (mode: Mode) => {
-      if (trainingActive || needsTraining) return;
-      navigateIfNeeded(modeToRoute(mode));
-    },
-    [trainingActive, needsTraining, navigateIfNeeded],
-  );
   function goToMode(){
+    escapeToModesRef.current = true;
     clearCountdown();
     clearTimers();
     resetMatch();
@@ -5000,27 +5035,42 @@ function RPSDoodleAppInner(){
     setWipeRun(false);
     setSelectedMode(null);
     setScene("MODE");
-    navigateIfNeeded(MODES_ROUTE);
   }
   function goToMatch(){ clearTimers(); startMatch(selectedMode ?? "practice"); }
 
   // ---- Mode selection flow ----
-  function handleModeSelect(mode: Mode){
-    if (needsTraining && mode !== "practice") return;
+  function beginModeTransition(mode: Mode): boolean {
+    if (needsTraining && mode !== "practice") return false;
     if (mode === "challenge" && !predictorMode) {
       showChallengeNeedsPredictorPrompt();
-      return;
+      return false;
     }
     if (postTrainingCtaOpen) {
       acknowledgePostTrainingCta();
     }
-    armAudio(); audio.cardSelect(); setSelectedMode(mode); setLive(`${modeLabel(mode)} mode selected. Loading match.`);
-    ensureModeRoute(mode);
-    addT(()=>{ audio.whooshShort(); }, 140); // morph start cue
-    const graphicBudget = 1400; addT(()=>{ startSceneWipe(mode); }, graphicBudget);
+    const alreadyActive = selectedMode === mode && (scene === "MATCH" || scene === "RESULTS");
+    const launching = scene === "MODE" && selectedMode === mode && wipeRun;
+    if (alreadyActive || launching) {
+      return true;
+    }
+    escapeToModesRef.current = false;
+    armAudio();
+    audio.cardSelect();
+    setSelectedMode(mode);
+    setLive(`${modeLabel(mode)} mode selected. Loading match.`);
+    addT(() => {
+      audio.whooshShort();
+    }, 140);
+    const graphicBudget = 1400;
+    addT(() => {
+      startSceneWipe(mode);
+    }, graphicBudget);
+    return true;
+  }
+  function handleModeSelect(mode: Mode){
+    beginModeTransition(mode);
   }
   function startSceneWipe(mode: Mode){
-    ensureModeRoute(mode);
     setWipeRun(true);
     audio.crossFadeMusic(0.3);
     addT(()=>{ setWipeRun(false); startMatch(mode); }, 400);
