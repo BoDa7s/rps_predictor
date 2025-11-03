@@ -1205,9 +1205,10 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         console.warn("Unable to log round: missing cloud session");
         return null;
       }
+      const entryId = isCloudMode ? makeUuid() : makeId("r");
       const entry: RoundLog = {
         ...round,
-        id: makeId("r"),
+        id: entryId,
         sessionId,
         playerId: currentPlayerId,
         profileId: currentProfile.id,

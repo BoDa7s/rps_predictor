@@ -10,6 +10,15 @@ import type {
 
 type Maybe<T> = T | null | undefined;
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function asUuid(value: Maybe<string>): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return undefined;
+  return UUID_PATTERN.test(trimmed) ? trimmed : undefined;
+}
+
 function isGrade(value: Maybe<string>): value is Grade {
   if (!value) return false;
   return GRADE_OPTIONS.includes(value as Grade);
@@ -405,11 +414,11 @@ function roundLogToRow({ round, roundNumber }: RoundInsertInput): RoundRow {
     round.policy === "mixer"
       ? round.mixer?.counter ?? null
       : round.heuristic?.predicted ?? null;
-  return {
+  const row: RoundRow = {
     user_id: round.playerId,
     session_id: round.sessionId,
     stats_profile_id: round.profileId,
-    match_id: round.matchId ?? null,
+    match_id: asUuid(round.matchId) ?? null,
     client_round_id: round.id,
     round_number: roundNumber,
     played_at: round.t,
@@ -430,6 +439,11 @@ function roundLogToRow({ round, roundNumber }: RoundInsertInput): RoundRow {
     mixer_trace: round.mixer ?? null,
     heuristic_trace: round.heuristic ?? null,
   };
+  const rowId = asUuid(round.id);
+  if (rowId) {
+    row.id = rowId;
+  }
+  return row;
 }
 
 function rowToRoundLog(row: RoundRow): RoundLog | null {
@@ -466,8 +480,7 @@ function rowToRoundLog(row: RoundRow): RoundLog | null {
 }
 
 function matchSummaryToRow(match: MatchSummary): MatchRow {
-  return {
-    id: match.id,
+  const row: MatchRow = {
     user_id: match.playerId,
     session_id: match.sessionId,
     stats_profile_id: match.profileId,
@@ -490,6 +503,11 @@ function matchSummaryToRow(match: MatchSummary): MatchRow {
     leaderboard_type: match.leaderboardType ?? null,
     notes: match.notes ?? null,
   };
+  const rowId = asUuid(match.id);
+  if (rowId) {
+    row.id = rowId;
+  }
+  return row;
 }
 
 function rowToMatchSummary(row: MatchRow): MatchSummary | null {
@@ -707,10 +725,20 @@ export class CloudDataService {
     if (rounds.length === 0) return;
     const client = ensureClient(this.client);
     const payload = rounds.map(roundLogToRow);
-    const mutation = client
-      .from("rounds")
-      .upsert(payload as any, { onConflict: "client_round_id" });
-    await handleMutation(mutation, "insert rounds");
+    const withPrimaryKey = payload.filter(
+      (row): row is RoundRow & { id: string } => typeof row.id === "string" && row.id.length > 0,
+    );
+    const withoutPrimaryKey = payload.filter(row => !row.id);
+
+    if (withPrimaryKey.length > 0) {
+      const mutation = client.from("rounds").upsert(withPrimaryKey as any, { onConflict: "id" });
+      await handleMutation(mutation, "upsert rounds");
+    }
+
+    if (withoutPrimaryKey.length > 0) {
+      const mutation = (client.from("rounds") as any).insert(withoutPrimaryKey as any);
+      await handleMutation(mutation, "insert rounds");
+    }
   }
 
   async updateRoundFields(
@@ -759,10 +787,20 @@ export class CloudDataService {
     if (matches.length === 0) return;
     const client = ensureClient(this.client);
     const payload = matches.map(matchSummaryToRow);
-    const mutation = client
-      .from("matches")
-      .upsert(payload as any, { onConflict: "client_match_id" });
-    await handleMutation(mutation, "insert matches");
+    const withPrimaryKey = payload.filter(
+      (row): row is MatchRow & { id: string } => typeof row.id === "string" && row.id.length > 0,
+    );
+    const withoutPrimaryKey = payload.filter(row => !row.id);
+
+    if (withPrimaryKey.length > 0) {
+      const mutation = client.from("matches").upsert(withPrimaryKey as any, { onConflict: "id" });
+      await handleMutation(mutation, "upsert matches");
+    }
+
+    if (withoutPrimaryKey.length > 0) {
+      const mutation = (client.from("matches") as any).insert(withoutPrimaryKey as any);
+      await handleMutation(mutation, "insert matches");
+    }
   }
 
   async updateMatchFields(
