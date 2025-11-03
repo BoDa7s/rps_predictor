@@ -3468,6 +3468,9 @@ function RPSDoodleAppInner(){
       return;
     }
     if (scene === "MATCH" || scene === "RESULTS") {
+      if (normalizePathname(location.pathname) === MODES_ROUTE) {
+        return;
+      }
       const activeMode: Mode = selectedMode ?? "practice";
       navigateIfNeeded(modeToRoute(activeMode));
       return;
@@ -3481,6 +3484,7 @@ function RPSDoodleAppInner(){
     location.pathname,
     navigateIfNeeded,
     selectedMode,
+    normalizePathname,
   ]);
 
   const statsTabs = [
