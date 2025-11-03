@@ -122,7 +122,7 @@ export function collectLeaderboardEntries({
     }
     if (match.mode !== "challenge") return;
     const playerMeta = playersById?.get(match.playerId);
-    if (playersById && !playerMeta) return;
+    const playerName = playerMeta?.name?.trim() || "Unknown player";
     const matchKey = match.clientId ?? match.id;
     const rounds = matchKey ? roundsByMatchId.get(matchKey) ?? [] : [];
     if (!rounds.length) return;
@@ -140,7 +140,7 @@ export function collectLeaderboardEntries({
       matchKey: matchKey ?? match.id,
       playerId: match.playerId,
       profileId: match.profileId,
-      playerName: playerMeta?.name ?? "",
+      playerName,
       grade: playerMeta?.grade,
       score: totalScore,
       streak: maxStreak,
