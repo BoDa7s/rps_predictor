@@ -519,12 +519,17 @@ function shouldStartTrainingFromStorage(playerIdHint: string | null, scope: Stor
   if (!profile) {
     return true;
   }
+  if (profile.trained === true) {
+    return false;
+  }
+  if (profile.trained === false) {
+    return true;
+  }
   const trainingCount =
     typeof profile.trainingCount === "number" && Number.isFinite(profile.trainingCount)
       ? profile.trainingCount
       : 0;
-  const trained = profile.trained === true;
-  return !trained && trainingCount < TRAINING_ROUNDS_REQUIRED;
+  return trainingCount < TRAINING_ROUNDS_REQUIRED;
 }
 
 function shouldStartTrainingFromProfiles(playerIdHint: string | null, profiles: StatsProfile[]): boolean {
@@ -536,9 +541,14 @@ function shouldStartTrainingFromProfiles(playerIdHint: string | null, profiles: 
     return true;
   }
   const preferred = candidates.find(profile => profile.predictorDefault) ?? candidates[0];
+  if (preferred.trained === true) {
+    return false;
+  }
+  if (preferred.trained === false) {
+    return true;
+  }
   const trainingCount = Number.isFinite(preferred.trainingCount) ? Number(preferred.trainingCount) : 0;
-  const trained = preferred.trained === true;
-  return !trained && trainingCount < TRAINING_ROUNDS_REQUIRED;
+  return trainingCount < TRAINING_ROUNDS_REQUIRED;
 }
 
 function shouldStartTrainingAfterAuth(
