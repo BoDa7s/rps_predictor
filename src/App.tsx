@@ -1516,6 +1516,7 @@ function RPSDoodleAppInner(){
     exportRoundsCsv,
     profiles: statsProfiles,
     currentProfile,
+    statsReady,
     createProfile: createStatsProfile,
     selectProfile,
     updateProfile: updateStatsProfile,
@@ -1596,6 +1597,7 @@ function RPSDoodleAppInner(){
   const roundStartRef = useRef<number | null>(null);
   const lastDecisionMsRef = useRef<number | null>(null);
   const currentMatchRoundsRef = useRef<RoundLog[]>([]);
+  const pendingMatchStartRef = useRef<{ mode?: Mode; opts: { silent?: boolean } } | null>(null);
   const [lastMoves, setLastMoves] = useState<Move[]>([]);
   const historyMixerRef = useRef<HedgeMixer | null>(null);
   const sessionMixerRef = useRef<HedgeMixer | null>(null);
@@ -4555,7 +4557,15 @@ function RPSDoodleAppInner(){
   }
 
   function startMatch(mode?: Mode, opts: { silent?: boolean } = {}){
-    const { silent = false } = opts;
+    const silent = opts.silent ?? false;
+    if (!statsReady) {
+      pendingMatchStartRef.current = { mode, opts: { ...opts } };
+      if (!silent) {
+        setLive("Preparing your stats profile. Match will start shortly.");
+      }
+      return;
+    }
+    pendingMatchStartRef.current = null;
     if (!silent) {
       armAudio();
       audio.whoosh();
@@ -4599,6 +4609,15 @@ function RPSDoodleAppInner(){
     setScene("MATCH");
   }
 
+  useEffect(() => {
+    if (!statsReady) return;
+    if (pendingMatchStartRef.current) {
+      const pending = pendingMatchStartRef.current;
+      pendingMatchStartRef.current = null;
+      startMatch(pending.mode, pending.opts);
+    }
+  }, [statsReady]);
+
   function resetTraining(){
     trainingAnnouncementsRef.current.clear();
     setTrainingCalloutQueue([]);
@@ -4637,6 +4656,10 @@ function RPSDoodleAppInner(){
 
   function onSelect(m: Move){
     if (phase !== "idle") return;
+    if (!statsReady) {
+      setLive("Preparing your stats profile. Match controls will unlock shortly.");
+      return;
+    }
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     if (roundStartRef.current !== null) {
       const elapsed = Math.max(0, Math.round(now - roundStartRef.current));

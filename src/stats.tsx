@@ -170,6 +170,7 @@ interface StatsContextValue {
   sessionId: string;
   currentProfileId: string | null;
   currentProfile: StatsProfile | null;
+  statsReady: boolean;
   profiles: StatsProfile[];
   logRound: (round: Omit<RoundLog, "id" | "sessionId" | "playerId" | "profileId">) => RoundLog | null;
   logMatch: (match: Omit<MatchSummary, "id" | "sessionId" | "playerId" | "profileId">) => MatchSummary | null;
@@ -1338,6 +1339,12 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     return allMatches.filter(m => m.playerId === currentPlayerId && (m.profileId ?? currentProfile.id) === currentProfile.id);
   }, [allMatches, currentPlayerId, currentProfile]);
 
+  const statsReady = useMemo(() => {
+    if (!currentPlayerId || !currentProfile) return false;
+    if (isCloudMode && !cloudProfilesHydrated) return false;
+    return true;
+  }, [cloudProfilesHydrated, currentPlayerId, currentProfile, isCloudMode]);
+
   const adminUpdateRound = useCallback(
     (id: string, patch: Partial<RoundLog>) => {
       setAllRounds(prev => prev.map(r => (r.id === id ? { ...r, ...patch } : r)));
@@ -1473,6 +1480,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     sessionId,
     currentProfileId: currentProfile?.id ?? null,
     currentProfile: currentProfile ?? null,
+    statsReady,
     profiles: playerProfiles,
     logRound,
     logMatch,
@@ -1496,6 +1504,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     matches,
     sessionId,
     currentProfile,
+    statsReady,
     playerProfiles,
     logRound,
     logMatch,
