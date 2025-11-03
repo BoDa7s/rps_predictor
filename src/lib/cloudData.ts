@@ -216,6 +216,7 @@ export type AiStateUpsertInput = StoredPredictorModelState & {
   needsRebuild?: boolean;
   lastRoundId?: string | null;
   id?: string;
+  version?: number;
 };
 
 export interface SessionRow {
@@ -340,6 +341,8 @@ function demographicsRowToPlayerProfile(row: DemographicsProfileRow): PlayerProf
 
 function playerProfileToDemographicsUpsert(profile: PlayerProfile): DemographicsProfileUpsert {
   const { firstName, lastInitial } = splitPlayerName(profile.playerName);
+  const trainingCompleted = profile.needsReview ? false : true;
+  const trainingCount = trainingCompleted ? 1 : 0;
   return {
     user_id: profile.id,
     username: profile.playerName,
@@ -351,8 +354,8 @@ function playerProfileToDemographicsUpsert(profile: PlayerProfile): Demographics
     prior_experience: profile.priorExperience ?? null,
     consent_version: profile.consent?.consentTextVersion ?? CONSENT_TEXT_VERSION,
     consent_granted_at: profile.consent?.timestamp ?? new Date().toISOString(),
-    training_completed: profile.needsReview ? null : true,
-    training_count: null,
+    training_completed: trainingCompleted,
+    training_count: trainingCount,
   };
 }
 
@@ -847,6 +850,17 @@ export class CloudDataService {
 
   async upsertAiState(input: AiStateUpsertInput): Promise<void> {
     const client = ensureClient(this.client);
+    const stateVersion = (input.state as { version?: unknown }).version;
+    const rawVersion =
+      typeof input.version === "number"
+        ? input.version
+        : typeof stateVersion === "number"
+          ? stateVersion
+          : undefined;
+    const version =
+      typeof rawVersion === "number" && Number.isFinite(rawVersion)
+        ? Math.max(1, Math.floor(rawVersion))
+        : 1;
     const payload: AiStateRow = {
       id: input.id,
       user_id: input.userId,
@@ -856,7 +870,7 @@ export class CloudDataService {
       state: input.state,
       needs_rebuild: input.needsRebuild ?? false,
       last_round_id: input.lastRoundId ?? null,
-      version: null,
+      version,
       updated_at: input.updatedAt,
     };
     const mutation = client.from("ai_states").upsert(payload as any);
