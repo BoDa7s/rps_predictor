@@ -749,8 +749,9 @@ export default function Welcome(): JSX.Element {
     if (existing) {
       setLocalSession(existing);
       setMode("local");
+      navigateToPostAuth("local", { playerId: existing.profile.id });
     }
-  }, [setMode]);
+  }, [navigateToPostAuth, setMode]);
 
   useEffect(() => {
     if (authMode === "local") {
