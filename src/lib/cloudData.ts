@@ -475,6 +475,172 @@ function userSettingInputToRow(input: UserSettingUpsertInput): UserSettingInsert
   };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function normalizeErrorMessage(error: unknown): string {
+  if (!error) return "Unknown error";
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error instanceof Error) {
+    return error.message || error.name;
+  }
+  const candidate = (error as { message?: unknown }).message;
+  if (typeof candidate === "string" && candidate.trim().length > 0) {
+    return candidate;
+  }
+  const details = (error as { details?: unknown }).details;
+  if (typeof details === "string" && details.trim().length > 0) {
+    return details;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "Unknown error";
+  }
+}
+
+function extractStatus(error: unknown): number | undefined {
+  const raw =
+    (error as { status?: unknown })?.status ??
+    (error as { statusCode?: unknown })?.statusCode ??
+    (error as { httpStatus?: unknown })?.httpStatus;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function extractCode(error: unknown): string | undefined {
+  const raw =
+    (error as { code?: unknown })?.code ??
+    (error as { error_code?: unknown })?.error_code ??
+    (error as { sqlState?: unknown })?.sqlState;
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    return raw;
+  }
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return String(raw);
+  }
+  return undefined;
+}
+
+class SupabaseMutationError extends Error {
+  readonly underlying: unknown;
+  readonly status?: number;
+  readonly code?: string;
+
+  constructor(context: string, underlying: unknown) {
+    const message = normalizeErrorMessage(underlying);
+    super(`${context}: ${message}`);
+    this.name = "SupabaseMutationError";
+    this.underlying = underlying;
+    this.status = extractStatus(underlying);
+    this.code = extractCode(underlying);
+  }
+}
+
+const MIN_QUEUE_DELAY_MS = 75;
+const MAX_QUEUE_DELAY_MS = 200;
+const MAX_RETRY_ATTEMPTS = 3;
+const BASE_RETRY_DELAY_MS = 150;
+const RETRY_JITTER_MS = 100;
+
+function isNetworkError(error: unknown): boolean {
+  if (!error) return false;
+  const message = normalizeErrorMessage(error).toLowerCase();
+  if (message.includes("network")) return true;
+  if (message.includes("fetch failed")) return true;
+  if (message.includes("failed to fetch")) return true;
+  if (message.includes("timed out")) return true;
+  const name = (error as { name?: unknown }).name;
+  if (typeof name === "string") {
+    const normalized = name.toLowerCase();
+    if (normalized.includes("fetch") || normalized.includes("network")) {
+      return true;
+    }
+  }
+  return error instanceof TypeError;
+}
+
+class CloudWriteQueue {
+  private tail: Promise<void> = Promise.resolve();
+
+  enqueue<T>(task: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const runTask = async (): Promise<void> => {
+        try {
+          const result = await this.executeWithRetry(task);
+          resolve(result);
+        } catch (error) {
+          reject(error);
+        } finally {
+          await this.delayBetweenRequests();
+        }
+      };
+
+      this.tail = this.tail.then(runTask, runTask);
+    });
+  }
+
+  private async executeWithRetry<T>(task: () => Promise<T>): Promise<T> {
+    let attempt = 0;
+    let lastError: unknown;
+    while (attempt < MAX_RETRY_ATTEMPTS) {
+      try {
+        return await task();
+      } catch (error) {
+        lastError = error;
+        attempt += 1;
+        if (attempt >= MAX_RETRY_ATTEMPTS || !this.shouldRetry(error)) {
+          throw error;
+        }
+        const backoffDelay = this.computeBackoffDelay(attempt - 1);
+        await sleep(backoffDelay);
+      }
+    }
+    throw lastError;
+  }
+
+  private shouldRetry(error: unknown): boolean {
+    const candidate = error instanceof SupabaseMutationError ? error : null;
+    const code = candidate?.code;
+    const status = candidate?.status;
+    if (code === "409" || status === 409) {
+      return true;
+    }
+    if (code === "23503" || code === "23505") {
+      return true;
+    }
+    if (isNetworkError(candidate?.underlying ?? error)) {
+      return true;
+    }
+    return false;
+  }
+
+  private computeBackoffDelay(attemptIndex: number): number {
+    const base = BASE_RETRY_DELAY_MS * 2 ** attemptIndex;
+    const jitter = Math.random() * RETRY_JITTER_MS;
+    return base + jitter;
+  }
+
+  private async delayBetweenRequests(): Promise<void> {
+    const span = MAX_QUEUE_DELAY_MS - MIN_QUEUE_DELAY_MS;
+    const delay = MIN_QUEUE_DELAY_MS + Math.random() * (span > 0 ? span : 0);
+    await sleep(delay);
+  }
+}
+
+const cloudWriteQueue = new CloudWriteQueue();
+
 function ensureClient(client: SupabaseClient | null | undefined): SupabaseClient {
   if (!client) {
     throw new Error("Supabase client is not configured");
@@ -509,13 +675,23 @@ async function handleSelect<Row>(
 }
 
 async function handleMutation(
-  mutation: unknown,
+  mutationFactory: () => Promise<{ error?: unknown } | null | undefined>,
   context: string,
 ): Promise<void> {
-  const { error } = (await (mutation as Promise<{ error: unknown }>)) || {};
-  if (error) {
-    throw new Error(`${context}: ${String(error)}`);
-  }
+  await cloudWriteQueue.enqueue(async () => {
+    try {
+      const result = (await mutationFactory()) || {};
+      const { error } = result;
+      if (error) {
+        throw new SupabaseMutationError(context, error);
+      }
+    } catch (error) {
+      if (error instanceof SupabaseMutationError) {
+        throw error;
+      }
+      throw new SupabaseMutationError(context, error);
+    }
+  });
 }
 
 export class CloudDataService {
@@ -542,8 +718,10 @@ export class CloudDataService {
   async upsertPlayerProfile(profile: PlayerProfile): Promise<void> {
     const client = ensureClient(this.client);
     const payload = playerProfileToDemographicsUpsert(profile);
-    const mutation = client.from("demographics_profiles").upsert(payload);
-    await handleMutation(mutation, "upsert demographics profile");
+    await handleMutation(
+      () => client.from("demographics_profiles").upsert(payload),
+      "upsert demographics profile",
+    );
   }
 
   async selectStatsProfileRows(userId: string): Promise<StatsProfileRow[]> {
@@ -570,10 +748,13 @@ export class CloudDataService {
   async upsertStatsProfile(profile: StatsProfile): Promise<void> {
     const client = ensureClient(this.client);
     const payload = statsProfileToUpsert(profile);
-    const mutation = client
-      .from("stats_profiles")
-      .upsert(payload, { onConflict: "user_id,base_name,profile_version" });
-    await handleMutation(mutation, "upsert stats profile");
+    await handleMutation(
+      () =>
+        client
+          .from("stats_profiles")
+          .upsert(payload, { onConflict: "user_id,base_name,profile_version" }),
+      "upsert stats profile",
+    );
   }
 
   async insertRounds(rounds: RoundInsertInput[]): Promise<void> {
@@ -586,13 +767,17 @@ export class CloudDataService {
     const withoutPrimaryKey = payload.filter(row => !row.id);
 
     if (withPrimaryKey.length > 0) {
-      const mutation = client.from("rounds").upsert(withPrimaryKey as any, { onConflict: "id" });
-      await handleMutation(mutation, "upsert rounds");
+      await handleMutation(
+        () => client.from("rounds").upsert(withPrimaryKey as any, { onConflict: "id" }),
+        "upsert rounds",
+      );
     }
 
     if (withoutPrimaryKey.length > 0) {
-      const mutation = (client.from("rounds") as any).insert(withoutPrimaryKey as any);
-      await handleMutation(mutation, "insert rounds");
+      await handleMutation(
+        () => (client.from("rounds") as any).insert(withoutPrimaryKey as any),
+        "insert rounds",
+      );
     }
   }
 
@@ -603,22 +788,28 @@ export class CloudDataService {
   ): Promise<void> {
     if (!patch || Object.keys(patch).length === 0) return;
     const client = ensureClient(this.client);
-    const mutation = (client
-      .from("rounds") as any)
-      .update(patch as any)
-      .eq("user_id", userId)
-      .or(`client_round_id.eq.${roundId},id.eq.${roundId}`);
-    await handleMutation(mutation, "update round");
+    await handleMutation(
+      () =>
+        (client
+          .from("rounds") as any)
+          .update(patch as any)
+          .eq("user_id", userId)
+          .or(`client_round_id.eq.${roundId},id.eq.${roundId}`),
+      "update round",
+    );
   }
 
   async deleteRound(userId: string, roundId: string): Promise<void> {
     const client = ensureClient(this.client);
-    const mutation = (client
-      .from("rounds") as any)
-      .delete()
-      .eq("user_id", userId)
-      .or(`client_round_id.eq.${roundId},id.eq.${roundId}`);
-    await handleMutation(mutation, "delete round");
+    await handleMutation(
+      () =>
+        (client
+          .from("rounds") as any)
+          .delete()
+          .eq("user_id", userId)
+          .or(`client_round_id.eq.${roundId},id.eq.${roundId}`),
+      "delete round",
+    );
   }
 
   async loadRounds(userId: string, statsProfileId: string): Promise<RoundLog[]> {
@@ -648,13 +839,17 @@ export class CloudDataService {
     const withoutPrimaryKey = payload.filter(row => !row.id);
 
     if (withPrimaryKey.length > 0) {
-      const mutation = client.from("matches").upsert(withPrimaryKey as any, { onConflict: "id" });
-      await handleMutation(mutation, "upsert matches");
+      await handleMutation(
+        () => client.from("matches").upsert(withPrimaryKey as any, { onConflict: "id" }),
+        "upsert matches",
+      );
     }
 
     if (withoutPrimaryKey.length > 0) {
-      const mutation = (client.from("matches") as any).insert(withoutPrimaryKey as any);
-      await handleMutation(mutation, "insert matches");
+      await handleMutation(
+        () => (client.from("matches") as any).insert(withoutPrimaryKey as any),
+        "insert matches",
+      );
     }
   }
 
@@ -665,22 +860,28 @@ export class CloudDataService {
   ): Promise<void> {
     if (!patch || Object.keys(patch).length === 0) return;
     const client = ensureClient(this.client);
-    const mutation = (client
-      .from("matches") as any)
-      .update(patch as any)
-      .eq("user_id", userId)
-      .or(`client_match_id.eq.${matchId},id.eq.${matchId}`);
-    await handleMutation(mutation, "update match");
+    await handleMutation(
+      () =>
+        (client
+          .from("matches") as any)
+          .update(patch as any)
+          .eq("user_id", userId)
+          .or(`client_match_id.eq.${matchId},id.eq.${matchId}`),
+      "update match",
+    );
   }
 
   async deleteMatch(userId: string, matchId: string): Promise<void> {
     const client = ensureClient(this.client);
-    const mutation = (client
-      .from("matches") as any)
-      .delete()
-      .eq("user_id", userId)
-      .or(`client_match_id.eq.${matchId},id.eq.${matchId}`);
-    await handleMutation(mutation, "delete match");
+    await handleMutation(
+      () =>
+        (client
+          .from("matches") as any)
+          .delete()
+          .eq("user_id", userId)
+          .or(`client_match_id.eq.${matchId},id.eq.${matchId}`),
+      "delete match",
+    );
   }
 
   async loadMatches(userId: string, statsProfileId: string): Promise<MatchSummary[]> {
@@ -725,18 +926,20 @@ export class CloudDataService {
       version,
       updated_at: input.updatedAt,
     };
-    const mutation = client.from("ai_states").upsert(payload as any);
-    await handleMutation(mutation, "upsert ai state");
+    await handleMutation(() => client.from("ai_states").upsert(payload as any), "upsert ai state");
   }
 
   async deleteAiState(userId: string, statsProfileId: string): Promise<void> {
     const client = ensureClient(this.client);
-    const mutation = (client
-      .from("ai_states") as any)
-      .delete()
-      .eq("user_id", userId)
-      .eq("stats_profile_id", statsProfileId);
-    await handleMutation(mutation, "delete ai state");
+    await handleMutation(
+      () =>
+        (client
+          .from("ai_states") as any)
+          .delete()
+          .eq("user_id", userId)
+          .eq("stats_profile_id", statsProfileId),
+      "delete ai state",
+    );
   }
 
   async loadAiState(userId: string, statsProfileId: string): Promise<StoredPredictorModelState | null> {
@@ -755,8 +958,7 @@ export class CloudDataService {
   async upsertSession(input: SessionUpsertInput): Promise<void> {
     const client = ensureClient(this.client);
     const payload = sessionInputToRow(input);
-    const mutation = client.from("sessions").upsert(payload as any);
-    await handleMutation(mutation, "upsert session");
+    await handleMutation(() => client.from("sessions").upsert(payload as any), "upsert session");
   }
 
   async loadSessions(userId: string): Promise<CloudSession[]> {
@@ -787,8 +989,7 @@ export class CloudDataService {
   async upsertUserSetting(input: UserSettingUpsertInput): Promise<void> {
     const client = ensureClient(this.client);
     const payload = userSettingInputToRow(input);
-    const mutation = client.from("user_settings").upsert(payload as any);
-    await handleMutation(mutation, "upsert user setting");
+    await handleMutation(() => client.from("user_settings").upsert(payload as any), "upsert user setting");
   }
 }
 
