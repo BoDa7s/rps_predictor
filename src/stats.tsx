@@ -1168,6 +1168,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
           : 1;
       const baseName = normalizeBaseName(source.baseName ?? source.name);
       const nextVersion = sourceVersion + 1;
+      const newProfileDefault = Boolean(source.predictorDefault);
       const newProfile: StatsProfile = {
         id: makeStatsProfileId(isCloudMode),
         playerId: currentPlayerId,
@@ -1177,7 +1178,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         createdAt: new Date().toISOString(),
         trainingCount: 0,
         trained: false,
-        predictorDefault: source.predictorDefault,
+        predictorDefault: newProfileDefault,
         seenPostTrainingCTA: false,
         previousProfileId: source.id,
         nextProfileId: null,
@@ -1185,34 +1186,43 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       let updatedSource: StatsProfile | null = null;
       setProfiles(prev => {
         const updated = prev.map(p => {
-          if (p.id !== source.id) return p;
-          const next: StatsProfile = {
-            ...p,
-            baseName,
-            version: sourceVersion,
-            name: makeProfileDisplayName(baseName, sourceVersion),
-            nextProfileId: newProfile.id,
-          };
-          updatedSource = next;
-          return next;
+          if (p.id === source.id) {
+            const next: StatsProfile = {
+              ...p,
+              baseName,
+              version: sourceVersion,
+              name: makeProfileDisplayName(baseName, sourceVersion),
+              predictorDefault: newProfileDefault ? false : p.predictorDefault,
+              nextProfileId: newProfile.id,
+            };
+            updatedSource = next;
+            return next;
+          }
+          if (newProfileDefault && p.predictorDefault) {
+            return { ...p, predictorDefault: false };
+          }
+          return p;
         });
         return updated.concat(newProfile);
       });
       setCurrentProfileId(newProfile.id);
       if (isCloudMode) {
         void (async () => {
+          const service = cloudDataService;
+          if (!service) return;
+          if (updatedSource) {
+            try {
+              await service.upsertStatsProfile(updatedSource);
+            } catch (err) {
+              console.error("Failed to update source profile during cloud fork", err);
+              return;
+            }
+          }
           try {
-            await cloudDataService?.upsertStatsProfile(newProfile);
+            await service.upsertStatsProfile(newProfile);
           } catch (err) {
             console.error("Failed to fork cloud stats profile", err);
             return;
-          }
-          if (updatedSource) {
-            try {
-              await cloudDataService?.upsertStatsProfile(updatedSource);
-            } catch (err) {
-              console.error("Failed to update source profile during cloud fork", err);
-            }
           }
         })();
       } else {
