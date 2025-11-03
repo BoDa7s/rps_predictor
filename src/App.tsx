@@ -2767,6 +2767,7 @@ function RPSDoodleAppInner(){
   }, [welcomeActive, welcomeSlide, welcomeSlideCount, toastMessage, setToastMessage]);
   const countdownRef = useRef<number | null>(null);
   const trainingAnnouncementsRef = useRef<Set<number>>(new Set());
+  const trainingCompletionHandledRef = useRef(false);
   const clearRobotReactionTimers = useCallback(() => {
     if (robotResultTimeoutRef.current) {
       window.clearTimeout(robotResultTimeoutRef.current);
@@ -4753,6 +4754,34 @@ function RPSDoodleAppInner(){
       }
     });
   }, [trainingActive, trainingCount, needsTraining, trainingCalloutQueue.length]);
+
+  useEffect(() => {
+    if (trainingActive || !trainingComplete) {
+      trainingCompletionHandledRef.current = false;
+      return;
+    }
+    if (trainingCompletionHandledRef.current) {
+      return;
+    }
+    trainingCompletionHandledRef.current = true;
+    goToMode();
+    navigateIfNeeded(MODES_ROUTE);
+    if (trainingCalloutQueue.length) {
+      setTrainingCalloutQueue([]);
+    }
+    trainingAnnouncementsRef.current.clear();
+    if (toastMessage && toastMessage.startsWith("AI training")) {
+      setToastMessage(null);
+    }
+  }, [
+    trainingActive,
+    trainingComplete,
+    goToMode,
+    navigateIfNeeded,
+    trainingCalloutQueue.length,
+    toastMessage,
+    setToastMessage,
+  ]);
 
   useEffect(() => {
     if (!trainingActive) return;
