@@ -1387,6 +1387,7 @@ function ModeCard({
   const descriptionId = disabledReason ? `${mode}-mode-disabled-reason` : undefined;
   return (
     <motion.button
+      type="button"
       className={`mode-card ${mode} ${isDimmed ? "dim" : ""} ${
         isUnavailable ? "opacity-60 cursor-not-allowed" : ""
       } bg-white/80 rounded-2xl shadow relative overflow-hidden px-5 py-6 text-left`}
@@ -2467,7 +2468,7 @@ function RPSDoodleAppInner(){
   .mode-card.dim{ filter: blur(2px) brightness(.85); }
   .ink-pop{ position:absolute; inset:0; background: radial-gradient(600px circle at var(--x,50%) var(--y,50%), rgba(255,255,255,.6), transparent 40%); opacity:0; transition:opacity .22s; }
   .mode-card:active .ink-pop{ opacity:1; }
-  .fullscreen{ position:fixed; inset:0; z-index:50; will-change:transform; }
+  .fullscreen{ position:fixed; inset:0; z-index:50; will-change:transform; pointer-events:none; }
   .fullscreen.challenge{ background: var(--challenge); }
   .fullscreen.practice{ background: var(--practice); }
   .wipe{ position:fixed; inset:0; pointer-events:none; z-index:60; transform:translateX(110%); will-change:transform; background:linear-gradient(12deg, rgba(255,255,255,.9), rgba(255,255,255,1)); }
