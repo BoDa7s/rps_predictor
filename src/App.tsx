@@ -1934,6 +1934,7 @@ function RPSDoodleAppInner(){
   const bootAnimationRef = useRef<number | null>(null);
   const bootAdvancingRef = useRef(false);
   const bootShouldAnimateRef = useRef(false); // Marks when the splash should fully animate.
+  const skipBootForWelcomeRef = useRef(false);
   const rebootResumeRef = useRef<RebootResumeState | null>(null);
   const [pendingWelcomeExit, setPendingWelcomeExit] = useState<
     null | { reason: "setup" | "restore" | "dismiss" }
@@ -2673,6 +2674,7 @@ function RPSDoodleAppInner(){
       setBootProgress(0);
       setBootReady(false);
       bootShouldAnimateRef.current = false;
+      skipBootForWelcomeRef.current = false;
       return;
     }
 
@@ -2680,6 +2682,14 @@ function RPSDoodleAppInner(){
       resetBootAnimationState();
       setBootProgress(0);
       setBootReady(false);
+      return;
+    }
+
+    if (skipBootForWelcomeRef.current) {
+      resetBootAnimationState();
+      setBootProgress(100);
+      setBootReady(true);
+      skipBootForWelcomeRef.current = false;
       return;
     }
 
@@ -3089,8 +3099,10 @@ function RPSDoodleAppInner(){
         bootFirst?: boolean;
         origin?: "launch" | "settings";
         bootNext?: BootNext;
+        quick?: boolean;
       } = {},
     ) => {
+      const quickWelcome = Boolean(options.quick);
       clearCountdown();
       setPhase("idle");
       setCount(3);
@@ -3144,10 +3156,13 @@ function RPSDoodleAppInner(){
       setPendingWelcomeExit(null);
       setWelcomeOrigin(options.origin ?? null);
       setWelcomeActive(false);
-      bootShouldAnimateRef.current = Boolean(options.bootFirst); // Only animate when explicitly requested.
+      skipBootForWelcomeRef.current = quickWelcome;
+      bootShouldAnimateRef.current = quickWelcome ? false : Boolean(options.bootFirst); // Only animate when explicitly requested.
       setBootNext(options.bootNext ?? "AUTO");
       setScene("BOOT");
-      if (options.bootFirst) {
+      if (quickWelcome) {
+        navigateIfNeeded(WELCOME_ROUTE);
+      } else if (options.bootFirst) {
         navigateIfNeeded(BOOT_ROUTE);
       }
       welcomeToastShownRef.current = false;
@@ -3293,7 +3308,7 @@ function RPSDoodleAppInner(){
         announce: "Signing out complete. Returning to the welcome screen.",
         resetPlayer: true,
         origin: "settings",
-        bootFirst: true,
+        quick: true,
       });
     }
   }, [signOutActive, openWelcome]);
