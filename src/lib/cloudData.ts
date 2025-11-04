@@ -1034,7 +1034,7 @@ export class CloudDataService {
     const query = client
       .from("leaderboard_public_entries")
       .select(
-        "global_rank, match_id, player_id, stats_profile_id, player_name, grade, total_score, max_streak, rounds_played, mode, difficulty, ended_at",
+        "global_rank, match_id, player_id, player_name, grade, total_score, max_streak, rounds_played, mode, difficulty, ended_at, stats_profile_id",
       )
       .order("global_rank", { ascending: true });
     type PublicLeaderboardRow = {
