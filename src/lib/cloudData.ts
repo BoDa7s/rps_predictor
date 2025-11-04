@@ -998,13 +998,11 @@ export class CloudDataService {
     const payload = statsProfileToUpsert(profile);
     await handleMutation(
       () =>
-        client
-          .from("stats_profiles")
-          .upsert(payload, {
-            onConflict: "user_id,base_name,profile_version",
-            ignoreDuplicates: false,
-            defaultToNull: false,
-          }),
+        (client.from("stats_profiles") as any).upsert([payload], {
+          onConflict: "user_id,base_name,profile_version",
+          ignoreDuplicates: false,
+          defaultToNull: false,
+        }),
       "upsert stats profile",
     );
   }
