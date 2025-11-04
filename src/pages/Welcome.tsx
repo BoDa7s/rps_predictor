@@ -17,6 +17,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import {
   autoLocalAuth,
+  fetchLocalAccounts,
   login as loginThroughEdge,
   signup as signupThroughEdge,
   setEdgeSession,
@@ -85,12 +86,19 @@ interface LocalAccountCloudState {
   supabaseUserId?: string;
 }
 
+interface LocalAccountStatsSummary {
+  trainingCount: number;
+  trainingComplete: boolean;
+  lastPlayedAt: string | null;
+}
+
 interface LocalAccountRecord {
   profile: PlayerProfile;
   createdAt: string;
   storageMode: AuthMode;
   demographics?: LocalAccountDemographics;
   cloud?: LocalAccountCloudState;
+  stats?: LocalAccountStatsSummary;
 }
 
 interface LocalSession {
@@ -153,6 +161,29 @@ function createProfileId(): string {
     return `plr-${crypto.randomUUID()}`;
   }
   return `plr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+const LOCAL_DEVICE_ID_STORAGE_KEY = "rps_local_device_id_v1";
+
+function resolveLocalDeviceId(): string {
+  const fallback = () =>
+    `device-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  if (!isBrowser()) {
+    return fallback();
+  }
+  try {
+    const existing = window.localStorage.getItem(LOCAL_DEVICE_ID_STORAGE_KEY);
+    if (existing && existing.trim()) {
+      return existing.trim();
+    }
+    const generated = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : fallback();
+    window.localStorage.setItem(LOCAL_DEVICE_ID_STORAGE_KEY, generated);
+    return generated;
+  } catch {
+    return fallback();
+  }
 }
 
 function isGradeValue(value: unknown): value is Grade {
@@ -1143,13 +1174,19 @@ export default function Welcome(): JSX.Element {
   const [cloudSignOutError, setCloudSignOutError] = useState<string | null>(null);
   const [cloudSignOutPending, setCloudSignOutPending] = useState(false);
 
-  const [localSession, setLocalSession] = useState<LocalSession | null>(() => loadActiveLocalSession());
-  const [localAccounts, setLocalAccounts] = useState<LocalAccountRecord[]>(() => loadLocalAccounts());
-  const [selectedLocalProfileId, setSelectedLocalProfileId] = useState<string | null>(() => {
-    const existing = loadActiveLocalSession();
-    return existing?.profile.id ?? null;
+  const [lastActiveLocalProfileId, setLastActiveLocalProfileId] = useState<string | null>(() => {
+    if (!isBrowser()) return null;
+    try {
+      return window.localStorage.getItem(LOCAL_ACTIVE_ACCOUNT_KEY);
+    } catch {
+      return null;
+    }
   });
-  const [showLocalCreateForm, setShowLocalCreateForm] = useState(() => loadLocalAccounts().length === 0);
+  const [localAccounts, setLocalAccounts] = useState<LocalAccountRecord[]>([]);
+  const [localAccountsLoading, setLocalAccountsLoading] = useState(false);
+  const [localAccountsError, setLocalAccountsError] = useState<string | null>(null);
+  const [selectedLocalProfileId, setSelectedLocalProfileId] = useState<string | null>(null);
+  const [showLocalCreateForm, setShowLocalCreateForm] = useState(false);
   const [localSignUpForm, setLocalSignUpForm] = useState<SignUpFormState>(initialSignUpForm);
   const [localSignUpError, setLocalSignUpError] = useState<string | null>(null);
   const [localSignUpPending, setLocalSignUpPending] = useState(false);
@@ -1159,11 +1196,120 @@ export default function Welcome(): JSX.Element {
 
   const supabaseReady = isSupabaseConfigured && Boolean(supabaseClient);
 
-  const refreshLocalAccounts = useCallback(() => {
-    const accounts = loadLocalAccounts();
-    setLocalAccounts(accounts);
-    return accounts;
+  const deviceIdRef = useRef<string | null>(null);
+
+  const storeActiveLocalProfileId = useCallback((profileId: string | null) => {
+    if (!isBrowser()) return;
+    try {
+      if (profileId) {
+        window.localStorage.setItem(LOCAL_ACTIVE_ACCOUNT_KEY, profileId);
+      } else {
+        window.localStorage.removeItem(LOCAL_ACTIVE_ACCOUNT_KEY);
+      }
+    } catch {
+      // ignore persistence failures
+    }
   }, []);
+
+  const refreshLocalAccounts = useCallback(async () => {
+    if (!deviceIdRef.current) {
+      deviceIdRef.current = resolveLocalDeviceId();
+    }
+    const deviceId = deviceIdRef.current;
+    if (!deviceId) {
+      setLocalAccounts([]);
+      return [] as LocalAccountRecord[];
+    }
+    setLocalAccountsLoading(true);
+    setLocalAccountsError(null);
+    try {
+      const response = await fetchLocalAccounts({ deviceId });
+      if (response.error || !response.data) {
+        throw new Error(response.error ?? "Unable to load local profiles.");
+      }
+      const accounts = (response.data.accounts ?? []).map(entry => {
+        const profile: PlayerProfile = {
+          id: entry.localProfileId,
+          playerName: (() => {
+            const first = entry.firstName?.trim() ?? "";
+            const last = entry.lastInitial?.trim()?.charAt(0) ?? "";
+            if (first && last) return `${first} ${last}.`;
+            if (first) return first;
+            if (entry.username) return entry.username;
+            return "Player";
+          })(),
+          grade: isGradeValue(entry.grade) ? (entry.grade as Grade) : "Not applicable",
+          age: sanitizeAge(entry.age),
+          school: entry.school ?? undefined,
+          priorExperience: entry.priorExperience ?? undefined,
+          consent: {
+            agreed: true,
+            consentTextVersion: CONSENT_TEXT_VERSION,
+            timestamp: entry.createdAt ?? new Date().toISOString(),
+          },
+          needsReview: false,
+        };
+        const demographics: LocalAccountDemographics = {
+          firstName: entry.firstName ?? undefined,
+          lastInitial: entry.lastInitial ?? undefined,
+          grade: isGradeValue(entry.grade) ? entry.grade : undefined,
+          age: entry.age ?? undefined,
+          school: entry.school ?? undefined,
+          priorExperience: entry.priorExperience ?? undefined,
+        };
+        const stats: LocalAccountStatsSummary | undefined = (() => {
+          const trainingCount = typeof entry.trainingCount === "number" ? entry.trainingCount : null;
+          const trainingCompleted = entry.trainingCompleted === true;
+          if (trainingCount == null && entry.trainingCompleted == null && !entry.lastPlayedAt) {
+            return undefined;
+          }
+          return {
+            trainingCount: trainingCount ?? 0,
+            trainingComplete: trainingCompleted || (trainingCount ?? 0) >= TRAINING_ROUNDS_REQUIRED,
+            lastPlayedAt: entry.lastPlayedAt ?? null,
+          };
+        })();
+        const account: LocalAccountRecord = {
+          profile,
+          createdAt: entry.createdAt ?? new Date().toISOString(),
+          storageMode: "cloud",
+          demographics,
+          cloud: {
+            supabaseUserId: entry.authUserId ?? undefined,
+            lastFullSyncAt: entry.updatedAt ?? undefined,
+          },
+        };
+        if (stats) {
+          account.stats = stats;
+        }
+        return account;
+      });
+      setLocalAccounts(accounts);
+      if (accounts.length > 0) {
+        setSelectedLocalProfileId(prev => {
+          if (prev) {
+            return prev;
+          }
+          const preferred = (() => {
+            if (lastActiveLocalProfileId) {
+              return accounts.find(account => account.profile.id === lastActiveLocalProfileId);
+            }
+            return accounts[0] ?? null;
+          })();
+          return preferred?.profile.id ?? null;
+        });
+      }
+      setShowLocalCreateForm(accounts.length === 0);
+      return accounts;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to load local profiles.";
+      setLocalAccountsError(message);
+      setLocalAccounts([]);
+      return [] as LocalAccountRecord[];
+    } finally {
+      setLocalAccountsLoading(false);
+    }
+  }, [lastActiveLocalProfileId]);
 
   useEffect(() => {
     const client = supabaseClient;
@@ -1210,41 +1356,15 @@ export default function Welcome(): JSX.Element {
   }, [navigateToPostAuth, setMode]);
 
   useEffect(() => {
-    const accounts = refreshLocalAccounts();
-    const existing = loadActiveLocalSession();
-    setLocalSession(existing);
-    if (existing) {
-      setSelectedLocalProfileId(existing.profile.id);
-    } else if (accounts.length === 1) {
-      setSelectedLocalProfileId(accounts[0].profile.id);
-    }
-    setShowLocalCreateForm(accounts.length === 0);
+    void refreshLocalAccounts();
   }, [refreshLocalAccounts]);
 
   useEffect(() => {
     if (overlay !== "local") {
       return;
     }
-    const accounts = refreshLocalAccounts();
-    const existing = loadActiveLocalSession();
-    setLocalSession(existing);
-    if (accounts.length === 1) {
-      const sole = accounts[0];
-      setSelectedLocalProfileId(sole.profile.id);
-      const storage = getScopedStorage("local");
-      try {
-        const activeId = storage?.getItem(LOCAL_ACTIVE_ACCOUNT_KEY) ?? null;
-        if (activeId !== sole.profile.id) {
-          setActiveLocalAccount(sole);
-        }
-      } catch {
-        // ignore pointer rebuild failures
-      }
-    } else if (existing) {
-      setSelectedLocalProfileId(existing.profile.id);
-    }
-    setShowLocalCreateForm(accounts.length === 0);
     localHydrationAbortRef.current = false;
+    void refreshLocalAccounts();
   }, [overlay, refreshLocalAccounts]);
 
   useEffect(() => {
@@ -1253,7 +1373,28 @@ export default function Welcome(): JSX.Element {
     }
   }, [overlay]);
 
-  const localSummaries = useMemo(() => buildLocalProfileSummaries(localAccounts), [localAccounts]);
+  const localSummaries = useMemo(() => {
+    if (localAccounts.length === 0) {
+      return [] as Array<{
+        account: LocalAccountRecord;
+        trainingCount: number;
+        trainingComplete: boolean;
+        lastPlayedAt: string | null;
+      }>;
+    }
+    return localAccounts.map(account => {
+      const stats = account.stats;
+      const trainingCount = stats?.trainingCount ?? 0;
+      const trainingComplete = stats?.trainingComplete ?? trainingCount >= TRAINING_ROUNDS_REQUIRED;
+      const lastPlayedAt = stats?.lastPlayedAt ?? null;
+      return {
+        account,
+        trainingCount,
+        trainingComplete,
+        lastPlayedAt,
+      };
+    });
+  }, [localAccounts]);
   const autoSelectedHint =
     localSummaries.length === 1 && selectedLocalProfileId === (localSummaries[0]?.account.profile.id ?? null);
 
@@ -1438,137 +1579,67 @@ export default function Welcome(): JSX.Element {
     [],
   );
 
-  const completeLocalSelection = useCallback(
-    async (profileId: string) => {
+  const signInWithLocalAccount = useCallback(
+    async (account: LocalAccountRecord) => {
       localHydrationAbortRef.current = false;
       setLocalHydrating(true);
       setLocalHydrationError(null);
       try {
-        const accounts = refreshLocalAccounts();
-        const accountIndex = accounts.findIndex(candidate => candidate.profile.id === profileId);
-        if (accountIndex < 0) {
-          throw new Error("We couldn't find that profile on this device.");
+        if (!supabaseReady) {
+          throw new Error("Cloud services are not configured.");
         }
-        let account = accounts[accountIndex];
-        setActiveLocalAccount(account);
-        setLocalSession({ profile: account.profile });
-        setSelectedLocalProfileId(account.profile.id);
         const demographics = getAccountDemographics(account);
-        const attemptCloudSync = async () => {
-          if (!supabaseReady) {
-            return false;
-          }
-          const payload = {
-            localProfileId: account.profile.id,
-            firstName: demographics.firstName,
-            lastInitial: demographics.lastInitial,
-            grade: demographics.grade ?? account.profile.grade,
-            age: demographics.age ?? (account.profile.age != null ? String(account.profile.age) : undefined),
-            school: demographics.school,
-            priorExperience: demographics.priorExperience,
-            appMetadata: {
-              storage_mode: account.storageMode,
-              local_created_at: account.createdAt,
-            },
-          } satisfies AutoLocalAuthPayload;
-          const response = await autoLocalAuth(payload);
-          if (response.error || !response.data) {
-            throw new Error(response.error ?? response.data?.message ?? "Unable to connect to cloud services.");
-          }
-          if (!response.data.session) {
-            throw new Error("Cloud session was not returned by the server.");
-          }
-          const nextSession = await setEdgeSession(response.data.session);
-          if (!nextSession) {
-            throw new Error("Unable to establish Supabase session.");
-          }
-          setSession(nextSession);
-          const supabaseUserId = nextSession.user?.id ?? undefined;
-          let updatedAccount: LocalAccountRecord = {
-            ...account,
-            storageMode: "cloud",
-            cloud: {
-              ...account.cloud,
-              supabaseUserId: supabaseUserId ?? account.cloud?.supabaseUserId,
-              lastFullSyncAt: account.cloud?.lastFullSyncAt,
-            },
-            demographics: {
-              firstName: demographics.firstName,
-              lastInitial: demographics.lastInitial,
-              grade: demographics.grade ?? account.profile.grade,
-              age: demographics.age ?? (account.profile.age != null ? String(account.profile.age) : undefined),
-              school: demographics.school ?? account.profile.school ?? undefined,
-              priorExperience: demographics.priorExperience ?? account.profile.priorExperience ?? undefined,
-            },
-          };
-          if (!updatedAccount.cloud?.lastFullSyncAt) {
-            const snapshot = buildMigrationSnapshotForAccount(updatedAccount);
-            try {
-              await syncSnapshotToCloudWithSession({ snapshot, session: nextSession });
-              updatedAccount = {
-                ...updatedAccount,
-                cloud: {
-                  ...updatedAccount.cloud,
-                  lastFullSyncAt: new Date().toISOString(),
-                  supabaseUserId: supabaseUserId ?? updatedAccount.cloud?.supabaseUserId,
-                },
-              };
-            } catch (syncError) {
-              console.warn("Failed to sync local data to cloud", syncError);
-            }
-          }
-          const nextAccounts = [...accounts];
-          nextAccounts[accountIndex] = updatedAccount;
-          saveLocalAccounts(nextAccounts);
-          setLocalAccounts(nextAccounts);
-          setActiveLocalAccount(updatedAccount);
-          account = updatedAccount;
-          const hydration = await hydrateCloudPlayerState(nextSession, {
-            firstName: updatedAccount.demographics?.firstName ?? undefined,
-            lastInitial: updatedAccount.demographics?.lastInitial ?? undefined,
-            grade: updatedAccount.demographics?.grade ?? undefined,
-            age: updatedAccount.demographics?.age ?? undefined,
-            school: updatedAccount.demographics?.school ?? undefined,
-            priorExperience: updatedAccount.demographics?.priorExperience ?? undefined,
-          });
-          if (localHydrationAbortRef.current) {
-            return true;
-          }
-          setMode("cloud");
-          navigateToPostAuth(
-            "cloud",
-            hydration ? { playerId: hydration.playerId, statsProfiles: hydration.statsProfiles } : undefined,
-          );
-          return true;
-        };
-
-        let cloudSucceeded = false;
-        if (supabaseReady) {
-          try {
-            cloudSucceeded = await attemptCloudSync();
-          } catch (error) {
-            console.warn("Cloud bootstrap failed", error);
-            if (!localHydrationAbortRef.current) {
-              setLocalHydrationError(
-                error instanceof Error ? error.message : "We couldn't sync to the cloud. Continuing locally.",
-              );
-            }
-          }
+        const deviceId = deviceIdRef.current ?? resolveLocalDeviceId();
+        deviceIdRef.current = deviceId;
+        const payload = {
+          localProfileId: account.profile.id,
+          firstName: demographics.firstName,
+          lastInitial: demographics.lastInitial,
+          grade: demographics.grade ?? account.profile.grade,
+          age: demographics.age ?? (account.profile.age != null ? String(account.profile.age) : undefined),
+          school: demographics.school,
+          priorExperience: demographics.priorExperience,
+          appMetadata: {
+            storage_mode: "cloud",
+            local_created_at: account.createdAt,
+            device_id: deviceId,
+          },
+        } satisfies AutoLocalAuthPayload;
+        const response = await autoLocalAuth(payload);
+        if (response.error || !response.data) {
+          throw new Error(response.error ?? response.data?.message ?? "Unable to connect to cloud services.");
         }
-
-        if (cloudSucceeded || localHydrationAbortRef.current) {
-          return;
+        if (!response.data.session) {
+          throw new Error("Cloud session was not returned by the server.");
         }
-
-        setMode("local");
-        await hydrateLocalProfileArtifacts(account.profile.id);
+        const nextSession = await setEdgeSession(response.data.session);
+        if (!nextSession) {
+          throw new Error("Unable to establish Supabase session.");
+        }
+        setSession(nextSession);
+        storeActiveLocalProfileId(account.profile.id);
+        setLastActiveLocalProfileId(account.profile.id);
+        setSelectedLocalProfileId(account.profile.id);
+        const hydration = await hydrateCloudPlayerState(nextSession, {
+          firstName: demographics.firstName ?? undefined,
+          lastInitial: demographics.lastInitial ?? undefined,
+          grade: demographics.grade ?? undefined,
+          age: demographics.age ?? undefined,
+          school: demographics.school ?? undefined,
+          priorExperience: demographics.priorExperience ?? undefined,
+        });
         if (localHydrationAbortRef.current) {
           return;
         }
-        navigateToPostAuth("local", { playerId: account.profile.id });
+        setMode("cloud");
+        navigateToPostAuth(
+          "cloud",
+          hydration ? { playerId: hydration.playerId, statsProfiles: hydration.statsProfiles } : undefined,
+        );
+        await refreshLocalAccounts();
       } catch (error) {
         if (!localHydrationAbortRef.current) {
-          setLocalHydrationError(error instanceof Error ? error.message : "Unable to load local data.");
+          setLocalHydrationError(error instanceof Error ? error.message : "Unable to sign in. Try again.");
         }
       } finally {
         if (!localHydrationAbortRef.current) {
@@ -1576,16 +1647,12 @@ export default function Welcome(): JSX.Element {
         }
       }
     },
-    [navigateToPostAuth, refreshLocalAccounts, setMode, supabaseReady],
+    [navigateToPostAuth, refreshLocalAccounts, setMode, storeActiveLocalProfileId, supabaseReady],
   );
 
   const handleLocalSignUp = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      if (!isBrowser()) {
-        setLocalSignUpError("Local storage is not available.");
-        return;
-      }
       const { firstName, lastInitial, grade, age, school, priorExperience } = localSignUpForm;
       if (!firstName.trim()) {
         setLocalSignUpError("Enter a first name.");
@@ -1606,7 +1673,6 @@ export default function Welcome(): JSX.Element {
       setLocalSignUpError(null);
       setLocalSignUpPending(true);
       try {
-        const accounts = loadLocalAccounts();
         const profile = buildPlayerProfileFromForm(localSignUpForm);
         const demographics: LocalAccountDemographics = {
           firstName: firstName.trim() || undefined,
@@ -1619,23 +1685,25 @@ export default function Welcome(): JSX.Element {
         const nextAccount: LocalAccountRecord = {
           profile,
           createdAt: new Date().toISOString(),
-          storageMode: "local",
+          storageMode: "cloud",
           demographics,
+          stats: {
+            trainingCount: 0,
+            trainingComplete: false,
+            lastPlayedAt: null,
+          },
         };
-        const deduped = accounts.filter(candidate => candidate.profile.id !== profile.id).concat(nextAccount);
-        saveLocalAccounts(deduped);
-        setLocalAccounts(deduped);
+        await signInWithLocalAccount(nextAccount);
         setShowLocalCreateForm(false);
         setLocalSignUpForm(initialSignUpForm);
         setSelectedLocalProfileId(nextAccount.profile.id);
-        await completeLocalSelection(nextAccount.profile.id);
       } catch (error) {
         setLocalSignUpError(error instanceof Error ? error.message : "Unable to sign up. Try again.");
       } finally {
         setLocalSignUpPending(false);
       }
     },
-    [completeLocalSelection, localSignUpForm],
+    [localSignUpForm, signInWithLocalAccount],
   );
 
   const handleSelectLocalProfile = useCallback((profileId: string) => {
@@ -1647,8 +1715,13 @@ export default function Welcome(): JSX.Element {
     if (!selectedLocalProfileId || localHydrating) {
       return;
     }
-    await completeLocalSelection(selectedLocalProfileId);
-  }, [completeLocalSelection, localHydrating, selectedLocalProfileId]);
+    const account = localAccounts.find(candidate => candidate.profile.id === selectedLocalProfileId);
+    if (!account) {
+      setLocalHydrationError("We couldn't find that profile.");
+      return;
+    }
+    await signInWithLocalAccount(account);
+  }, [localAccounts, localHydrating, selectedLocalProfileId, signInWithLocalAccount]);
 
   const handleOpenLocalOverlay = useCallback(() => {
     localHydrationAbortRef.current = false;
@@ -1671,7 +1744,7 @@ export default function Welcome(): JSX.Element {
     setCloudSignUpError(null);
   }, []);
 
-  const localContinueDisabled = !selectedLocalProfileId || localHydrating;
+  const localContinueDisabled = !selectedLocalProfileId || localHydrating || localAccountsLoading;
   const localProfilesEmpty = localSummaries.length === 0;
   const cloudStatusMessage = useMemo(() => {
     if (!supabaseReady) {
@@ -1736,7 +1809,11 @@ export default function Welcome(): JSX.Element {
             </div>
             <div className="mt-8 grid gap-8 lg:grid-cols-[1.4fr_1fr]">
               <div className="space-y-4">
-                {localProfilesEmpty ? (
+                {localAccountsLoading ? (
+                  <div className="rounded-2xl border border-slate-500/60 p-8 text-center text-sm text-slate-200">
+                    <p>Loading profiles…</p>
+                  </div>
+                ) : localProfilesEmpty ? (
                   <div className="rounded-2xl border border-dashed border-slate-500/60 p-8 text-center text-sm text-slate-200">
                     <p>No profiles yet. Create a local profile to get started.</p>
                   </div>
@@ -1745,7 +1822,7 @@ export default function Welcome(): JSX.Element {
                     {localSummaries.map(summary => {
                       const profileId = summary.account.profile.id;
                       const selected = profileId === selectedLocalProfileId;
-                      const isActive = localSession?.profile.id === profileId;
+                      const isActive = lastActiveLocalProfileId === profileId;
                       const trainingLabel = summary.trainingComplete
                         ? "Training complete"
                         : `Training: ${summary.trainingCount}/${TRAINING_ROUNDS_REQUIRED}`;
@@ -1901,7 +1978,11 @@ export default function Welcome(): JSX.Element {
                 Back to mode chooser
               </button>
               <div className="flex items-center gap-3">
-                {localHydrating ? <span className="text-sm text-slate-200">Loading local data…</span> : null}
+                {localHydrating ? (
+                  <span className="text-sm text-slate-200">Signing you in…</span>
+                ) : localAccountsLoading ? (
+                  <span className="text-sm text-slate-200">Loading profiles…</span>
+                ) : null}
                 <button
                   type="button"
                   onClick={handleLocalContinue}
@@ -1912,7 +1993,7 @@ export default function Welcome(): JSX.Element {
                       : "bg-sky-500 text-white hover:bg-sky-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-200"
                   }`}
                 >
-                  {localHydrating ? 'Loading…' : 'Continue'}
+                  {localHydrating || localAccountsLoading ? 'Loading…' : 'Continue'}
                 </button>
               </div>
             </div>
@@ -2115,6 +2196,9 @@ export default function Welcome(): JSX.Element {
                     </button>
                   </form>
                 )}
+                {localAccountsError ? (
+                  <p className="text-sm font-semibold text-rose-300">{localAccountsError}</p>
+                ) : null}
               </div>
               <aside className="rounded-2xl border border-white/10 bg-slate-900/60 p-6 text-sm text-slate-200">
                 <h3 className="text-base font-semibold text-white">Status</h3>

@@ -7,6 +7,7 @@ export const api = {
   resetPassword: "/api/auth_reset_password",
   recoverUsername: "/api/auth_recover_username",
   autoLocalAuth: "/api/auto_local_auth",
+  localAccounts: "/api/local_accounts",
 } as const;
 
 type ApiRoute = keyof typeof api;
@@ -161,6 +162,31 @@ export interface AutoLocalAuthPayload extends Record<string, unknown> {
   appMetadata?: Record<string, unknown>;
 }
 
+export interface LocalAccountsRequestPayload extends Record<string, unknown> {
+  deviceId: string;
+}
+
+export interface LocalAccountEntry {
+  localProfileId: string;
+  authUserId: string | null;
+  username: string | null;
+  firstName: string | null;
+  lastInitial: string | null;
+  grade: string | null;
+  age: string | null;
+  school: string | null;
+  priorExperience: string | null;
+  trainingCount: number | null;
+  trainingCompleted: boolean | null;
+  lastPlayedAt: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface LocalAccountsResponse {
+  accounts: LocalAccountEntry[];
+}
+
 export async function signup(payload: SignupPayload): Promise<EdgeFunctionResponse<AuthSessionResponse>> {
   return callEdgeFunction<AuthSessionResponse, SignupPayload>("signup", payload);
 }
@@ -220,4 +246,11 @@ export async function autoLocalAuth(
     app_metadata: payload.appMetadata,
   } satisfies Record<string, unknown>;
   return callEdgeFunction<AuthSessionResponse, typeof normalizedPayload>("autoLocalAuth", normalizedPayload);
+}
+
+export async function fetchLocalAccounts(
+  payload: LocalAccountsRequestPayload,
+): Promise<EdgeFunctionResponse<LocalAccountsResponse>> {
+  const normalizedPayload = { device_id: payload.deviceId } satisfies Record<string, unknown>;
+  return callEdgeFunction<LocalAccountsResponse, typeof normalizedPayload>("localAccounts", normalizedPayload);
 }
