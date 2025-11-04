@@ -27,6 +27,7 @@ import {
   LOCAL_ACTIVE_ACCOUNT_KEY,
   PLAYERS_STORAGE_KEY,
 } from "../lib/localSession";
+import { isLocalBackupReadOnly } from "../lib/localBackup";
 import { usePlayMode, type PlayMode } from "../lib/playMode";
 import type { StatsProfile } from "../stats";
 import { makeProfileDisplayName } from "../stats";
@@ -106,6 +107,13 @@ function getScopedStorage(scope: StorageScope): Storage | null {
   }
 }
 
+function shouldPreventLocalWrite(storage: Storage | null): boolean {
+  if (!isBrowser()) return false;
+  if (!storage) return false;
+  if (storage !== window.localStorage) return false;
+  return isLocalBackupReadOnly();
+}
+
 function scopeFromMode(mode: PlayMode | AuthMode): StorageScope {
   return mode === "cloud" ? "session" : "local";
 }
@@ -179,12 +187,14 @@ function loadStoredPlayers(scope: StorageScope): PlayerProfile[] {
 function saveStoredPlayers(scope: StorageScope, players: PlayerProfile[]) {
   const storage = getScopedStorage(scope);
   if (!storage) return;
+  if (shouldPreventLocalWrite(storage)) return;
   storage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(players));
 }
 
 function ensurePlayerStored(profile: PlayerProfile, scope: StorageScope) {
   const storage = getScopedStorage(scope);
   if (!storage) return;
+  if (shouldPreventLocalWrite(storage)) return;
   const players = loadStoredPlayers(scope);
   const existingIndex = players.findIndex(player => player.id === profile.id);
   const nextPlayers = existingIndex >= 0 ? [...players] : players.concat(profile);
@@ -230,12 +240,14 @@ function loadLocalAccounts(): LocalAccountRecord[] {
 function saveLocalAccounts(accounts: LocalAccountRecord[]) {
   const storage = getScopedStorage("local");
   if (!storage) return;
+  if (shouldPreventLocalWrite(storage)) return;
   storage.setItem(LOCAL_ACCOUNTS_KEY, JSON.stringify(accounts));
 }
 
 function setActiveLocalAccount(account: LocalAccountRecord) {
   const storage = getScopedStorage("local");
   if (!storage) return;
+  if (shouldPreventLocalWrite(storage)) return;
   ensurePlayerStored(account.profile, "local");
   storage.setItem(LOCAL_ACTIVE_ACCOUNT_KEY, account.profile.id);
 }

@@ -3,6 +3,7 @@ import { AIMode, BestOf, Mode, Move, Outcome } from "./gameTypes";
 import { usePlayers } from "./players";
 import { usePlayMode, type PlayMode } from "./lib/playMode";
 import { cloudDataService, isSupabaseUuid, type MatchRecord, type RoundRecord } from "./lib/cloudData";
+import { isLocalBackupReadOnly } from "./lib/localBackup";
 import type { StatsProfileRow } from "./lib/database.types";
 import { computeMatchScore } from "./leaderboard";
 
@@ -205,6 +206,13 @@ function getScopedStorage(scope: StorageScope): Storage | null {
   }
 }
 
+function shouldPreventLocalWrite(storage: Storage | null): boolean {
+  if (typeof window === "undefined") return false;
+  if (!storage) return false;
+  if (storage !== window.localStorage) return false;
+  return isLocalBackupReadOnly();
+}
+
 function resolveScopeFromMode(mode: PlayMode): StorageScope {
   return mode === "cloud" ? "session" : "local";
 }
@@ -253,6 +261,7 @@ function loadFromStorage<T>(storage: Storage | null, key: string): T[] {
 
 function saveToStorage(storage: Storage | null, key: string, value: unknown) {
   if (!storage) return;
+  if (shouldPreventLocalWrite(storage)) return;
   try {
     storage.setItem(key, JSON.stringify(value));
   } catch (err) {
@@ -302,6 +311,7 @@ function loadModelStates(storage: Storage | null): StoredPredictorModelState[] {
 
 function saveModelStates(storage: Storage | null, states: StoredPredictorModelState[]) {
   if (!storage) return;
+  if (shouldPreventLocalWrite(storage)) return;
   try {
     storage.setItem(MODEL_STATE_KEY, JSON.stringify(states));
   } catch (err) {
@@ -390,6 +400,7 @@ function loadProfiles(storage: Storage | null): StatsProfile[] {
 
 function saveProfiles(storage: Storage | null, profiles: StatsProfile[]) {
   if (!storage) return;
+  if (shouldPreventLocalWrite(storage)) return;
   try {
     storage.setItem(PROFILE_KEY, JSON.stringify(profiles));
   } catch (err) {
@@ -409,6 +420,7 @@ function loadCurrentProfileId(storage: Storage | null): string | null {
 
 function saveCurrentProfileId(storage: Storage | null, id: string | null) {
   if (!storage) return;
+  if (shouldPreventLocalWrite(storage)) return;
   try {
     if (id) storage.setItem(CURRENT_PROFILE_KEY, id);
     else storage.removeItem(CURRENT_PROFILE_KEY);

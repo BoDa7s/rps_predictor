@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { usePlayMode, type PlayMode } from "./lib/playMode";
 import { cloudDataService } from "./lib/cloudData";
 import { supabaseClient } from "./lib/supabaseClient";
+import { isLocalBackupReadOnly } from "./lib/localBackup";
 
 export type Grade =
   | "K"
@@ -125,6 +126,13 @@ function getScopedStorage(scope: StorageScope): Storage | null {
   }
 }
 
+function shouldPreventLocalWrite(storage: Storage | null): boolean {
+  if (typeof window === "undefined") return false;
+  if (!storage) return false;
+  if (storage !== window.localStorage) return false;
+  return isLocalBackupReadOnly();
+}
+
 function resolveScopeFromMode(mode: PlayMode): StorageScope {
   return mode === "cloud" ? "session" : "local";
 }
@@ -149,6 +157,7 @@ function loadPlayersFromStorage(storage: Storage | null): PlayerProfile[] {
 
 function savePlayersToStorage(storage: Storage | null, players: PlayerProfile[]) {
   if (!storage) return;
+  if (shouldPreventLocalWrite(storage)) return;
   try {
     storage.setItem(PLAYERS_KEY, JSON.stringify(players));
   } catch {
@@ -167,6 +176,7 @@ function loadCurrentIdFromStorage(storage: Storage | null): string | null {
 
 function saveCurrentIdToStorage(storage: Storage | null, id: string | null) {
   if (!storage) return;
+  if (shouldPreventLocalWrite(storage)) return;
   try {
     if (id) storage.setItem(CURRENT_PLAYER_KEY, id);
     else storage.removeItem(CURRENT_PLAYER_KEY);

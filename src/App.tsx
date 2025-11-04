@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence, type Transition, useReducedMotion } from "framer-motion";
+import type { Session } from "@supabase/supabase-js";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import {
   StatsProvider,
@@ -51,6 +52,13 @@ import botSad96 from "./assets/mascot/bot-sad-96.svg";
 import HelpCenter, { type HelpQuestion } from "./HelpCenter";
 import { supabaseClient, isSupabaseConfigured } from "./lib/supabaseClient";
 import { clearActiveLocalSession } from "./lib/localSession";
+import { usePlayMode } from "./lib/playMode";
+import {
+  migrateLocalAccountToCloud,
+  type MigrationProgressItem,
+  type MigrationStepKey,
+} from "./lib/localMigration";
+import { markLocalBackupReadOnly } from "./lib/localBackup";
 import {
   BOOT_ROUTE,
   CHALLENGE_ROUTE,
@@ -120,6 +128,8 @@ type ModernToast = {
   title: string;
   message: string;
 };
+
+type MigrationStep = "confirm" | "credentials" | "progress" | "success";
 
 const MODERN_TOAST_BASE_CLASSES =
   "pointer-events-auto flex w-[min(22rem,calc(100vw-2rem))] items-start gap-3 rounded-2xl px-4 py-3 text-sm text-slate-700 shadow-2xl";
@@ -1537,8 +1547,96 @@ function RPSDoodleAppInner(){
     clearModelStateForProfile,
     adminMatches,
     adminRounds,
+    adminProfiles,
   } = useStats();
   const { players, currentPlayer, hasConsented, createPlayer, updatePlayer, setCurrentPlayer } = usePlayers();
+  const { mode: appMode, setMode } = usePlayMode();
+  const isCloudMode = appMode === "cloud";
+  const isLocalMode = appMode === "local";
+  const supabaseAvailable = isSupabaseConfigured && Boolean(supabaseClient);
+  const [migrationStep, setMigrationStep] = useState<MigrationStep | null>(null);
+  const [migrationUsername, setMigrationUsername] = useState("");
+  const [migrationPassword, setMigrationPassword] = useState("");
+  const [migrationPasswordConfirm, setMigrationPasswordConfirm] = useState("");
+  const [migrationProgress, setMigrationProgress] = useState<MigrationProgressItem[]>([]);
+  const migrationProgressRef = useRef<MigrationProgressItem[]>([]);
+  const [migrationPending, setMigrationPending] = useState(false);
+  const [migrationError, setMigrationError] = useState<string | null>(null);
+  const [migrationResumeState, setMigrationResumeState] =
+    useState<Partial<Record<MigrationStepKey, number>> | null>(null);
+  const [cloudAccountPanelOpen, setCloudAccountPanelOpen] = useState(false);
+  const [cloudUsername, setCloudUsername] = useState<string | null>(null);
+  const cloudAccountButtonRef = useRef<HTMLButtonElement | null>(null);
+  const cloudAccountPanelRef = useRef<HTMLDivElement | null>(null);
+  const allModelStates = useMemo(
+    () =>
+      adminProfiles
+        .map(profile => getModelStateForProfile(profile.id))
+        .filter((state): state is StoredPredictorModelState => Boolean(state)),
+    [adminProfiles, getModelStateForProfile],
+  );
+  useEffect(() => {
+    setCloudAccountPanelOpen(false);
+  }, [appMode, supabaseClient]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const client = supabaseClient;
+    if (appMode !== "cloud" || !client) {
+      setCloudUsername(null);
+      return;
+    }
+    const applySession = (session: Session | null) => {
+      if (!session) {
+        setCloudUsername(null);
+        return;
+      }
+      const metadata = (session.user?.user_metadata ?? {}) as Record<string, unknown>;
+      const candidate =
+        (metadata.username as string | undefined) ??
+        (metadata.user_name as string | undefined) ??
+        (metadata.first_name as string | undefined) ??
+        (metadata.email as string | undefined) ??
+        session.user?.email ??
+        null;
+      setCloudUsername(candidate ?? null);
+    };
+    const resolveSession = async () => {
+      try {
+        const { data } = await client.auth.getSession();
+        if (cancelled) return;
+        applySession(data.session ?? null);
+      } catch {
+        if (!cancelled) {
+          setCloudUsername(null);
+        }
+      }
+    };
+    void resolveSession();
+    const { data: listener } = client.auth.onAuthStateChange((_event, session) => {
+      if (!cancelled) {
+        applySession(session ?? null);
+      }
+    });
+    return () => {
+      cancelled = true;
+      listener?.subscription.unsubscribe();
+    };
+  }, [appMode, supabaseClient]);
+
+  useEffect(() => {
+    if (!cloudAccountPanelOpen) return;
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (cloudAccountButtonRef.current?.contains(target)) return;
+      if (cloudAccountPanelRef.current?.contains(target)) return;
+      setCloudAccountPanelOpen(false);
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+    };
+  }, [cloudAccountPanelOpen]);
   const location = useLocation();
   const navigate = useNavigate();
   const normalizePathname = useCallback((value: string) => {
@@ -2495,6 +2593,44 @@ function RPSDoodleAppInner(){
   const resolvedModalMode: "create" | "edit" = playerModalMode === "edit" && currentPlayer ? "edit" : "create";
   const modalPlayer = resolvedModalMode === "edit" ? currentPlayer : null;
   const hasLocalProfiles = players.length > 0;
+  const migrationProfileSeed = useMemo(
+    () => {
+      if (!currentPlayer) {
+        return null;
+      }
+      const trimmedName = currentPlayer.playerName.trim();
+      const segments = trimmedName ? trimmedName.split(/\s+/) : [];
+      const firstName = segments[0] ?? "";
+      let lastInitial = "";
+      if (segments.length > 1) {
+        const lastToken = segments[segments.length - 1]?.replace(/\.+$/, "") ?? "";
+        if (lastToken) {
+          lastInitial = lastToken.charAt(0).toUpperCase();
+        }
+      }
+      return {
+        firstName,
+        lastInitial,
+        grade: currentPlayer.grade,
+        age: currentPlayer.age != null ? String(currentPlayer.age) : "",
+        school: currentPlayer.school ?? "",
+        priorExperience: currentPlayer.priorExperience ?? "",
+      };
+    },
+    [currentPlayer],
+  );
+  const migrationDisabledReason = useMemo(() => {
+    if (!supabaseAvailable) return "Cloud sync is unavailable.";
+    if (!currentPlayer) return "Select a local player before migrating.";
+    if (!statsReady) return "Player data is still loading.";
+    if (migrationPending) return "Migration in progress.";
+    return null;
+  }, [currentPlayer, migrationPending, statsReady, supabaseAvailable]);
+  const migrationButtonDisabled = Boolean(migrationDisabledReason);
+  const migrationHasProgress = useMemo(
+    () => migrationProgress.some(item => item.completed > 0),
+    [migrationProgress],
+  );
 
   const [audioOn, setAudioOn] = useState(true);
   const [textScale, setTextScale] = useState(1);
@@ -4213,6 +4349,173 @@ function RPSDoodleAppInner(){
     setLive("Signing out. Progress indicator running.");
   }, [signOutActive, setLive]);
 
+  const resetMigrationForm = useCallback(() => {
+    setMigrationUsername("");
+    setMigrationPassword("");
+    setMigrationPasswordConfirm("");
+    setMigrationProgress([]);
+    migrationProgressRef.current = [];
+    setMigrationError(null);
+    setMigrationResumeState(null);
+  }, []);
+
+  const handleCloseMigrationModal = useCallback(() => {
+    if (migrationPending) return;
+    resetMigrationForm();
+    setMigrationStep(null);
+  }, [migrationPending, resetMigrationForm]);
+
+  const handleOpenMigrationFlow = useCallback(() => {
+    if (!currentPlayer) {
+      setLive("Select or create a local player before moving to the cloud.");
+      return;
+    }
+    resetMigrationForm();
+    setMigrationStep("confirm");
+    setLive("Move to Cloud dialog opened.");
+  }, [currentPlayer, resetMigrationForm, setLive]);
+
+  const handleMigrationShowCredentials = useCallback(() => {
+    setMigrationError(null);
+    setMigrationStep("credentials");
+  }, []);
+
+  const handleMigrationBackToConfirm = useCallback(() => {
+    if (migrationPending) return;
+    setMigrationError(null);
+    setMigrationStep("confirm");
+  }, [migrationPending]);
+
+  const runMigration = useCallback(
+    async (resumeState?: Partial<Record<MigrationStepKey, number>>) => {
+      if (!currentPlayer) {
+        setMigrationError("Select a local player before migrating.");
+        return;
+      }
+      if (!supabaseAvailable) {
+        setMigrationError("Cloud sync is not available.");
+        return;
+      }
+      const snapshot = {
+        playerProfile: currentPlayer,
+        statsProfiles: adminProfiles,
+        rounds: adminRounds,
+        matches: adminMatches,
+        modelStates: allModelStates,
+      };
+      setMigrationPending(true);
+      setMigrationError(null);
+      try {
+        const result = await migrateLocalAccountToCloud({
+          snapshot,
+          credentials: { username: migrationUsername.trim(), password: migrationPassword },
+          onProgress: items => {
+            setMigrationProgress(items);
+            migrationProgressRef.current = items;
+            setMigrationResumeState(
+              items.reduce((acc, item) => {
+                acc[item.key] = item.completed;
+                return acc;
+              }, {} as Partial<Record<MigrationStepKey, number>>),
+            );
+          },
+          resume: resumeState,
+        });
+        setMigrationProgress(result.progress);
+        migrationProgressRef.current = result.progress;
+        setMigrationResumeState(
+          result.progress.reduce((acc, item) => {
+            acc[item.key] = item.completed;
+            return acc;
+          }, {} as Partial<Record<MigrationStepKey, number>>),
+        );
+        markLocalBackupReadOnly();
+        setMode("cloud");
+        setMigrationStep("success");
+        setLive("Migration complete. Cloud mode enabled.");
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Migration paused. Reconnect to continue.";
+        setMigrationError(message);
+        const hasProgress = migrationProgressRef.current.some(item => item.completed > 0);
+        setMigrationStep(hasProgress ? "progress" : "credentials");
+      } finally {
+        setMigrationPending(false);
+      }
+    },
+    [
+      currentPlayer,
+      adminProfiles,
+      adminRounds,
+      adminMatches,
+      allModelStates,
+      migrationPassword,
+      migrationUsername,
+      setLive,
+      setMode,
+      supabaseAvailable,
+    ],
+  );
+
+  const handleMigrationCredentialsSubmit = useCallback(
+    (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (!currentPlayer) {
+        setMigrationError("Select a local player before migrating.");
+        return;
+      }
+      if (!migrationUsername.trim()) {
+        setMigrationError("Enter a username.");
+        return;
+      }
+      if (!migrationPassword) {
+        setMigrationError("Enter a password.");
+        return;
+      }
+      if (migrationPassword !== migrationPasswordConfirm) {
+        setMigrationError("Passwords do not match.");
+        return;
+      }
+      setMigrationProgress([]);
+      migrationProgressRef.current = [];
+      setMigrationResumeState(null);
+      setMigrationError(null);
+      setMigrationStep("progress");
+      void runMigration();
+    },
+    [
+      currentPlayer,
+      migrationPassword,
+      migrationPasswordConfirm,
+      migrationUsername,
+      runMigration,
+    ],
+  );
+
+  const handleMigrationResume = useCallback(() => {
+    if (migrationPending) return;
+    setMigrationError(null);
+    setMigrationStep("progress");
+    void runMigration(migrationResumeState ?? undefined);
+  }, [migrationPending, migrationResumeState, runMigration]);
+
+  const handleMigrationRetryFromCredentials = useCallback(() => {
+    if (migrationPending) return;
+    setMigrationError(null);
+    setMigrationProgress([]);
+    migrationProgressRef.current = [];
+    setMigrationResumeState(null);
+    setMigrationStep("credentials");
+    setLive("Migration credentials reopened for retry.");
+  }, [migrationPending, setLive]);
+
+  const handleMigrationSuccessContinue = useCallback(() => {
+    resetMigrationForm();
+    setMigrationStep(null);
+    setCloudAccountPanelOpen(false);
+    setLive("Cloud account is active.");
+  }, [resetMigrationForm, setLive]);
+
   const handleCreateProfile = useCallback(() => {
     if (settingsOpen) {
       handleCloseSettings();
@@ -5751,6 +6054,290 @@ function RPSDoodleAppInner(){
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {migrationStep && (
+          <motion.div
+            className="fixed inset-0 z-[95] grid place-items-center bg-slate-900/45 px-4"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => {
+              if (migrationStep === "progress" && migrationPending) return;
+              handleCloseMigrationModal();
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="w-[min(560px,100%)] rounded-2xl bg-white p-6 shadow-2xl"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="migration-modal-title"
+              onClick={event => event.stopPropagation()}
+            >
+              {migrationStep === "confirm" && (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <h2 id="migration-modal-title" className="text-lg font-semibold text-slate-900">
+                      Move your data to the Cloud
+                    </h2>
+                    <p className="text-sm text-slate-600">
+                      We’ll set up a secure account and copy your progress, stats, and AI training to the cloud. You can keep a local backup.
+                    </p>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCloseMigrationModal}
+                      className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleMigrationShowCredentials}
+                      className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-500"
+                    >
+                      Continue
+                    </button>
+                  </div>
+                </div>
+              )}
+              {migrationStep === "credentials" && migrationProfileSeed && (
+                <form className="space-y-4" onSubmit={handleMigrationCredentialsSubmit}>
+                  <div className="space-y-2">
+                    <h2 id="migration-modal-title" className="text-lg font-semibold text-slate-900">
+                      Create your cloud credentials
+                    </h2>
+                    <p className="text-sm text-slate-600">
+                      We prefilled your profile details. Choose a username and password to finish setting up your cloud account.
+                    </p>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="text-sm font-medium text-slate-700">
+                      First name
+                      <input
+                        value={migrationProfileSeed.firstName}
+                        readOnly
+                        className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 shadow-inner"
+                      />
+                    </label>
+                    <label className="text-sm font-medium text-slate-700">
+                      Last initial
+                      <input
+                        value={migrationProfileSeed.lastInitial}
+                        readOnly
+                        className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 shadow-inner"
+                      />
+                    </label>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="text-sm font-medium text-slate-700">
+                      Grade
+                      <input
+                        value={migrationProfileSeed.grade}
+                        readOnly
+                        className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 shadow-inner"
+                      />
+                    </label>
+                    <label className="text-sm font-medium text-slate-700">
+                      Age
+                      <input
+                        value={migrationProfileSeed.age}
+                        readOnly
+                        className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 shadow-inner"
+                      />
+                    </label>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="text-sm font-medium text-slate-700">
+                      School
+                      <input
+                        value={migrationProfileSeed.school}
+                        readOnly
+                        className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 shadow-inner"
+                      />
+                    </label>
+                    <label className="text-sm font-medium text-slate-700">
+                      Prior experience
+                      <input
+                        value={migrationProfileSeed.priorExperience}
+                        readOnly
+                        className="mt-1 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700 shadow-inner"
+                      />
+                    </label>
+                  </div>
+                  <div className="grid gap-4">
+                    <label className="text-sm font-medium text-slate-700">
+                      Username
+                      <input
+                        value={migrationUsername}
+                        onChange={event => setMigrationUsername(event.target.value)}
+                        autoFocus
+                        className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-inner focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                        placeholder="Choose a username"
+                      />
+                    </label>
+                    <label className="text-sm font-medium text-slate-700">
+                      Password
+                      <input
+                        type="password"
+                        value={migrationPassword}
+                        onChange={event => setMigrationPassword(event.target.value)}
+                        className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-inner focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                        placeholder="Create a password"
+                      />
+                    </label>
+                    <label className="text-sm font-medium text-slate-700">
+                      Confirm password
+                      <input
+                        type="password"
+                        value={migrationPasswordConfirm}
+                        onChange={event => setMigrationPasswordConfirm(event.target.value)}
+                        className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-inner focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                        placeholder="Confirm password"
+                      />
+                    </label>
+                  </div>
+                  {migrationError ? (
+                    <p className="text-sm font-semibold text-rose-500">{migrationError}</p>
+                  ) : null}
+                  <div className="flex justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={handleMigrationBackToConfirm}
+                      className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                    >
+                      Back
+                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCloseMigrationModal}
+                        className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={migrationPending}
+                        className={`rounded-lg px-4 py-2 text-sm font-semibold text-white shadow ${
+                          migrationPending ? "cursor-not-allowed bg-slate-400" : "bg-sky-600 hover:bg-sky-500"
+                        }`}
+                      >
+                        {migrationPending ? "Starting…" : "Copy data"}
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              )}
+              {migrationStep === "credentials" && !migrationProfileSeed && (
+                <div className="space-y-4">
+                  <p className="text-sm text-slate-600">Select a local player before migrating.</p>
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={handleCloseMigrationModal}
+                      className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              )}
+              {migrationStep === "progress" && (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <h2 id="migration-modal-title" className="text-lg font-semibold text-slate-900">
+                      Moving your data
+                    </h2>
+                    <p className="text-sm text-slate-600">
+                      Hang tight while we copy everything to the cloud.
+                    </p>
+                  </div>
+                  {migrationProgress.length > 0 ? (
+                    <ul className="space-y-2">
+                      {migrationProgress.map(item => (
+                        <li
+                          key={item.key}
+                          className="flex items-center justify-between rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-700"
+                        >
+                          <span>{item.label}</span>
+                          <span>
+                            {item.completed}/{item.total}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-600">
+                      Preparing your data…
+                    </p>
+                  )}
+                  {migrationError ? (
+                    <div className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-600">{migrationError}</div>
+                  ) : null}
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCloseMigrationModal}
+                      disabled={migrationPending}
+                      className={`rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-700 ${
+                        migrationPending ? "cursor-not-allowed opacity-60" : "hover:bg-slate-50"
+                      }`}
+                    >
+                      Close
+                    </button>
+                    {migrationError ? (
+                      migrationHasProgress ? (
+                        <button
+                          type="button"
+                          onClick={handleMigrationResume}
+                          className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-500"
+                        >
+                          Reconnect to continue
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleMigrationRetryFromCredentials}
+                          className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-500"
+                        >
+                          Back to credentials
+                        </button>
+                      )
+                    ) : null}
+                  </div>
+                </div>
+              )}
+              {migrationStep === "success" && (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <h2 id="migration-modal-title" className="text-lg font-semibold text-slate-900">
+                      You’re on Cloud now
+                    </h2>
+                    <p className="text-sm text-slate-600">
+                      Your data is safely stored in the cloud. We kept a read-only local backup.
+                    </p>
+                  </div>
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={handleMigrationSuccessContinue}
+                      className="rounded-lg bg-emerald-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-emerald-400"
+                    >
+                      Continue
+                    </button>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header / Settings */}
       {showMainUi && !hideUiDuringModeTransition && (
         <motion.div
@@ -5775,6 +6362,70 @@ function RPSDoodleAppInner(){
                 Training complete
               </span>
             )}
+            <div className="flex items-center gap-2">
+              <span
+                className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold shadow ${
+                  isCloudMode ? "bg-emerald-100 text-emerald-700" : "bg-white/80 text-slate-700"
+                }`}
+                aria-live="polite"
+              >
+                <span className={isCloudMode ? "text-emerald-500" : "text-slate-500"}>●</span>
+                {isCloudMode ? "Cloud" : "Local"}
+              </span>
+              {isLocalMode ? (
+                <button
+                  type="button"
+                  onClick={handleOpenMigrationFlow}
+                  disabled={migrationButtonDisabled}
+                  className={`rounded-xl px-4 py-1.5 text-sm font-semibold shadow ${
+                    migrationButtonDisabled
+                      ? "cursor-not-allowed bg-white/50 text-slate-400"
+                      : "bg-sky-600 text-white hover:bg-sky-500"
+                  }`}
+                  title={migrationDisabledReason ?? undefined}
+                  data-dev-label="hdr.migrate"
+                >
+                  {migrationPending ? "Migrating…" : "Move to Cloud"}
+                </button>
+              ) : (
+                <div className="relative">
+                  <button
+                    type="button"
+                    ref={cloudAccountButtonRef}
+                    onClick={() => setCloudAccountPanelOpen(prev => !prev)}
+                    className="rounded-xl bg-emerald-500 px-4 py-1.5 text-sm font-semibold text-white shadow hover:bg-emerald-400"
+                    aria-haspopup="dialog"
+                    aria-expanded={cloudAccountPanelOpen}
+                    data-dev-label="hdr.cloudAccount"
+                  >
+                    Account is synced
+                  </button>
+                  {cloudAccountPanelOpen && (
+                    <div
+                      ref={cloudAccountPanelRef}
+                      className="absolute right-0 z-[80] mt-2 w-60 rounded-xl border border-slate-200 bg-white p-4 text-left shadow-2xl"
+                      role="dialog"
+                      aria-label="Cloud account details"
+                    >
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Signed in as</p>
+                      <p className="mt-1 break-words text-sm font-semibold text-slate-900">
+                        {cloudUsername ?? currentPlayer?.playerName ?? "Cloud user"}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCloudAccountPanelOpen(false);
+                          handleSignOutRequest();
+                        }}
+                        className="mt-4 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        Sign out
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             <button
               onClick={() => {
                 if (postTrainingLockActive) {
