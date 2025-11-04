@@ -3242,6 +3242,7 @@ function RPSDoodleAppInner(){
           );
         } finally {
           clearActiveLocalSession(signOutProfileIdRef.current ?? undefined);
+          setMode("local");
         }
       })();
     }
@@ -3282,7 +3283,7 @@ function RPSDoodleAppInner(){
         signOutCompletionTimeoutRef.current = null;
       }
     };
-  }, [signOutActive, currentPlayer?.id, setToastMessage, setLive]);
+  }, [signOutActive, currentPlayer?.id, setToastMessage, setLive, setMode]);
 
   useEffect(() => {
     if (!signOutActive && signOutNavigatePendingRef.current) {
