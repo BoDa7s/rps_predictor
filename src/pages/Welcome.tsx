@@ -1344,11 +1344,19 @@ export default function Welcome(): JSX.Element {
             <p className="mt-2 text-sm text-slate-200">
               Use a profile saved on this device or sync your progress through the cloud.
             </p>
+            <div
+              role="status"
+              aria-live="polite"
+              className="mt-6 rounded-2xl border border-amber-400/70 bg-amber-400/10 px-4 py-3 text-left text-sm text-amber-200"
+            >
+              <p className="font-semibold text-amber-100">Local play isn’t available right now.</p>
+            </div>
             <div className="mt-10 grid gap-4 sm:grid-cols-2">
               <button
                 type="button"
                 onClick={handleOpenLocalOverlay}
-                className="rounded-3xl bg-white px-6 py-5 text-lg font-semibold text-slate-900 shadow-lg transition hover:-translate-y-0.5 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                disabled
+                className="rounded-3xl bg-white/40 px-6 py-5 text-lg font-semibold text-slate-500 shadow-lg transition focus:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-80"
               >
                 Use Local
               </button>
