@@ -2,6 +2,7 @@ import { supabaseClient, type SupabaseClient } from "./supabaseClient";
 import type {
   AiStateInsert,
   AiStateRow,
+  Database,
   DemographicsProfileInsert,
   DemographicsProfileRow,
   MatchInsert,
@@ -37,6 +38,9 @@ function asUuid(value: Maybe<string>): string | undefined {
   return UUID_PATTERN.test(trimmed) ? trimmed : undefined;
 }
 
+type DeveloperRoomPlayerOverviewRow =
+  Database["public"]["Views"]["developer_room_player_overview"]["Row"];
+
 export function isSupabaseUuid(value: Maybe<string>): value is string {
   return Boolean(asUuid(value));
 }
@@ -51,6 +55,16 @@ function coerceTimestamp(value: Maybe<string>): string {
     return value;
   }
   return new Date().toISOString();
+}
+
+function normalizeTimestamp(value: Maybe<string>): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      return trimmed;
+    }
+  }
+  return null;
 }
 
 function asMode(value: Maybe<string>): Mode | null {
@@ -220,6 +234,28 @@ export interface UserSettingUpsertInput {
   version?: number;
 }
 
+export interface DeveloperRoomPlayerOverview {
+  player: PlayerProfile;
+  hasDemographics: boolean;
+  trainingCompleted: boolean;
+  trainingCount: number;
+  consentVersion: string | null;
+  consentGrantedAt: string | null;
+  lastPromotedAt: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  storageMode: DeveloperRoomPlayerOverviewRow["storage_mode"];
+  profileCount: number;
+  matchCount: number;
+  roundCount: number;
+  lastProfileUpdatedAt: string | null;
+  lastMatchAt: string | null;
+  lastRoundAt: string | null;
+  lastPlayedAt: string | null;
+  lastActivityAt: string | null;
+  needsReview: boolean;
+}
+
 function demographicsRowToPlayerProfile(row: DemographicsProfileRow): PlayerProfile {
   const userId = row.user_id;
   const firstName = row.first_name?.trim();
@@ -274,6 +310,76 @@ function playerProfileToDemographicsUpsert(profile: PlayerProfile): Demographics
     consent_granted_at: profile.consent?.timestamp ?? new Date().toISOString(),
     training_completed: trainingCompleted,
     training_count: trainingCount,
+  };
+}
+
+function developerOverviewRowToDemographicsRow(
+  row: DeveloperRoomPlayerOverviewRow,
+): DemographicsProfileRow {
+  const ageText = row.age_text ?? (row.age_numeric != null ? String(row.age_numeric) : null);
+  const updatedAt =
+    normalizeTimestamp(row.updated_at) ??
+    normalizeTimestamp(row.last_activity_at) ??
+    coerceTimestamp(null);
+  return {
+    user_id: row.player_id,
+    username: row.username,
+    first_name: row.first_name,
+    last_initial: row.last_initial,
+    grade: row.grade,
+    school: row.school,
+    created_at:
+      normalizeTimestamp(row.created_at) ??
+      normalizeTimestamp(row.last_activity_at) ??
+      normalizeTimestamp(row.last_profile_updated_at) ??
+      normalizeTimestamp(row.last_match_at) ??
+      normalizeTimestamp(row.last_round_at) ??
+      normalizeTimestamp(row.last_played_at) ??
+      null,
+    age: ageText,
+    prior_experience: row.prior_experience,
+    training_completed: row.training_completed === true,
+    training_count: coerceNonNegativeInteger(row.training_count ?? undefined, 0),
+    storage_mode: (row.storage_mode ?? "local") as DemographicsProfileRow["storage_mode"],
+    updated_at: updatedAt,
+    preferences: {} as DemographicsProfileRow["preferences"],
+    consent_version: row.consent_version,
+    consent_granted_at: normalizeTimestamp(row.consent_granted_at),
+    last_promoted_at: normalizeTimestamp(row.last_promoted_at),
+  };
+}
+
+function developerOverviewRowToOverview(
+  row: DeveloperRoomPlayerOverviewRow,
+): DeveloperRoomPlayerOverview {
+  const demographicsRow = developerOverviewRowToDemographicsRow(row);
+  const player = demographicsRowToPlayerProfile(demographicsRow);
+  const lastProfileUpdatedAt = normalizeTimestamp(row.last_profile_updated_at);
+  const lastMatchAt = normalizeTimestamp(row.last_match_at);
+  const lastRoundAt = normalizeTimestamp(row.last_round_at);
+  const lastPlayedAt = normalizeTimestamp(row.last_played_at) ?? lastRoundAt ?? lastMatchAt;
+  const lastActivityAt =
+    normalizeTimestamp(row.last_activity_at) ?? lastProfileUpdatedAt ?? lastMatchAt ?? lastRoundAt ?? lastPlayedAt;
+  return {
+    player,
+    hasDemographics: row.has_demographics === true,
+    trainingCompleted: row.training_completed === true,
+    trainingCount: coerceNonNegativeInteger(row.training_count ?? undefined, 0),
+    consentVersion: row.consent_version ?? null,
+    consentGrantedAt: normalizeTimestamp(row.consent_granted_at),
+    lastPromotedAt: normalizeTimestamp(row.last_promoted_at),
+    createdAt: normalizeTimestamp(row.created_at),
+    updatedAt: normalizeTimestamp(row.updated_at) ?? lastActivityAt,
+    storageMode: row.storage_mode ?? null,
+    profileCount: parseNonNegativeInteger(row.profile_count, 0),
+    matchCount: parseNonNegativeInteger(row.match_count, 0),
+    roundCount: parseNonNegativeInteger(row.round_count, 0),
+    lastProfileUpdatedAt,
+    lastMatchAt,
+    lastRoundAt,
+    lastPlayedAt,
+    lastActivityAt,
+    needsReview: row.needs_review === true || player.needsReview,
   };
 }
 
@@ -841,6 +947,20 @@ export class CloudDataService {
     const row = await this.selectDemographicsProfileRow(userId);
     if (!row) return null;
     return demographicsRowToPlayerProfile(row);
+  }
+
+  async listDeveloperRoomPlayers(): Promise<DeveloperRoomPlayerOverview[]> {
+    const client = ensureClient(this.client);
+    const query = client
+      .from("developer_room_player_overview")
+      .select(
+        "player_id, player_name, first_name, last_initial, username, grade, age_text, age_numeric, school, prior_experience, training_completed, training_count, consent_version, consent_granted_at, last_promoted_at, created_at, updated_at, storage_mode, has_demographics, needs_review, profile_count, match_count, round_count, last_profile_updated_at, last_match_at, last_round_at, last_played_at, last_activity_at",
+      );
+    const rows = await handleSelect<DeveloperRoomPlayerOverviewRow>(
+      query,
+      "select developer room player overview",
+    );
+    return rows.map(developerOverviewRowToOverview);
   }
 
   async upsertPlayerProfile(profile: PlayerProfile): Promise<void> {

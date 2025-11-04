@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEV_MODE_ENABLED, DEV_MODE_SECURE } from "./devMode";
+import { cloudDataService, type DeveloperRoomPlayerOverview } from "./lib/cloudData";
 import { usePlayers } from "./players";
 import type { PlayerProfile } from "./players";
 import { useStats } from "./stats";
@@ -95,6 +96,8 @@ interface PlayerSummaryData {
   rounds: number;
   lastPlayed: string | null;
   lastPlayedMs: number;
+  lastActivityAt: string | null;
+  lastActivityMs: number;
 }
 
 interface ProfileSummaryData {
@@ -166,6 +169,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
   const [timingConfirmOpen, setTimingConfirmOpen] = useState(false);
   const [timingConfirmAction, setTimingConfirmAction] = useState<"save" | "revert" | "restore" | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [developerOverview, setDeveloperOverview] = useState<DeveloperRoomPlayerOverview[] | null>(null);
   const hashInitialized = useRef(false);
   const timerFields = useMemo(
     () => [
@@ -256,7 +260,42 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
       .catch(err => console.error("Failed to persist developer snapshot", err));
   }, [open, ready, players, adminRounds, adminMatches, adminProfiles]);
 
+  useEffect(() => {
+    if (!open) return;
+    if (!DEV_MODE_SECURE) return;
+    if (!cloudDataService) return;
+    if (!ready) return;
+    let cancelled = false;
+    cloudDataService
+      .listDeveloperRoomPlayers()
+      .then(rows => {
+        if (!cancelled) {
+          setDeveloperOverview(rows);
+        }
+      })
+      .catch(error => {
+        if (!cancelled) {
+          console.error("Failed to load developer room overview", error);
+          setDeveloperOverview(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, ready, cloudDataService]);
+
   const overview = useMemo(() => {
+    if (developerOverview && developerOverview.length > 0) {
+      const totalRounds = developerOverview.reduce((sum, entry) => sum + entry.roundCount, 0);
+      const totalMatches = developerOverview.reduce((sum, entry) => sum + entry.matchCount, 0);
+      const distribution = developerOverview.map(entry => ({
+        playerId: entry.player.id,
+        name: entry.player.playerName,
+        rounds: entry.roundCount,
+        matches: entry.matchCount,
+      }));
+      return { totalRounds, totalMatches, distribution };
+    }
     const totalRounds = adminRounds.length;
     const totalMatches = adminMatches.length;
     const byPlayer = new Map<string, { name: string; rounds: number; matches: number }>();
@@ -281,54 +320,96 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
       ...stats,
     }));
     return { totalRounds, totalMatches, distribution };
-  }, [adminMatches, adminRounds, players]);
+  }, [developerOverview, adminMatches, adminRounds, players]);
 
-  const playerMap = useMemo(() => new Map(players.map(player => [player.id, player])), [players]);
+  const combinedPlayers = useMemo(() => {
+    if (developerOverview && developerOverview.length > 0) {
+      const merged = new Map<string, PlayerProfile>();
+      developerOverview.forEach(entry => {
+        merged.set(entry.player.id, entry.player);
+      });
+      players.forEach(player => {
+        if (!merged.has(player.id)) {
+          merged.set(player.id, player);
+        }
+      });
+      return Array.from(merged.values());
+    }
+    return players;
+  }, [developerOverview, players]);
+
+  const playerMap = useMemo(() => new Map(combinedPlayers.map(player => [player.id, player])), [combinedPlayers]);
   const profileMap = useMemo(() => new Map(adminProfiles.map(profile => [profile.id, profile])), [adminProfiles]);
   const matchMap = useMemo(() => new Map(adminMatches.map(match => [match.id, match])), [adminMatches]);
   const roundMap = useMemo(() => new Map(adminRounds.map(round => [round.id, round])), [adminRounds]);
 
-  const playerSummaries = useMemo<PlayerSummaryData[]>(
-    () =>
-      players
-        .map(player => {
-          const relatedProfiles = adminProfiles.filter(profile => profile.user_id === player.id);
-          const relatedMatches = adminMatches.filter(match => match.playerId === player.id);
-          const relatedRounds = adminRounds.filter(round => round.playerId === player.id);
-          let lastPlayed: string | null = null;
-          let lastPlayedMs = Number.NEGATIVE_INFINITY;
-          relatedMatches.forEach(match => {
-            const stamp = Date.parse(match.endedAt || match.startedAt || "");
-            if (Number.isFinite(stamp) && stamp > lastPlayedMs) {
-              lastPlayedMs = stamp;
-              lastPlayed = match.endedAt || match.startedAt;
-            }
-          });
-          relatedRounds.forEach(round => {
-            const stamp = Date.parse(round.t || "");
-            if (Number.isFinite(stamp) && stamp > lastPlayedMs) {
-              lastPlayedMs = stamp;
-              lastPlayed = round.t;
-            }
-          });
-          const summary: PlayerSummaryData = {
-            player,
-            profiles: relatedProfiles.length,
-            matches: relatedMatches.length,
-            rounds: relatedRounds.length,
+  const playerSummaries = useMemo<PlayerSummaryData[]>(() => {
+    if (developerOverview && developerOverview.length > 0) {
+      return developerOverview
+        .map(entry => {
+          const lastPlayed = entry.lastPlayedAt ?? entry.lastRoundAt ?? entry.lastMatchAt ?? null;
+          const lastPlayedMs = lastPlayed ? Date.parse(lastPlayed) : Number.NEGATIVE_INFINITY;
+          const lastActivityAt = entry.lastActivityAt ?? lastPlayed;
+          const lastActivityMs = lastActivityAt ? Date.parse(lastActivityAt) : Number.NEGATIVE_INFINITY;
+          return {
+            player: entry.player,
+            profiles: entry.profileCount,
+            matches: entry.matchCount,
+            rounds: entry.roundCount,
             lastPlayed,
             lastPlayedMs: Number.isFinite(lastPlayedMs) ? lastPlayedMs : Number.NEGATIVE_INFINITY,
+            lastActivityAt: lastActivityAt ?? null,
+            lastActivityMs: Number.isFinite(lastActivityMs) ? lastActivityMs : Number.NEGATIVE_INFINITY,
           };
-          return summary;
         })
         .sort((a, b) => {
-          if (a.lastPlayedMs === b.lastPlayedMs) {
+          if (a.lastActivityMs === b.lastActivityMs) {
             return a.player.playerName.localeCompare(b.player.playerName);
           }
-          return (b.lastPlayedMs || 0) - (a.lastPlayedMs || 0);
-        }) as PlayerSummaryData[],
-    [players, adminProfiles, adminMatches, adminRounds]
-  );
+          return (b.lastActivityMs || 0) - (a.lastActivityMs || 0);
+        });
+    }
+    return players
+      .map(player => {
+        const relatedProfiles = adminProfiles.filter(profile => profile.user_id === player.id);
+        const relatedMatches = adminMatches.filter(match => match.playerId === player.id);
+        const relatedRounds = adminRounds.filter(round => round.playerId === player.id);
+        let lastPlayed: string | null = null;
+        let lastPlayedMs = Number.NEGATIVE_INFINITY;
+        relatedMatches.forEach(match => {
+          const stamp = Date.parse(match.endedAt || match.startedAt || "");
+          if (Number.isFinite(stamp) && stamp > lastPlayedMs) {
+            lastPlayedMs = stamp;
+            lastPlayed = match.endedAt || match.startedAt;
+          }
+        });
+        relatedRounds.forEach(round => {
+          const stamp = Date.parse(round.t || "");
+          if (Number.isFinite(stamp) && stamp > lastPlayedMs) {
+            lastPlayedMs = stamp;
+            lastPlayed = round.t;
+          }
+        });
+        const lastActivityAt = lastPlayed;
+        const summary: PlayerSummaryData = {
+          player,
+          profiles: relatedProfiles.length,
+          matches: relatedMatches.length,
+          rounds: relatedRounds.length,
+          lastPlayed,
+          lastPlayedMs: Number.isFinite(lastPlayedMs) ? lastPlayedMs : Number.NEGATIVE_INFINITY,
+          lastActivityAt,
+          lastActivityMs: Number.isFinite(lastPlayedMs) ? lastPlayedMs : Number.NEGATIVE_INFINITY,
+        };
+        return summary;
+      })
+      .sort((a, b) => {
+        if (a.lastActivityMs === b.lastActivityMs) {
+          return a.player.playerName.localeCompare(b.player.playerName);
+        }
+        return (b.lastActivityMs || 0) - (a.lastActivityMs || 0);
+      });
+  }, [developerOverview, players, adminProfiles, adminMatches, adminRounds]);
 
   const profileSummaries = useMemo<ProfileSummaryData[]>(() => {
     return adminProfiles.map(profile => {

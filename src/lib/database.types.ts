@@ -1088,7 +1088,41 @@ export interface Database {
         ];
       };
     };
-    Views: Record<string, never>;
+    Views: {
+      developer_room_player_overview: {
+        Row: {
+          player_id: string;
+          player_name: string | null;
+          first_name: string | null;
+          last_initial: string | null;
+          username: string | null;
+          grade: string | null;
+          age_text: string | null;
+          age_numeric: number | null;
+          school: string | null;
+          prior_experience: string | null;
+          training_completed: boolean | null;
+          training_count: number | null;
+          consent_version: string | null;
+          consent_granted_at: string | null;
+          last_promoted_at: string | null;
+          created_at: string | null;
+          updated_at: string | null;
+          storage_mode: Database["public"]["Enums"]["storage_mode_type"] | null;
+          has_demographics: boolean | null;
+          needs_review: boolean | null;
+          profile_count: number | null;
+          match_count: number | null;
+          round_count: number | null;
+          last_profile_updated_at: string | null;
+          last_match_at: string | null;
+          last_round_at: string | null;
+          last_played_at: string | null;
+          last_activity_at: string | null;
+        };
+        Relationships: [];
+      };
+    };
     Functions: Record<string, never>;
     Enums: {
       storage_mode_type: "local" | "cloud";
