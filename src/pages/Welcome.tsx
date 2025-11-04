@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabaseClient, isSupabaseConfigured } from "../lib/supabaseClient";
 import {
@@ -34,7 +34,7 @@ import {
 } from "../lib/localSession";
 import { isProfileMigrated } from "../lib/localBackup";
 import { usePlayMode, type PlayMode } from "../lib/playMode";
-import type { StatsProfile } from "../stats";
+import type { MatchSummary, RoundLog, StatsProfile, StoredPredictorModelState } from "../stats";
 import { makeProfileDisplayName } from "../stats";
 
 const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => String(5 + index));
@@ -43,6 +43,7 @@ const TRAINING_ROUNDS_REQUIRED = 10;
 
 type AuthTab = "signIn" | "signUp";
 type AuthMode = "local" | "cloud";
+type WelcomeOverlay = "chooser" | "local" | "cloud";
 type StorageScope = "local" | "session";
 
 type SignUpFormState = {
@@ -625,6 +626,160 @@ function resolveStatsProfileForPlayer(
   return candidates[0] ?? null;
 }
 
+interface LocalTimestampEntry {
+  playerId: string;
+  timestamp: string;
+}
+
+function readScopedStorageArray<T>(scope: StorageScope, key: string): T[] {
+  const storage = getScopedStorage(scope);
+  if (!storage) return [];
+  try {
+    const raw = storage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function loadRoundTimestamps(scope: StorageScope): LocalTimestampEntry[] {
+  const entries = readScopedStorageArray<Partial<RoundLog>>(scope, STATS_ROUNDS_KEY) ?? [];
+  const summaries: LocalTimestampEntry[] = [];
+  entries.forEach(entry => {
+    const playerId = typeof entry?.playerId === "string" ? entry.playerId : null;
+    const timestamp = typeof entry?.t === "string" ? entry.t : null;
+    if (playerId && timestamp) {
+      summaries.push({ playerId, timestamp });
+    }
+  });
+  return summaries;
+}
+
+function loadMatchTimestamps(scope: StorageScope): LocalTimestampEntry[] {
+  const entries = readScopedStorageArray<Partial<MatchSummary>>(scope, STATS_MATCHES_KEY) ?? [];
+  const summaries: LocalTimestampEntry[] = [];
+  entries.forEach(entry => {
+    const playerId = typeof entry?.playerId === "string" ? entry.playerId : null;
+    if (!playerId) return;
+    const endedAt = typeof entry?.endedAt === "string" ? entry.endedAt : null;
+    const startedAt = typeof entry?.startedAt === "string" ? entry.startedAt : null;
+    const timestamp = endedAt || startedAt;
+    if (timestamp) {
+      summaries.push({ playerId, timestamp });
+    }
+  });
+  return summaries;
+}
+
+function loadStoredModelStates(scope: StorageScope): StoredPredictorModelState[] {
+  const entries = readScopedStorageArray<StoredPredictorModelState>(scope, STATS_MODEL_STATE_KEY) ?? [];
+  const sanitized: StoredPredictorModelState[] = [];
+  entries.forEach(entry => {
+    if (!entry || typeof entry !== "object") return;
+    const profileId = typeof entry.profileId === "string" ? entry.profileId : null;
+    if (!profileId) return;
+    sanitized.push(entry);
+  });
+  return sanitized;
+}
+
+function computeLatestTimestamp(
+  playerId: string,
+  rounds: LocalTimestampEntry[],
+  matches: LocalTimestampEntry[],
+): string | null {
+  const relevant = rounds
+    .concat(matches)
+    .filter(entry => entry.playerId === playerId)
+    .map(entry => entry.timestamp)
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+  if (relevant.length === 0) {
+    return null;
+  }
+  return relevant.reduce((latest, current) => (current > latest ? current : latest));
+}
+
+interface LocalProfileSummary {
+  account: LocalAccountRecord;
+  trainingCount: number;
+  trainingComplete: boolean;
+  lastPlayedAt: string | null;
+}
+
+function buildLocalProfileSummaries(accounts: LocalAccountRecord[]): LocalProfileSummary[] {
+  if (accounts.length === 0) return [];
+  const scope: StorageScope = "local";
+  const statsProfiles = loadStoredStatsProfiles(scope);
+  const roundTimestamps = loadRoundTimestamps(scope);
+  const matchTimestamps = loadMatchTimestamps(scope);
+
+  return accounts.map(account => {
+    const profileId = account.profile.id;
+    const statsSnapshot = resolveStatsProfileForPlayer(profileId, scope);
+    const trainingCount = statsSnapshot?.trainingCount ?? 0;
+    const trainingComplete = statsSnapshot?.trained === true || trainingCount >= TRAINING_ROUNDS_REQUIRED;
+    const lastPlayedAt = computeLatestTimestamp(profileId, roundTimestamps, matchTimestamps);
+    return {
+      account,
+      trainingCount,
+      trainingComplete,
+      lastPlayedAt,
+    };
+  });
+}
+
+function formatLastPlayed(timestamp: string | null): string {
+  if (!timestamp) return "No matches yet";
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return "Last played: unknown";
+  }
+  try {
+    return `Last played: ${new Intl.DateTimeFormat(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(date)}`;
+  } catch {
+    return `Last played: ${date.toISOString()}`;
+  }
+}
+
+async function hydrateLocalProfileArtifacts(profileId: string): Promise<void> {
+  if (!isBrowser()) return;
+  const scope: StorageScope = "local";
+  const storage = getScopedStorage(scope);
+  if (!storage) return;
+
+  // Yield to the event loop so loading indicators have a chance to render.
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  const statsProfiles = loadStoredStatsProfiles(scope);
+  const rounds = readScopedStorageArray<RoundLog>(scope, STATS_ROUNDS_KEY);
+  const matches = readScopedStorageArray<MatchSummary>(scope, STATS_MATCHES_KEY);
+  const modelStates = loadStoredModelStates(scope);
+
+  // Touch the collections by filtering for the selected profile. We intentionally
+  // avoid mutating storage to honor the non-destructive requirement.
+  void statsProfiles.filter(profile => profile.playerId === profileId);
+  void rounds.filter(round => round?.playerId === profileId);
+  void matches.filter(match => match?.playerId === profileId);
+  void modelStates.filter(state => state.profileId === profileId);
+
+  const preferredStatsProfile = resolveStatsProfileForPlayer(profileId, scope);
+  if (preferredStatsProfile) {
+    try {
+      storage.setItem(STATS_CURRENT_PROFILE_KEY, preferredStatsProfile.id);
+    } catch {
+      // Ignore persistence failures – hydration should continue.
+    }
+  }
+}
+
 function shouldStartTrainingFromStorage(playerIdHint: string | null, scope: StorageScope): boolean {
   const storage = getScopedStorage(scope);
   if (!storage) return false;
@@ -731,7 +886,7 @@ function usePostAuthNavigation() {
 export default function Welcome(): JSX.Element {
   const navigateToPostAuth = usePostAuthNavigation();
   const { setMode } = usePlayMode();
-  const [authMode, setAuthMode] = useState<AuthMode>(defaultAuthMode);
+  const [overlay, setOverlay] = useState<WelcomeOverlay>("chooser");
   const [activeTab, setActiveTab] = useState<AuthTab>("signIn");
 
   const [session, setSession] = useState<Session | null>(null);
@@ -749,17 +904,27 @@ export default function Welcome(): JSX.Element {
   const [cloudSignOutError, setCloudSignOutError] = useState<string | null>(null);
   const [cloudSignOutPending, setCloudSignOutPending] = useState(false);
 
-  const [localSession, setLocalSession] = useState<LocalSession | null>(null);
+  const [localSession, setLocalSession] = useState<LocalSession | null>(() => loadActiveLocalSession());
   const [localAccounts, setLocalAccounts] = useState<LocalAccountRecord[]>(() => loadLocalAccounts());
-
+  const [selectedLocalProfileId, setSelectedLocalProfileId] = useState<string | null>(() => {
+    const existing = loadActiveLocalSession();
+    return existing?.profile.id ?? null;
+  });
+  const [showLocalCreateForm, setShowLocalCreateForm] = useState(() => loadLocalAccounts().length === 0);
   const [localSignUpForm, setLocalSignUpForm] = useState<SignUpFormState>(initialSignUpForm);
   const [localSignUpError, setLocalSignUpError] = useState<string | null>(null);
   const [localSignUpPending, setLocalSignUpPending] = useState(false);
-
-  const [localSignOutError, setLocalSignOutError] = useState<string | null>(null);
-  const [localSignOutPending, setLocalSignOutPending] = useState(false);
+  const [localHydrating, setLocalHydrating] = useState(false);
+  const [localHydrationError, setLocalHydrationError] = useState<string | null>(null);
+  const localHydrationAbortRef = useRef(false);
 
   const supabaseReady = isSupabaseConfigured && Boolean(supabaseClient);
+
+  const refreshLocalAccounts = useCallback(() => {
+    const accounts = loadLocalAccounts();
+    setLocalAccounts(accounts);
+    return accounts;
+  }, []);
 
   useEffect(() => {
     const client = supabaseClient;
@@ -780,13 +945,11 @@ export default function Welcome(): JSX.Element {
         setMode("cloud");
         navigateToPostAuth(
           "cloud",
-          hydration
-            ? { playerId: hydration.playerId, statsProfiles: hydration.statsProfiles }
-            : undefined,
+          hydration ? { playerId: hydration.playerId, statsProfiles: hydration.statsProfiles } : undefined,
         );
       }
     };
-    runInitial();
+    void runInitial();
     const { data: listener } = client.auth.onAuthStateChange((_event, nextSession) => {
       if (cancelled) return;
       setSession(nextSession);
@@ -796,9 +959,7 @@ export default function Welcome(): JSX.Element {
           setMode("cloud");
           navigateToPostAuth(
             "cloud",
-            hydration
-              ? { playerId: hydration.playerId, statsProfiles: hydration.statsProfiles }
-              : undefined,
+            hydration ? { playerId: hydration.playerId, statsProfiles: hydration.statsProfiles } : undefined,
           );
         });
       }
@@ -810,29 +971,52 @@ export default function Welcome(): JSX.Element {
   }, [navigateToPostAuth, setMode]);
 
   useEffect(() => {
-    setLocalAccounts(loadLocalAccounts());
+    const accounts = refreshLocalAccounts();
     const existing = loadActiveLocalSession();
+    setLocalSession(existing);
     if (existing) {
-      setLocalSession(existing);
-      setMode("local");
+      setSelectedLocalProfileId(existing.profile.id);
+    } else if (accounts.length === 1) {
+      setSelectedLocalProfileId(accounts[0].profile.id);
     }
-  }, [setMode]);
+    setShowLocalCreateForm(accounts.length === 0);
+  }, [refreshLocalAccounts]);
 
   useEffect(() => {
-    if (authMode === "local") {
-      setActiveTab("signUp");
+    if (overlay !== "local") {
+      return;
     }
-  }, [authMode]);
+    const accounts = refreshLocalAccounts();
+    const existing = loadActiveLocalSession();
+    setLocalSession(existing);
+    if (accounts.length === 1) {
+      const sole = accounts[0];
+      setSelectedLocalProfileId(sole.profile.id);
+      const storage = getScopedStorage("local");
+      try {
+        const activeId = storage?.getItem(LOCAL_ACTIVE_ACCOUNT_KEY) ?? null;
+        if (activeId !== sole.profile.id) {
+          setActiveLocalAccount(sole);
+        }
+      } catch {
+        // ignore pointer rebuild failures
+      }
+    } else if (existing) {
+      setSelectedLocalProfileId(existing.profile.id);
+    }
+    setShowLocalCreateForm(accounts.length === 0);
+    localHydrationAbortRef.current = false;
+  }, [overlay, refreshLocalAccounts]);
 
-  const handleAuthModeChange = useCallback((mode: AuthMode) => {
-    setAuthMode(mode);
-    setActiveTab(mode === "cloud" ? "signIn" : "signUp");
-    if (mode === "cloud") {
-      setCloudSignInError(null);
-    } else {
-      setLocalAccounts(loadLocalAccounts());
+  useEffect(() => {
+    if (overlay === "cloud") {
+      setActiveTab("signIn");
     }
-  }, []);
+  }, [overlay]);
+
+  const localSummaries = useMemo(() => buildLocalProfileSummaries(localAccounts), [localAccounts]);
+  const autoSelectedHint =
+    localSummaries.length === 1 && selectedLocalProfileId === (localSummaries[0]?.account.profile.id ?? null);
 
   const handleCloudSignIn = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
@@ -880,9 +1064,12 @@ export default function Welcome(): JSX.Element {
     [cloudSignInPassword, cloudSignInUsername, navigateToPostAuth, setMode],
   );
 
-  const handleCloudSignUpInputChange = useCallback(<K extends keyof SignUpFormState>(key: K, value: SignUpFormState[K]) => {
-    setCloudSignUpForm(prev => ({ ...prev, [key]: value }));
-  }, []);
+  const handleCloudSignUpInputChange = useCallback(
+    <K extends keyof SignUpFormState>(key: K, value: SignUpFormState[K]) => {
+      setCloudSignUpForm(prev => ({ ...prev, [key]: value }));
+    },
+    [],
+  );
 
   const handleCloudSignUp = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
@@ -909,43 +1096,32 @@ export default function Welcome(): JSX.Element {
         return;
       }
       if (!username.trim()) {
-        setCloudSignUpError("Enter a username.");
+        setCloudSignUpError("Choose a username.");
         return;
       }
-      if (!password) {
-        setCloudSignUpError("Create a password.");
+      if (!password.trim()) {
+        setCloudSignUpError("Enter a password.");
         return;
       }
       setCloudSignUpError(null);
       setCloudSignUpPending(true);
-      const trimmedUsername = username.trim();
-      const profileMetadata = {
-        first_name: firstName.trim(),
-        last_initial: lastInitial.trim().charAt(0).toUpperCase(),
-        grade,
-        age: Number.parseInt(age, 10) || null,
-        school: school.trim() || null,
-        prior_experience: priorExperience.trim() || null,
-      };
       try {
         const result = await signupThroughEdge({
-          firstName: profileMetadata.first_name,
-          lastInitial: profileMetadata.last_initial,
+          firstName: firstName.trim(),
+          lastInitial: lastInitial.trim(),
           grade,
           age,
-          username: trimmedUsername,
+          school,
+          priorExperience,
+          username: username.trim(),
           password,
-          school: profileMetadata.school ?? undefined,
-          priorExperience: profileMetadata.prior_experience ?? undefined,
         });
         if (result.error || !result.data) {
           setCloudSignUpError(result.error ?? result.data?.message ?? "Unable to sign up. Try again.");
           return;
         }
         if (!result.data.session) {
-          setCloudSignUpError(
-            result.data.message ?? "Sign-up succeeded. Check your email to confirm before continuing.",
-          );
+          setCloudSignUpError(result.data.message ?? "Sign-up succeeded, but no session was returned.");
           return;
         }
         const nextSession = await setEdgeSession(result.data.session);
@@ -953,48 +1129,20 @@ export default function Welcome(): JSX.Element {
           setCloudSignUpError("Sign-up succeeded, but we could not establish a session. Try again.");
           return;
         }
-        const userId = nextSession.user?.id ?? result.data.user?.id;
-        if (userId && cloudDataService) {
-          try {
-            const consentTimestamp = new Date().toISOString();
-            const normalizedAge = sanitizeAge(age);
-            const playerNameForCloud = profileMetadata.first_name
-              ? `${profileMetadata.first_name}${profileMetadata.last_initial ? ` ${profileMetadata.last_initial}.` : ""}`.trim()
-              : trimmedUsername || "Player";
-            await cloudDataService.upsertPlayerProfile({
-              id: userId,
-              playerName: playerNameForCloud,
-              grade: isGradeValue(grade) ? grade : "Not applicable",
-              age: normalizedAge,
-              school: profileMetadata.school ?? undefined,
-              priorExperience: profileMetadata.prior_experience ?? undefined,
-              consent: {
-                agreed: true,
-                consentTextVersion: CONSENT_TEXT_VERSION,
-                timestamp: consentTimestamp,
-              },
-              needsReview: !isGradeValue(grade) || normalizedAge === null,
-            });
-          } catch (upsertError) {
-            console.warn("demographics_profiles upsert failed", upsertError);
-          }
-        }
         setSession(nextSession);
         const hydration = await hydrateCloudPlayerState(nextSession, {
-          firstName: profileMetadata.first_name ?? undefined,
-          lastInitial: profileMetadata.last_initial ?? undefined,
+          firstName: firstName.trim(),
+          lastInitial: lastInitial.trim(),
           grade,
           age,
-          school: profileMetadata.school ?? undefined,
-          priorExperience: profileMetadata.prior_experience ?? undefined,
-          username: trimmedUsername,
+          school,
+          priorExperience,
+          username: username.trim(),
         });
         setMode("cloud");
         navigateToPostAuth(
           "cloud",
-          hydration
-            ? { playerId: hydration.playerId, statsProfiles: hydration.statsProfiles }
-            : undefined,
+          hydration ? { playerId: hydration.playerId, statsProfiles: hydration.statsProfiles } : undefined,
         );
       } catch (error) {
         setCloudSignUpError(error instanceof Error ? error.message : "Unable to sign up. Try again.");
@@ -1019,6 +1167,10 @@ export default function Welcome(): JSX.Element {
       }
       setSession(null);
       setMode("local");
+      setOverlay("chooser");
+      setActiveTab("signIn");
+      setCloudSignInUsername("");
+      setCloudSignInPassword("");
       const sessionScopedStorage = getScopedStorage("session");
       if (sessionScopedStorage) {
         [
@@ -1040,9 +1192,45 @@ export default function Welcome(): JSX.Element {
     }
   }, [setMode]);
 
-  const handleLocalSignUpInputChange = useCallback(<K extends keyof SignUpFormState>(key: K, value: SignUpFormState[K]) => {
-    setLocalSignUpForm(prev => ({ ...prev, [key]: value }));
-  }, []);
+  const handleLocalSignUpInputChange = useCallback(
+    <K extends keyof SignUpFormState>(key: K, value: SignUpFormState[K]) => {
+      setLocalSignUpForm(prev => ({ ...prev, [key]: value }));
+    },
+    [],
+  );
+
+  const completeLocalSelection = useCallback(
+    async (profileId: string) => {
+      localHydrationAbortRef.current = false;
+      setLocalHydrating(true);
+      setLocalHydrationError(null);
+      try {
+        const accounts = refreshLocalAccounts();
+        const account = accounts.find(candidate => candidate.profile.id === profileId);
+        if (!account) {
+          throw new Error("We couldn't find that profile on this device.");
+        }
+        setActiveLocalAccount(account);
+        setLocalSession({ profile: account.profile });
+        setSelectedLocalProfileId(account.profile.id);
+        setMode("local");
+        await hydrateLocalProfileArtifacts(account.profile.id);
+        if (localHydrationAbortRef.current) {
+          return;
+        }
+        navigateToPostAuth("local", { playerId: account.profile.id });
+      } catch (error) {
+        if (!localHydrationAbortRef.current) {
+          setLocalHydrationError(error instanceof Error ? error.message : "Unable to load local data.");
+        }
+      } finally {
+        if (!localHydrationAbortRef.current) {
+          setLocalHydrating(false);
+        }
+      }
+    },
+    [navigateToPostAuth, refreshLocalAccounts, setMode],
+  );
 
   const handleLocalSignUp = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
@@ -1078,186 +1266,363 @@ export default function Welcome(): JSX.Element {
           createdAt: new Date().toISOString(),
           storageMode: "local",
         };
-        const existingWithoutProfile = accounts.filter(candidate => candidate.profile.id !== profile.id);
-        const nextAccounts = existingWithoutProfile.concat(nextAccount);
-        saveLocalAccounts(nextAccounts);
-        setActiveLocalAccount(nextAccount);
-        setLocalSession({ profile: nextAccount.profile });
-        setLocalAccounts(nextAccounts);
+        const deduped = accounts.filter(candidate => candidate.profile.id !== profile.id).concat(nextAccount);
+        saveLocalAccounts(deduped);
+        setLocalAccounts(deduped);
+        setShowLocalCreateForm(false);
         setLocalSignUpForm(initialSignUpForm);
-        setMode("local");
-        navigateToPostAuth("local", { playerId: nextAccount.profile.id });
+        setSelectedLocalProfileId(nextAccount.profile.id);
+        await completeLocalSelection(nextAccount.profile.id);
       } catch (error) {
         setLocalSignUpError(error instanceof Error ? error.message : "Unable to sign up. Try again.");
       } finally {
         setLocalSignUpPending(false);
       }
     },
-    [localSignUpForm, navigateToPostAuth, setLocalAccounts, setMode],
+    [completeLocalSelection, localSignUpForm],
   );
 
-  const handleLocalSignOut = useCallback(async () => {
-    if (!isBrowser()) {
-      setLocalSignOutError("Local storage is not available.");
+  const handleSelectLocalProfile = useCallback((profileId: string) => {
+    setSelectedLocalProfileId(profileId);
+    setLocalHydrationError(null);
+  }, []);
+
+  const handleLocalContinue = useCallback(async () => {
+    if (!selectedLocalProfileId || localHydrating) {
       return;
     }
-    setLocalSignOutError(null);
-    setLocalSignOutPending(true);
-    try {
-      clearActiveLocalSession(localSession?.profile.id);
-      setLocalSession(null);
-      setMode("local");
-    } catch (error) {
-      setLocalSignOutError(error instanceof Error ? error.message : "Unable to sign out right now.");
-    } finally {
-      setLocalSignOutPending(false);
-    }
-  }, [localSession, setMode]);
+    await completeLocalSelection(selectedLocalProfileId);
+  }, [completeLocalSelection, localHydrating, selectedLocalProfileId]);
 
-  const handleSelectLocalAccount = useCallback(
-    (profileId: string) => {
-      const accounts = loadLocalAccounts();
-      const account = accounts.find(candidate => candidate.profile.id === profileId);
-      if (!account) return;
-      setActiveLocalAccount(account);
-      setLocalSession({ profile: account.profile });
-      setLocalAccounts(accounts);
-      setMode("local");
-      navigateToPostAuth("local", { playerId: account.profile.id });
-    },
-    [navigateToPostAuth, setLocalAccounts, setMode],
-  );
+  const handleOpenLocalOverlay = useCallback(() => {
+    localHydrationAbortRef.current = false;
+    setOverlay("local");
+    setMode("local");
+  }, [setMode]);
 
-  const statusMessage = useMemo(() => {
-    if (authMode === "cloud") {
-      if (!supabaseReady) {
-        return "Supabase is not configured. Provide the environment variables to enable sign-in.";
-      }
-      if (initializing) {
-        return "Checking session…";
-      }
-      if (session) {
-        return `Signed in as ${session.user?.email ?? "cloud user"}.`;
-      }
-      return "Cloud mode ready.";
-    }
-    if (localSession) {
-      return `Signed in as ${localSession.profile.playerName}.`;
-    }
-    return "Local mode ready.";
-  }, [authMode, initializing, localSession, session, supabaseReady]);
+  const handleOpenCloudOverlay = useCallback(() => {
+    setOverlay("cloud");
+    setMode("cloud");
+    setCloudSignInError(null);
+  }, [setMode]);
 
-  const signOutError = authMode === "cloud" ? cloudSignOutError : localSignOutError;
-  const signOutPending = authMode === "cloud" ? cloudSignOutPending : localSignOutPending;
-  const signOutDisabled = authMode === "cloud"
-    ? !supabaseReady || signOutPending || !session
-    : !localSession || signOutPending;
+  const handleBackToChooser = useCallback(() => {
+    localHydrationAbortRef.current = true;
+    setLocalHydrating(false);
+    setOverlay("chooser");
+    setLocalHydrationError(null);
+    setCloudSignInError(null);
+    setCloudSignUpError(null);
+  }, []);
+
+  const localContinueDisabled = !selectedLocalProfileId || localHydrating;
+  const localProfilesEmpty = localSummaries.length === 0;
+  const cloudStatusMessage = useMemo(() => {
+    if (!supabaseReady) {
+      return "Supabase is not configured. Provide the environment variables to enable cloud sign-in.";
+    }
+    if (initializing) {
+      return "Checking for an existing session…";
+    }
+    if (session) {
+      return `Signed in as ${session.user?.email ?? "cloud user"}.`;
+    }
+    return "Cloud mode ready.";
+  }, [initializing, session, supabaseReady]);
+  const cloudSignOutDisabled = !supabaseReady || cloudSignOutPending || !session;
 
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-50">
       <header className="px-6 pt-12 text-center">
         <h1 className="text-4xl font-bold tracking-tight">RPS Predictor</h1>
-        <p className="mt-3 text-base text-slate-300">
-          Welcome! Sign in to continue or create a new account to begin training against the AI.
-        </p>
+        <p className="mt-3 text-base text-slate-300">Choose how you want to play and jump back into your matches.</p>
       </header>
-      <main className="mx-auto mt-10 w-full max-w-4xl flex-1 px-4 pb-16">
-        <div className="rounded-3xl bg-white/10 p-1 shadow-2xl backdrop-blur">
-          <div className="space-y-2 rounded-3xl bg-slate-900/60 p-1">
-            <div className="flex w-full justify-between gap-1 rounded-3xl bg-slate-900/60 p-1">
+      <main className="mx-auto mt-10 w-full max-w-5xl flex-1 px-4 pb-16">
+        {overlay === "chooser" ? (
+          <section className="rounded-3xl bg-white/10 p-10 text-center shadow-2xl backdrop-blur">
+            <h2 className="text-2xl font-semibold text-white">Choose how you want to play today.</h2>
+            <p className="mt-2 text-sm text-slate-200">
+              Use a profile saved on this device or sync your progress through the cloud.
+            </p>
+            <div className="mt-10 grid gap-4 sm:grid-cols-2">
               <button
                 type="button"
-                onClick={() => handleAuthModeChange("local")}
-                className={`flex-1 rounded-3xl px-5 py-3 text-sm font-semibold transition ${
-                  authMode === "local" ? "bg-white text-slate-900 shadow" : "text-slate-300 hover:text-white"
-                }`}
+                onClick={handleOpenLocalOverlay}
+                className="rounded-3xl bg-white px-6 py-5 text-lg font-semibold text-slate-900 shadow-lg transition hover:-translate-y-0.5 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
               >
-                Local (this device)
+                Use Local
               </button>
               <button
                 type="button"
-                onClick={() => handleAuthModeChange("cloud")}
-                className={`flex-1 rounded-3xl px-5 py-3 text-sm font-semibold transition ${
-                  authMode === "cloud" ? "bg-white text-slate-900 shadow" : "text-slate-300 hover:text-white"
-                }`}
+                onClick={handleOpenCloudOverlay}
+                className="rounded-3xl bg-sky-500/90 px-6 py-5 text-lg font-semibold text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-sky-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-200"
               >
-                Cloud (sync across devices)
+                Use Cloud
               </button>
             </div>
-            <div className="flex w-full justify-between gap-1 rounded-3xl bg-slate-900/60 p-1">
-              {authMode === "cloud" ? (
-                <>
+          </section>
+        ) : overlay === "local" ? (
+          <section className="rounded-3xl bg-white/10 p-8 shadow-2xl backdrop-blur">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-semibold text-white">Local Profiles</h2>
+                <p className="mt-1 text-sm text-slate-200">
+                  Pick a saved profile or create a new one. Your progress and matches are saved on this device.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleBackToChooser}
+                className="rounded-full border border-slate-500/60 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-white/70 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              >
+                Back
+              </button>
+            </div>
+            <div className="mt-8 grid gap-8 lg:grid-cols-[1.4fr_1fr]">
+              <div className="space-y-4">
+                {localProfilesEmpty ? (
+                  <div className="rounded-2xl border border-dashed border-slate-500/60 p-8 text-center text-sm text-slate-200">
+                    <p>No profiles yet. Create a local profile to get started.</p>
+                  </div>
+                ) : (
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {localSummaries.map(summary => {
+                      const profileId = summary.account.profile.id;
+                      const selected = profileId === selectedLocalProfileId;
+                      const isActive = localSession?.profile.id === profileId;
+                      const trainingLabel = summary.trainingComplete
+                        ? "Training complete"
+                        : `Training: ${summary.trainingCount}/${TRAINING_ROUNDS_REQUIRED}`;
+                      return (
+                        <button
+                          key={profileId}
+                          type="button"
+                          onClick={() => handleSelectLocalProfile(profileId)}
+                          disabled={localHydrating}
+                          className={`rounded-2xl border px-5 py-4 text-left transition ${
+                            selected
+                              ? "border-sky-400 bg-sky-500/20 text-white shadow-lg"
+                              : "border-slate-600/70 bg-slate-900/40 text-slate-200 hover:border-sky-400 hover:bg-slate-900/60"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <h3 className="text-lg font-semibold">{summary.account.profile.playerName}</h3>
+                            {selected ? <span className="text-xs font-semibold text-sky-200">Selected</span> : null}
+                          </div>
+                          <p className="mt-2 text-xs uppercase tracking-wide text-slate-300">{trainingLabel}</p>
+                          <p className="mt-3 text-xs text-slate-400">{formatLastPlayed(summary.lastPlayedAt)}</p>
+                          {isActive ? <p className="mt-3 text-xs font-semibold text-emerald-300">Active previously</p> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {autoSelectedHint ? (
+                  <p className="text-xs font-medium text-slate-200">
+                    Selected: {localSummaries[0].account.profile.playerName}
+                  </p>
+                ) : null}
+              </div>
+              <aside className="rounded-2xl border border-white/10 bg-slate-900/60 p-6 text-sm text-slate-200">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-base font-semibold text-white">Create Local Profile</h3>
                   <button
                     type="button"
-                    onClick={() => setActiveTab("signIn")}
+                    onClick={() => setShowLocalCreateForm(prev => !prev)}
+                    className="rounded-full border border-slate-500/60 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:border-white/70 hover:text-white"
+                  >
+                    {showLocalCreateForm ? 'Hide' : 'New profile'}
+                  </button>
+                </div>
+                {showLocalCreateForm ? (
+                  <form className="mt-6 space-y-4" onSubmit={handleLocalSignUp}>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label htmlFor="local-first-name" className="text-xs font-medium uppercase tracking-wide text-slate-300">First name</label>
+                        <input
+                          id="local-first-name"
+                          type="text"
+                          value={localSignUpForm.firstName}
+                          onChange={event => handleLocalSignUpInputChange('firstName', event.target.value)}
+                          className="mt-1 w-full rounded-xl border border-slate-600/70 bg-slate-900/60 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="local-last-initial" className="text-xs font-medium uppercase tracking-wide text-slate-300">Last initial</label>
+                        <input
+                          id="local-last-initial"
+                          type="text"
+                          value={localSignUpForm.lastInitial}
+                          onChange={event => handleLocalSignUpInputChange('lastInitial', event.target.value)}
+                          className="mt-1 w-full rounded-xl border border-slate-600/70 bg-slate-900/60 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                          maxLength={1}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label htmlFor="local-grade" className="text-xs font-medium uppercase tracking-wide text-slate-300">Grade</label>
+                        <select
+                          id="local-grade"
+                          value={localSignUpForm.grade}
+                          onChange={event => handleLocalSignUpInputChange('grade', event.target.value)}
+                          className="mt-1 w-full rounded-xl border border-slate-600/70 bg-slate-900/60 px-3 py-2 text-sm text-white focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                        >
+                          <option value="" disabled>Choose</option>
+                          {GRADE_OPTIONS.map(option => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label htmlFor="local-age" className="text-xs font-medium uppercase tracking-wide text-slate-300">Age</label>
+                        <select
+                          id="local-age"
+                          value={localSignUpForm.age}
+                          onChange={event => handleLocalSignUpInputChange('age', event.target.value)}
+                          className="mt-1 w-full rounded-xl border border-slate-600/70 bg-slate-900/60 px-3 py-2 text-sm text-white focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                        >
+                          <option value="" disabled>Choose</option>
+                          {AGE_OPTIONS.map(option => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label htmlFor="local-school" className="text-xs font-medium uppercase tracking-wide text-slate-300">School (optional)</label>
+                      <input
+                        id="local-school"
+                        type="text"
+                        value={localSignUpForm.school}
+                        onChange={event => handleLocalSignUpInputChange('school', event.target.value)}
+                        className="mt-1 w-full rounded-xl border border-slate-600/70 bg-slate-900/60 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="local-prior-experience" className="text-xs font-medium uppercase tracking-wide text-slate-300">Prior experience (optional)</label>
+                      <textarea
+                        id="local-prior-experience"
+                        value={localSignUpForm.priorExperience}
+                        onChange={event => handleLocalSignUpInputChange('priorExperience', event.target.value)}
+                        rows={3}
+                        className="mt-1 w-full rounded-xl border border-slate-600/70 bg-slate-900/60 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                      />
+                    </div>
+                    {localSignUpError ? (
+                      <p className="text-sm font-semibold text-rose-300">{localSignUpError}</p>
+                    ) : null}
+                    <button
+                      type="submit"
+                      disabled={localSignUpPending || localHydrating}
+                      className={`w-full rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                        localSignUpPending || localHydrating
+                          ? "cursor-not-allowed bg-slate-700 text-slate-400"
+                          : "bg-sky-500 text-white hover:bg-sky-400"
+                      }`}
+                    >
+                      {localSignUpPending ? 'Creating…' : 'Create profile'}
+                    </button>
+                  </form>
+                ) : (
+                  <p className="mt-4 text-xs text-slate-400">Use the button above to create another local-only profile.</p>
+                )}
+              </aside>
+            </div>
+            {localHydrationError ? (
+              <p className="mt-6 text-sm font-semibold text-rose-300">{localHydrationError}</p>
+            ) : null}
+            <div className="mt-8 flex flex-wrap items-center justify-between gap-4">
+              <button
+                type="button"
+                onClick={handleBackToChooser}
+                className="rounded-full border border-slate-500/60 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-white/70 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              >
+                Back to mode chooser
+              </button>
+              <div className="flex items-center gap-3">
+                {localHydrating ? <span className="text-sm text-slate-200">Loading local data…</span> : null}
+                <button
+                  type="button"
+                  onClick={handleLocalContinue}
+                  disabled={localContinueDisabled}
+                  className={`rounded-full px-6 py-2 text-sm font-semibold transition ${
+                    localContinueDisabled
+                      ? "cursor-not-allowed bg-slate-600 text-slate-400"
+                      : "bg-sky-500 text-white hover:bg-sky-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-200"
+                  }`}
+                >
+                  {localHydrating ? 'Loading…' : 'Continue'}
+                </button>
+              </div>
+            </div>
+            <p className="mt-4 text-right text-xs text-slate-400">Manage detailed profile settings from Settings → Manage Profiles.</p>
+          </section>
+        ) : (
+          <section className="rounded-3xl bg-white/10 p-8 shadow-2xl backdrop-blur">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-semibold text-white">Cloud Sign-In</h2>
+                <p className="mt-1 text-sm text-slate-200">
+                  Sign in with your cloud account or create one to sync progress across devices.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleBackToChooser}
+                className="rounded-full border border-slate-500/60 px-4 py-2 text-sm font-semibold text-slate-100 transition hover:border-white/70 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              >
+                Back
+              </button>
+            </div>
+            <div className="mt-8 grid gap-8 lg:grid-cols-[1.4fr_1fr]">
+              <div>
+                <div className="flex w-full gap-2 rounded-3xl bg-slate-900/60 p-1">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('signIn')}
                     className={`flex-1 rounded-3xl px-5 py-3 text-sm font-semibold transition ${
-                      activeTab === "signIn" ? "bg-white text-slate-900 shadow" : "text-slate-300 hover:text-white"
+                      activeTab === 'signIn' ? 'bg-white text-slate-900 shadow' : 'text-slate-300 hover:text-white'
                     }`}
                   >
                     Sign In
                   </button>
                   <button
                     type="button"
-                    onClick={() => setActiveTab("signUp")}
+                    onClick={() => setActiveTab('signUp')}
                     className={`flex-1 rounded-3xl px-5 py-3 text-sm font-semibold transition ${
-                      activeTab === "signUp" ? "bg-white text-slate-900 shadow" : "text-slate-300 hover:text-white"
+                      activeTab === 'signUp' ? 'bg-white text-slate-900 shadow' : 'text-slate-300 hover:text-white'
                     }`}
                   >
                     Sign Up
                   </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className="flex-1 rounded-3xl bg-white px-5 py-3 text-sm font-semibold text-slate-900 shadow"
-                  onClick={() => setActiveTab("signUp")}
-                >
-                  Sign Up
-                </button>
-              )}
-            </div>
-          </div>
-          <div className="grid gap-8 p-8 lg:grid-cols-[1.2fr_1fr]">
-            <section className="rounded-2xl bg-white/5 p-6 shadow-inner">
-              <h2 className="text-lg font-semibold text-white">
-                {activeTab === "signIn" ? "Sign In" : "Create account"}
-              </h2>
-              <p className="mt-1 text-sm text-slate-300">
-                {authMode === "cloud"
-                  ? activeTab === "signIn"
-                    ? "Use the username and password associated with your Supabase account."
-                    : "Fill out the same information as the local profile setup so we can save your progress to the cloud."
-                  : "Create a local-only profile. Everything stays on this browser unless you export it."}
-              </p>
-              {activeTab === "signIn" ? (
-                authMode === "cloud" ? (
+                </div>
+                {activeTab === 'signIn' ? (
                   <form className="mt-6 space-y-4" onSubmit={handleCloudSignIn}>
                     <div>
-                      <label htmlFor="sign-in-username" className="text-sm font-medium text-slate-200">
-                        Username
-                      </label>
+                      <label htmlFor="cloud-sign-in-username" className="text-xs font-medium uppercase tracking-wide text-slate-300">Username</label>
                       <input
-                        id="sign-in-username"
+                        id="cloud-sign-in-username"
                         type="text"
                         autoComplete="username"
                         value={cloudSignInUsername}
                         onChange={event => setCloudSignInUsername(event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                        placeholder="yourname"
+                        className="mt-1 w-full rounded-xl border border-slate-600/70 bg-slate-900/60 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
                       />
                     </div>
                     <div>
-                      <label htmlFor="sign-in-password" className="text-sm font-medium text-slate-200">
-                        Password
-                      </label>
+                      <label htmlFor="cloud-sign-in-password" className="text-xs font-medium uppercase tracking-wide text-slate-300">Password</label>
                       <input
-                        id="sign-in-password"
+                        id="cloud-sign-in-password"
                         type="password"
                         autoComplete="current-password"
                         value={cloudSignInPassword}
                         onChange={event => setCloudSignInPassword(event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                        placeholder="••••••••"
+                        className="mt-1 w-full rounded-xl border border-slate-600/70 bg-slate-900/60 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
                       />
                     </div>
                     {cloudSignInError ? (
@@ -1268,325 +1633,156 @@ export default function Welcome(): JSX.Element {
                       disabled={!supabaseReady || cloudSignInPending}
                       className={`w-full rounded-xl px-4 py-2 text-sm font-semibold transition ${
                         !supabaseReady || cloudSignInPending
-                          ? "cursor-not-allowed bg-slate-600 text-slate-300"
+                          ? "cursor-not-allowed bg-slate-700 text-slate-400"
                           : "bg-sky-500 text-white hover:bg-sky-400"
                       }`}
                     >
-                      {cloudSignInPending ? "Signing in…" : "Sign In"}
+                      {cloudSignInPending ? 'Signing in…' : 'Sign In'}
                     </button>
                   </form>
-                ) : null
-              ) : authMode === "cloud" ? (
-                <form className="mt-6 grid gap-4" onSubmit={handleCloudSignUp}>
-                  <div className="grid gap-4 sm:grid-cols-2">
+                ) : (
+                  <form className="mt-6 grid gap-4" onSubmit={handleCloudSignUp}>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label htmlFor="cloud-sign-up-first-name" className="text-xs font-medium uppercase tracking-wide text-slate-300">First name</label>
+                        <input
+                          id="cloud-sign-up-first-name"
+                          type="text"
+                          value={cloudSignUpForm.firstName}
+                          onChange={event => handleCloudSignUpInputChange('firstName', event.target.value)}
+                          className="mt-1 w-full rounded-xl border border-slate-600/70 bg-slate-900/60 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="cloud-sign-up-last-initial" className="text-xs font-medium uppercase tracking-wide text-slate-300">Last initial</label>
+                        <input
+                          id="cloud-sign-up-last-initial"
+                          type="text"
+                          value={cloudSignUpForm.lastInitial}
+                          onChange={event => handleCloudSignUpInputChange('lastInitial', event.target.value)}
+                          className="mt-1 w-full rounded-xl border border-slate-600/70 bg-slate-900/60 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                          maxLength={1}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label htmlFor="cloud-sign-up-grade" className="text-xs font-medium uppercase tracking-wide text-slate-300">Grade</label>
+                        <select
+                          id="cloud-sign-up-grade"
+                          value={cloudSignUpForm.grade}
+                          onChange={event => handleCloudSignUpInputChange('grade', event.target.value)}
+                          className="mt-1 w-full rounded-xl border border-slate-600/70 bg-slate-900/60 px-3 py-2 text-sm text-white focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                        >
+                          <option value="" disabled>Choose</option>
+                          {GRADE_OPTIONS.map(option => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label htmlFor="cloud-sign-up-age" className="text-xs font-medium uppercase tracking-wide text-slate-300">Age</label>
+                        <select
+                          id="cloud-sign-up-age"
+                          value={cloudSignUpForm.age}
+                          onChange={event => handleCloudSignUpInputChange('age', event.target.value)}
+                          className="mt-1 w-full rounded-xl border border-slate-600/70 bg-slate-900/60 px-3 py-2 text-sm text-white focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                        >
+                          <option value="" disabled>Choose</option>
+                          {AGE_OPTIONS.map(option => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
                     <div>
-                      <label htmlFor="sign-up-first-name" className="text-sm font-medium text-slate-200">
-                        First name
-                      </label>
+                      <label htmlFor="cloud-sign-up-school" className="text-xs font-medium uppercase tracking-wide text-slate-300">School (optional)</label>
                       <input
-                        id="sign-up-first-name"
+                        id="cloud-sign-up-school"
                         type="text"
-                        value={cloudSignUpForm.firstName}
-                        onChange={event => handleCloudSignUpInputChange("firstName", event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                        placeholder="e.g. Alex"
+                        value={cloudSignUpForm.school}
+                        onChange={event => handleCloudSignUpInputChange('school', event.target.value)}
+                        className="mt-1 w-full rounded-xl border border-slate-600/70 bg-slate-900/60 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
                       />
                     </div>
                     <div>
-                      <label htmlFor="sign-up-last-initial" className="text-sm font-medium text-slate-200">
-                        Last name initial
-                      </label>
-                      <input
-                        id="sign-up-last-initial"
-                        type="text"
-                        value={cloudSignUpForm.lastInitial}
-                        onChange={event => handleCloudSignUpInputChange("lastInitial", event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                        placeholder="e.g. W"
-                        maxLength={3}
+                      <label htmlFor="cloud-sign-up-prior-experience" className="text-xs font-medium uppercase tracking-wide text-slate-300">Prior experience (optional)</label>
+                      <textarea
+                        id="cloud-sign-up-prior-experience"
+                        value={cloudSignUpForm.priorExperience}
+                        onChange={event => handleCloudSignUpInputChange('priorExperience', event.target.value)}
+                        rows={3}
+                        className="mt-1 w-full rounded-xl border border-slate-600/70 bg-slate-900/60 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
                       />
                     </div>
-                  </div>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label htmlFor="sign-up-grade" className="text-sm font-medium text-slate-200">
-                        Grade
-                      </label>
-                      <select
-                        id="sign-up-grade"
-                        value={cloudSignUpForm.grade}
-                        onChange={event => handleCloudSignUpInputChange("grade", event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                      >
-                        <option value="">Select grade</option>
-                        {GRADE_OPTIONS.map(option => (
-                          <option key={option} value={option}>
-                            {option}
-                          </option>
-                        ))}
-                      </select>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label htmlFor="cloud-sign-up-username" className="text-xs font-medium uppercase tracking-wide text-slate-300">Username</label>
+                        <input
+                          id="cloud-sign-up-username"
+                          type="text"
+                          autoComplete="username"
+                          value={cloudSignUpForm.username}
+                          onChange={event => handleCloudSignUpInputChange('username', event.target.value)}
+                          className="mt-1 w-full rounded-xl border border-slate-600/70 bg-slate-900/60 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="cloud-sign-up-password" className="text-xs font-medium uppercase tracking-wide text-slate-300">Password</label>
+                        <input
+                          id="cloud-sign-up-password"
+                          type="password"
+                          autoComplete="new-password"
+                          value={cloudSignUpForm.password}
+                          onChange={event => handleCloudSignUpInputChange('password', event.target.value)}
+                          className="mt-1 w-full rounded-xl border border-slate-600/70 bg-slate-900/60 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                        />
+                      </div>
                     </div>
-                    <div>
-                      <label htmlFor="sign-up-age" className="text-sm font-medium text-slate-200">
-                        Age
-                      </label>
-                      <select
-                        id="sign-up-age"
-                        value={cloudSignUpForm.age}
-                        onChange={event => handleCloudSignUpInputChange("age", event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                      >
-                        <option value="">Select age</option>
-                        {AGE_OPTIONS.map(option => (
-                          <option key={option} value={option}>
-                            {option}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  <div>
-                    <label htmlFor="sign-up-school" className="text-sm font-medium text-slate-200">
-                      School (optional)
-                    </label>
-                    <input
-                      id="sign-up-school"
-                      type="text"
-                      value={cloudSignUpForm.school}
-                      onChange={event => handleCloudSignUpInputChange("school", event.target.value)}
-                      className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                      placeholder="e.g. Roosevelt Elementary"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="sign-up-prior" className="text-sm font-medium text-slate-200">
-                      Prior experience (optional)
-                    </label>
-                    <textarea
-                      id="sign-up-prior"
-                      value={cloudSignUpForm.priorExperience}
-                      onChange={event => handleCloudSignUpInputChange("priorExperience", event.target.value)}
-                      rows={3}
-                      className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                      placeholder="Tell us about your RPS or AI experience"
-                    />
-                  </div>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label htmlFor="sign-up-username" className="text-sm font-medium text-slate-200">
-                        Username
-                      </label>
-                      <input
-                        id="sign-up-username"
-                        type="text"
-                        autoComplete="username"
-                        value={cloudSignUpForm.username}
-                        onChange={event => handleCloudSignUpInputChange("username", event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                        placeholder="yourname"
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="sign-up-password" className="text-sm font-medium text-slate-200">
-                        Password
-                      </label>
-                      <input
-                        id="sign-up-password"
-                        type="password"
-                        autoComplete="new-password"
-                        value={cloudSignUpForm.password}
-                        onChange={event => handleCloudSignUpInputChange("password", event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                        placeholder="Create a password"
-                      />
-                    </div>
-                  </div>
-                  {cloudSignUpError ? <p className="text-sm font-semibold text-rose-300">{cloudSignUpError}</p> : null}
-                  <button
-                    type="submit"
-                    disabled={!supabaseReady || cloudSignUpPending}
-                    className={`w-full rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                      !supabaseReady || cloudSignUpPending
-                        ? "cursor-not-allowed bg-slate-600 text-slate-300"
-                        : "bg-emerald-500 text-white hover:bg-emerald-400"
-                    }`}
-                  >
-                    {cloudSignUpPending ? "Creating account…" : "Create account"}
-                  </button>
-                </form>
-              ) : (
-                <form className="mt-6 grid gap-4" onSubmit={handleLocalSignUp}>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label htmlFor="local-sign-up-first-name" className="text-sm font-medium text-slate-200">
-                        First name
-                      </label>
-                      <input
-                        id="local-sign-up-first-name"
-                        type="text"
-                        value={localSignUpForm.firstName}
-                        onChange={event => handleLocalSignUpInputChange("firstName", event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                        placeholder="e.g. Alex"
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="local-sign-up-last-initial" className="text-sm font-medium text-slate-200">
-                        Last name initial
-                      </label>
-                      <input
-                        id="local-sign-up-last-initial"
-                        type="text"
-                        value={localSignUpForm.lastInitial}
-                        onChange={event => handleLocalSignUpInputChange("lastInitial", event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                        placeholder="e.g. W"
-                        maxLength={3}
-                      />
-                    </div>
-                  </div>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label htmlFor="local-sign-up-grade" className="text-sm font-medium text-slate-200">
-                        Grade
-                      </label>
-                      <select
-                        id="local-sign-up-grade"
-                        value={localSignUpForm.grade}
-                        onChange={event => handleLocalSignUpInputChange("grade", event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                      >
-                        <option value="">Select grade</option>
-                        {GRADE_OPTIONS.map(option => (
-                          <option key={option} value={option}>
-                            {option}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label htmlFor="local-sign-up-age" className="text-sm font-medium text-slate-200">
-                        Age
-                      </label>
-                      <select
-                        id="local-sign-up-age"
-                        value={localSignUpForm.age}
-                        onChange={event => handleLocalSignUpInputChange("age", event.target.value)}
-                        className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                      >
-                        <option value="">Select age</option>
-                        {AGE_OPTIONS.map(option => (
-                          <option key={option} value={option}>
-                            {option}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  <div>
-                    <label htmlFor="local-sign-up-school" className="text-sm font-medium text-slate-200">
-                      School (optional)
-                    </label>
-                    <input
-                      id="local-sign-up-school"
-                      type="text"
-                      value={localSignUpForm.school}
-                      onChange={event => handleLocalSignUpInputChange("school", event.target.value)}
-                      className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                      placeholder="e.g. Roosevelt Elementary"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="local-sign-up-prior" className="text-sm font-medium text-slate-200">
-                      Prior experience (optional)
-                    </label>
-                    <textarea
-                      id="local-sign-up-prior"
-                      value={localSignUpForm.priorExperience}
-                      onChange={event => handleLocalSignUpInputChange("priorExperience", event.target.value)}
-                      rows={3}
-                      className="mt-1 w-full rounded-xl border border-slate-500/50 bg-slate-900/60 px-3 py-2 text-base text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/50"
-                      placeholder="Tell us about your RPS or AI experience"
-                    />
-                  </div>
-                  {localSignUpError ? <p className="text-sm font-semibold text-rose-300">{localSignUpError}</p> : null}
-                  <button
-                    type="submit"
-                    disabled={localSignUpPending}
-                    className={`w-full rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                      localSignUpPending
-                        ? "cursor-not-allowed bg-slate-600 text-slate-300"
-                        : "bg-emerald-500 text-white hover:bg-emerald-400"
-                    }`}
-                  >
-                    {localSignUpPending ? "Creating account…" : "Create account"}
-                  </button>
-                </form>
-              )}
-            </section>
-            <aside className="flex flex-col justify-between gap-6 rounded-2xl border border-white/10 bg-slate-900/60 p-6 text-sm text-slate-200">
-              <div>
-                <h3 className="text-base font-semibold text-white">Status</h3>
-                <p className="mt-1 text-sm text-slate-300">{statusMessage}</p>
-                {signOutError ? <p className="mt-2 text-sm font-semibold text-rose-300">{signOutError}</p> : null}
-                {authMode === "local" ? (
-                  <div className="mt-4 space-y-2">
-                    <h4 className="text-sm font-semibold text-white">Local profiles</h4>
-                    {localAccounts.length === 0 ? (
-                      <p className="text-xs text-slate-400">No local profiles yet. Create one to get started.</p>
-                    ) : (
-                      <ul className="space-y-2">
-                        {localAccounts.map(account => {
-                          const isActive = localSession?.profile.id === account.profile.id;
-                          const needsReviewLabel = account.profile.needsReview ? "Needs review" : "Ready";
-                          return (
-                            <li key={account.profile.id}>
-                              <button
-                                type="button"
-                                onClick={() => handleSelectLocalAccount(account.profile.id)}
-                                className={`w-full rounded-xl border px-4 py-2 text-left transition ${
-                                  isActive
-                                    ? "border-sky-400 bg-sky-500/20 text-white"
-                                    : "border-slate-700/70 bg-slate-800/60 text-slate-200 hover:border-sky-400 hover:text-white"
-                                }`}
-                              >
-                                <div className="flex items-center justify-between">
-                                  <span className="font-semibold">{account.profile.playerName}</span>
-                                  {isActive ? <span className="text-xs font-semibold text-sky-300">Active</span> : null}
-                                </div>
-                                <div className="mt-1 flex items-center justify-between text-xs text-slate-400">
-                                  <span>{account.profile.grade}</span>
-                                  <span>{needsReviewLabel}</span>
-                                </div>
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </div>
-                ) : null}
+                    {cloudSignUpError ? (
+                      <p className="text-sm font-semibold text-rose-300">{cloudSignUpError}</p>
+                    ) : null}
+                    <button
+                      type="submit"
+                      disabled={!supabaseReady || cloudSignUpPending}
+                      className={`w-full rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                        !supabaseReady || cloudSignUpPending
+                          ? "cursor-not-allowed bg-slate-700 text-slate-400"
+                          : "bg-sky-500 text-white hover:bg-sky-400"
+                      }`}
+                    >
+                      {cloudSignUpPending ? 'Creating account…' : 'Create account'}
+                    </button>
+                  </form>
+                )}
               </div>
-              <div className="space-y-3">
+              <aside className="rounded-2xl border border-white/10 bg-slate-900/60 p-6 text-sm text-slate-200">
+                <h3 className="text-base font-semibold text-white">Status</h3>
+                <p className="mt-2 text-sm text-slate-300">{cloudStatusMessage}</p>
+                {cloudSignOutError ? (
+                  <p className="mt-3 text-sm font-semibold text-rose-300">{cloudSignOutError}</p>
+                ) : null}
                 <button
                   type="button"
-                  onClick={authMode === "cloud" ? handleCloudSignOut : handleLocalSignOut}
-                  disabled={signOutDisabled}
-                  className={`w-full rounded-xl px-4 py-2 text-sm font-semibold transition ${
-                    signOutDisabled ? "cursor-not-allowed bg-slate-700 text-slate-400" : "bg-slate-200 text-slate-900 hover:bg-white"
+                  onClick={handleCloudSignOut}
+                  disabled={cloudSignOutDisabled}
+                  className={`mt-6 w-full rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                    cloudSignOutDisabled
+                      ? "cursor-not-allowed bg-slate-700 text-slate-400"
+                      : "bg-slate-100 text-slate-900 hover:bg-white"
                   }`}
                 >
-                  {signOutPending ? "Signing out…" : "Sign Out"}
+                  {cloudSignOutPending ? 'Signing out…' : 'Sign Out'}
                 </button>
-                <p className="text-xs text-slate-400">
-                  {authMode === "cloud"
-                    ? "Signing out clears the session locally and keeps you on this welcome screen."
-                    : "Signing out clears the local session and keeps you on this welcome screen."}
-                </p>
-              </div>
-            </aside>
-          </div>
-        </div>
+                <p className="mt-3 text-xs text-slate-400">Signing out keeps your cloud data but clears this browser's session.</p>
+              </aside>
+            </div>
+          </section>
+        )}
       </main>
     </div>
   );
