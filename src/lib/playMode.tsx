@@ -14,24 +14,24 @@ const PLAY_MODE_CACHE_KEY = "rps_play_mode";
 
 type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
-function getSessionStorage(): StorageLike | null {
+function getPersistentStorage(): StorageLike | null {
   if (typeof window === "undefined") return null;
   try {
-    return window.sessionStorage;
+    return window.localStorage;
   } catch {
     return null;
   }
 }
 
 function readCachedMode(): PlayMode {
-  const storage = getSessionStorage();
+  const storage = getPersistentStorage();
   if (!storage) return DEFAULT_MODE;
   const cached = storage.getItem(PLAY_MODE_CACHE_KEY);
   return cached === "cloud" ? "cloud" : DEFAULT_MODE;
 }
 
 function clearCachedMode() {
-  const storage = getSessionStorage();
+  const storage = getPersistentStorage();
   if (!storage) return;
   try {
     storage.removeItem(PLAY_MODE_CACHE_KEY);
@@ -41,7 +41,7 @@ function clearCachedMode() {
 }
 
 function writeCachedMode(mode: PlayMode) {
-  const storage = getSessionStorage();
+  const storage = getPersistentStorage();
   if (!storage) return;
   try {
     if (mode === DEFAULT_MODE) {

@@ -1263,20 +1263,6 @@ export default function Welcome(): JSX.Element {
       setActiveTab("signIn");
       setCloudSignInUsername("");
       setCloudSignInPassword("");
-      const sessionScopedStorage = getScopedStorage("session");
-      if (sessionScopedStorage) {
-        [
-          PLAYERS_STORAGE_KEY,
-          CURRENT_PLAYER_STORAGE_KEY,
-          STATS_PROFILES_KEY,
-          STATS_CURRENT_PROFILE_KEY,
-          STATS_ROUNDS_KEY,
-          STATS_MATCHES_KEY,
-          STATS_MODEL_STATE_KEY,
-        ].forEach(key => {
-          sessionScopedStorage.removeItem(key);
-        });
-      }
     } catch (error) {
       setCloudSignOutError(error instanceof Error ? error.message : "Unable to sign out right now.");
     } finally {
@@ -1363,6 +1349,7 @@ export default function Welcome(): JSX.Element {
         };
         const deduped = accounts.filter(candidate => candidate.profile.id !== profile.id).concat(nextAccount);
         saveLocalAccounts(deduped);
+        setActiveLocalAccount(nextAccount);
         setLocalAccounts(deduped);
         setShowLocalCreateForm(false);
         setLocalSignUpForm(initialSignUpForm);
