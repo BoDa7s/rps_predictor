@@ -24,15 +24,20 @@ export const STATS_MODEL_STATE_KEY = STATS_MODEL_STATE_KEY_VALUE;
 
 export function clearActiveLocalSession(_profileId?: string): void {
   if (!isBrowser()) return;
-  try {
-    window.localStorage.removeItem(LOCAL_ACTIVE_ACCOUNT_KEY_VALUE);
-  } catch {
-    /* ignore */
-  }
-  try {
-    window.sessionStorage.removeItem(LOCAL_ACTIVE_ACCOUNT_KEY_VALUE);
-  } catch {
-    /* ignore */
+
+  const pointerKeys = [LOCAL_ACTIVE_ACCOUNT_KEY_VALUE, CURRENT_PLAYER_STORAGE_KEY_VALUE];
+
+  for (const key of pointerKeys) {
+    try {
+      window.localStorage.removeItem(key);
+    } catch {
+      /* ignore */
+    }
+    try {
+      window.sessionStorage.removeItem(key);
+    } catch {
+      /* ignore */
+    }
   }
 }
 
