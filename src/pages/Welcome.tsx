@@ -312,7 +312,6 @@ function loadActiveLocalSession(): LocalSession | null {
 
   if (activeAccount) {
     if (isProfileMigrated(activeAccount.profile.id)) {
-      clearActiveLocalSession(activeAccount.profile.id);
       return null;
     }
     ensurePlayerStored(activeAccount.profile, "local");
@@ -326,11 +325,6 @@ function loadActiveLocalSession(): LocalSession | null {
   const storedPlayers = loadStoredPlayers("local");
   const fallbackProfile = storedPlayers.find(player => player.id === profileId);
   if (!fallbackProfile || isProfileMigrated(fallbackProfile.id)) {
-    if (fallbackProfile) {
-      clearActiveLocalSession(fallbackProfile.id);
-    } else {
-      clearActiveLocalSession();
-    }
     return null;
   }
   ensurePlayerStored(fallbackProfile, "local");
@@ -1068,20 +1062,6 @@ export default function Welcome(): JSX.Element {
       }
       setSession(null);
       setMode("local");
-      const sessionScopedStorage = getScopedStorage("session");
-      if (sessionScopedStorage) {
-        [
-          PLAYERS_STORAGE_KEY,
-          CURRENT_PLAYER_STORAGE_KEY,
-          STATS_PROFILES_KEY,
-          STATS_CURRENT_PROFILE_KEY,
-          STATS_ROUNDS_KEY,
-          STATS_MATCHES_KEY,
-          STATS_MODEL_STATE_KEY,
-        ].forEach(key => {
-          sessionScopedStorage.removeItem(key);
-        });
-      }
     } catch (error) {
       setCloudSignOutError(error instanceof Error ? error.message : "Unable to sign out right now.");
     } finally {
@@ -1153,7 +1133,6 @@ export default function Welcome(): JSX.Element {
     setLocalSignOutError(null);
     setLocalSignOutPending(true);
     try {
-      clearActiveLocalSession(localSession?.profile.id);
       setLocalSession(null);
       setMode("local");
     } catch (error) {
