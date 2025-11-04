@@ -437,7 +437,6 @@ function statsProfileToUpsert(profile: StatsProfile): StatsProfileUpsert {
     throw new Error("Stats profile payload requires a valid user_id");
   }
 
-  const statsProfileId = asUuid(profile.id ?? undefined);
   const demographicsProfileId = asUuid(profile.demographics_profile_id ?? undefined);
   const previousProfileId = asUuid(profile.previous_profile_id ?? undefined);
   const nextProfileId = asUuid(profile.next_profile_id ?? undefined);
@@ -477,14 +476,11 @@ function statsProfileToUpsert(profile: StatsProfile): StatsProfileUpsert {
     version,
   };
 
-  if (statsProfileId) {
-    payload.id = statsProfileId;
-    if (previousProfileId) {
-      payload.previous_profile_id = previousProfileId;
-    }
-    if (nextProfileId) {
-      payload.next_profile_id = nextProfileId;
-    }
+  if (previousProfileId) {
+    payload.previous_profile_id = previousProfileId;
+  }
+  if (nextProfileId) {
+    payload.next_profile_id = nextProfileId;
   }
 
   if (demographicsProfileId === user_id) {
