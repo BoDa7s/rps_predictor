@@ -1482,6 +1482,7 @@ export default function Welcome(): JSX.Element {
           if (!nextSession) {
             throw new Error("Unable to establish Supabase session.");
           }
+          setSession(nextSession);
           const supabaseUserId = nextSession.user?.id ?? undefined;
           let updatedAccount: LocalAccountRecord = {
             ...account,
