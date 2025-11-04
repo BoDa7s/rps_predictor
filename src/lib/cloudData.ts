@@ -23,6 +23,8 @@ import type {
   StatsProfile,
   StoredPredictorModelState,
 } from "../stats";
+import type { AIMode, Mode } from "../gameTypes";
+import type { LeaderboardMatchEntry } from "../leaderboardData";
 
 type Maybe<T> = T | null | undefined;
 
@@ -49,6 +51,44 @@ function coerceTimestamp(value: Maybe<string>): string {
     return value;
   }
   return new Date().toISOString();
+}
+
+function asMode(value: Maybe<string>): Mode | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "challenge" || normalized === "practice" || normalized === "training") {
+    return normalized as Mode;
+  }
+  return null;
+}
+
+function asAIMode(value: Maybe<string>): AIMode | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "fair" || normalized === "normal" || normalized === "ruthless") {
+    return normalized as AIMode;
+  }
+  return null;
+}
+
+function parseNumber(value: Maybe<number | string>): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function parseNonNegativeInteger(value: Maybe<number | string>, fallback = 0): number {
+  const parsed = parseNumber(value);
+  if (parsed == null) return fallback;
+  const normalized = Math.floor(parsed);
+  return Number.isFinite(normalized) && normalized >= 0 ? normalized : fallback;
 }
 
 function splitPlayerName(name: Maybe<string>): { firstName: string | null; lastInitial: string | null } {
@@ -987,6 +1027,75 @@ export class CloudDataService {
     return rows
       .map(rowToMatchSummary)
       .filter((entry): entry is MatchSummary => Boolean(entry));
+  }
+
+  async loadPublicLeaderboard(): Promise<LeaderboardMatchEntry[]> {
+    const client = ensureClient(this.client);
+    const query = client
+      .from("leaderboard_public_entries")
+      .select(
+        "global_rank, match_id, player_id, stats_profile_id, player_name, grade, total_score, max_streak, rounds_played, mode, difficulty, ended_at",
+      )
+      .order("global_rank", { ascending: true });
+    type PublicLeaderboardRow = {
+      global_rank?: number | string | null;
+      match_id?: string | null;
+      player_id?: string | null;
+      stats_profile_id?: string | null;
+      player_name?: string | null;
+      grade?: string | null;
+      total_score?: number | string | null;
+      max_streak?: number | string | null;
+      rounds_played?: number | string | null;
+      mode?: string | null;
+      difficulty?: string | null;
+      ended_at?: string | null;
+    };
+    const rows = await handleSelect<PublicLeaderboardRow>(query, "select public leaderboard entries");
+    const entries: LeaderboardMatchEntry[] = [];
+    rows.forEach(row => {
+      const matchId = typeof row.match_id === "string" && row.match_id.trim().length > 0 ? row.match_id : null;
+      const playerId = typeof row.player_id === "string" && row.player_id.trim().length > 0 ? row.player_id : null;
+      const endedAt = typeof row.ended_at === "string" && row.ended_at.trim().length > 0 ? row.ended_at : null;
+      if (!matchId || !playerId || !endedAt) {
+        return;
+      }
+      const endedDate = new Date(endedAt);
+      if (Number.isNaN(endedDate.getTime())) {
+        return;
+      }
+      const scoreCandidate = parseNumber(row.total_score);
+      if (scoreCandidate == null || scoreCandidate <= 0) {
+        return;
+      }
+      const streak = parseNonNegativeInteger(row.max_streak, 0);
+      const rounds = parseNonNegativeInteger(row.rounds_played, 0);
+      const mode = asMode(row.mode) ?? "challenge";
+      const difficulty = asAIMode(row.difficulty) ?? "normal";
+      const rawName = typeof row.player_name === "string" ? row.player_name.trim() : "";
+      const playerName = rawName.length > 0 ? rawName : "Player";
+      const gradeCandidate = typeof row.grade === "string" ? row.grade.trim() : null;
+      const grade = isGrade(gradeCandidate) ? gradeCandidate : undefined;
+      const profileId = typeof row.stats_profile_id === "string" && row.stats_profile_id.trim().length > 0
+        ? row.stats_profile_id
+        : playerId;
+      entries.push({
+        matchId,
+        matchKey: matchId,
+        playerId,
+        profileId,
+        playerName,
+        grade,
+        score: scoreCandidate,
+        streak,
+        rounds,
+        mode,
+        difficulty,
+        endedAt,
+        endedAtMs: endedDate.getTime(),
+      });
+    });
+    return entries;
   }
 
   async upsertAiState(input: AiStateUpsertInput): Promise<void> {

@@ -1,16 +1,9 @@
 import React, { useEffect, useMemo, useRef } from "react";
 import { motion } from "framer-motion";
 import { useStats } from "./stats";
-import { usePlayers } from "./players";
 import { AIMode, Mode } from "./gameTypes";
 import { usePlayMode } from "./lib/playMode";
-import {
-  aggregateLeaderboardEntries,
-  collectLeaderboardEntries,
-  groupRoundsByMatch,
-  type LeaderboardMatchEntry,
-  type LeaderboardPlayerInfo,
-} from "./leaderboardData";
+import { aggregateLeaderboardEntries, type LeaderboardMatchEntry } from "./leaderboardData";
 
 interface LeaderboardModalProps {
   open: boolean;
@@ -48,8 +41,7 @@ function formatStreak(value: number) {
 
 export default function LeaderboardModal({ open, onClose }: LeaderboardModalProps) {
   const modalRef = useRef<HTMLDivElement | null>(null);
-  const { adminMatches, adminRounds } = useStats();
-  const { players } = usePlayers();
+  const { leaderboardEntries, leaderboardHasPracticeLegacy, leaderboardReady } = useStats();
   const { mode: playMode } = usePlayMode();
 
   useEffect(() => {
@@ -68,40 +60,23 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, onClose]);
 
-  const playersById = useMemo(() => {
-    const map = new Map<string, LeaderboardPlayerInfo>();
-    players.forEach(player => {
-      map.set(player.id, {
-        name: player.playerName,
-        grade: player.grade,
-      });
-    });
-    return map;
-  }, [players]);
-
-  const roundsByMatchId = useMemo(() => groupRoundsByMatch(adminRounds), [adminRounds]);
-
-  const { entries: matchEntries, hasPracticeLegacy } = useMemo(
-    () => collectLeaderboardEntries({ matches: adminMatches, roundsByMatchId, playersById }),
-    [adminMatches, roundsByMatchId, playersById],
-  );
-
   const allTimeRows = useMemo(() => {
-    if (!matchEntries.length) {
+    if (!leaderboardEntries.length) {
       return [] as LeaderboardMatchEntry[];
     }
-    return aggregateLeaderboardEntries(matchEntries);
-  }, [matchEntries]);
+    return aggregateLeaderboardEntries(leaderboardEntries);
+  }, [leaderboardEntries]);
 
   const rowsToDisplay = useMemo(
     () => allTimeRows.slice(0, DEFAULT_LIMIT),
     [allTimeRows],
   );
 
-  const showEmptyState = rowsToDisplay.length === 0;
+  const loadingSharedLeaderboard = playMode === "cloud" && !leaderboardReady;
+  const showEmptyState = !loadingSharedLeaderboard && rowsToDisplay.length === 0;
   const subtitle =
     playMode === "cloud"
-      ? "Best challenge scores saved to your cloud account."
+      ? "Community-wide challenge leaderboard (best score per player)."
       : "Best match scores on this device.";
 
   if (!open) return null;
@@ -143,7 +118,9 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
           </div>
         </div>
         <div className="px-6 py-6 overflow-auto">
-          {showEmptyState ? (
+          {loadingSharedLeaderboard ? (
+            <div className="p-8 text-center text-slate-500">Loading leaderboard…</div>
+          ) : showEmptyState ? (
             <div className="p-8 text-center text-slate-500">No data yet—play a match!</div>
           ) : (
             <div className="overflow-x-auto">
@@ -184,7 +161,7 @@ export default function LeaderboardModal({ open, onClose }: LeaderboardModalProp
               </table>
             </div>
           )}
-          {hasPracticeLegacy && (
+          {!loadingSharedLeaderboard && leaderboardHasPracticeLegacy && (
             <p className="mt-4 text-xs text-slate-500">
               Practice matches are archived as <span className="font-semibold">Practice Legacy</span> and are excluded from these rankings.
             </p>

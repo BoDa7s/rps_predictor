@@ -30,12 +30,7 @@ import {
 import LeaderboardModal from "./LeaderboardModal";
 import InsightPanel, { type LiveInsightSnapshot } from "./InsightPanel";
 import { computeMatchScore } from "./leaderboard";
-import {
-  collectLeaderboardEntries,
-  findTopLeaderboardEntryForPlayer,
-  groupRoundsByMatch,
-  type LeaderboardPlayerInfo,
-} from "./leaderboardData";
+import { findTopLeaderboardEntryForPlayer } from "./leaderboardData";
 import { MoveIcon, MoveLabel } from "./moveIcons";
 import botIdle48 from "./assets/mascot/bot-idle-48.svg";
 import botIdle64 from "./assets/mascot/bot-idle-64.svg";
@@ -1548,6 +1543,8 @@ function RPSDoodleAppInner(){
     adminMatches,
     adminRounds,
     adminProfiles,
+    leaderboardEntries: availableLeaderboardEntries,
+    leaderboardReady,
   } = useStats();
   const { players, currentPlayer, hasConsented, createPlayer, updatePlayer, setCurrentPlayer } = usePlayers();
   const { mode: appMode, setMode } = usePlayMode();
@@ -1880,21 +1877,7 @@ function RPSDoodleAppInner(){
 
   const rounds = useMemo(() => profileRounds, [profileRounds]);
   const matches = useMemo(() => profileMatches, [profileMatches]);
-  const leaderboardPlayersById = useMemo(() => {
-    const map = new Map<string, LeaderboardPlayerInfo>();
-    players.forEach(player => {
-      map.set(player.id, {
-        name: player.playerName,
-        grade: player.grade,
-      });
-    });
-    return map;
-  }, [players]);
-  const leaderboardRoundsByMatch = useMemo(() => groupRoundsByMatch(adminRounds), [adminRounds]);
-  const { entries: leaderboardEntries } = useMemo(
-    () => collectLeaderboardEntries({ matches: adminMatches, roundsByMatchId: leaderboardRoundsByMatch, playersById: leaderboardPlayersById }),
-    [adminMatches, leaderboardRoundsByMatch, leaderboardPlayersById],
-  );
+  const leaderboardEntries = availableLeaderboardEntries;
   const topLeaderboardEntry = useMemo(
     () => findTopLeaderboardEntryForPlayer(leaderboardEntries, currentPlayer?.id),
     [leaderboardEntries, currentPlayer?.id],
@@ -1904,7 +1887,7 @@ function RPSDoodleAppInner(){
     () => (leaderboardHeaderScore ?? 0).toLocaleString(),
     [leaderboardHeaderScore],
   );
-  const showLeaderboardHeaderBadge = hasConsented && leaderboardHeaderScore !== null;
+  const showLeaderboardHeaderBadge = hasConsented && leaderboardReady && leaderboardHeaderScore !== null;
   type PlayerModalMode = "hidden" | "create" | "edit";
   const [playerModalMode, setPlayerModalMode] = useState<PlayerModalMode>("hidden");
   const [playerModalOrigin, setPlayerModalOrigin] = useState<"welcome" | "settings" | null>(null);

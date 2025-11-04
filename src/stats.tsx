@@ -6,6 +6,12 @@ import { cloudDataService, isSupabaseUuid, type MatchRecord, type RoundRecord } 
 import { isProfileMigrated } from "./lib/localBackup";
 import type { StatsProfileRow } from "./lib/database.types";
 import { computeMatchScore } from "./leaderboard";
+import {
+  collectLeaderboardEntries,
+  groupRoundsByMatch,
+  type LeaderboardMatchEntry,
+  type LeaderboardPlayerInfo,
+} from "./leaderboardData";
 
 export type SerializedExpertState =
   | { type: "FrequencyExpert"; window: number; alpha: number }
@@ -182,6 +188,10 @@ interface StatsContextValue {
   adminDeleteRound: (id: string) => void;
   adminUpdateMatch: (id: string, patch: Partial<MatchSummary>) => void;
   adminDeleteMatch: (id: string) => void;
+  leaderboardEntries: LeaderboardMatchEntry[];
+  leaderboardReady: boolean;
+  leaderboardHasPracticeLegacy: boolean;
+  refreshLeaderboard: () => void;
 }
 
 const StatsContext = createContext<StatsContextValue | null>(null);
@@ -661,13 +671,16 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   const [modelStates, setModelStates] = useState<StoredPredictorModelState[]>([]);
   const [modelStatesDirty, setModelStatesDirty] = useState(false);
   const [cloudProfilesHydrated, setCloudProfilesHydrated] = useState(!isCloudMode);
+  const [sharedLeaderboardEntries, setSharedLeaderboardEntries] = useState<LeaderboardMatchEntry[]>([]);
+  const [sharedLeaderboardReady, setSharedLeaderboardReady] = useState(!isCloudMode);
+  const sharedLeaderboardRequestIdRef = useRef(0);
   const sessionIdRef = useRef<string>("");
   const sessionStartedAtRef = useRef<string>("");
   const sessionOwnerRef = useRef<string | null>(null);
   const clientSessionIdRef = useRef<string>("");
   const seededMatchIdsRef = useRef<Set<string>>(new Set());
   const missingCloudUserWarnedRef = useRef(false);
-  const { currentPlayerId: rawCurrentPlayerId, currentPlayer } = usePlayers();
+  const { currentPlayerId: rawCurrentPlayerId, currentPlayer, players } = usePlayers();
   const currentPlayerId = useMemo(() => {
     if (!isCloudMode) {
       missingCloudUserWarnedRef.current = false;
@@ -687,6 +700,53 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     allRoundsRef.current = allRounds;
   }, [allRounds]);
+
+  const fetchSharedLeaderboard = useCallback(async () => {
+    if (!isCloudMode) return;
+    if (!cloudDataService) return;
+    if (!currentPlayerId) return;
+    const requestId = ++sharedLeaderboardRequestIdRef.current;
+    setSharedLeaderboardReady(false);
+    try {
+      const rows = await cloudDataService.loadPublicLeaderboard();
+      if (sharedLeaderboardRequestIdRef.current !== requestId) return;
+      setSharedLeaderboardEntries(rows);
+    } catch (err) {
+      if (sharedLeaderboardRequestIdRef.current !== requestId) return;
+      console.error("Failed to load shared leaderboard", err);
+      setSharedLeaderboardEntries([]);
+    } finally {
+      if (sharedLeaderboardRequestIdRef.current === requestId) {
+        setSharedLeaderboardReady(true);
+      }
+    }
+  }, [cloudDataService, currentPlayerId, isCloudMode]);
+
+  useEffect(() => {
+    if (!isCloudMode) {
+      sharedLeaderboardRequestIdRef.current += 1;
+      setSharedLeaderboardEntries([]);
+      setSharedLeaderboardReady(true);
+      return;
+    }
+    if (!cloudProfilesHydrated) {
+      sharedLeaderboardRequestIdRef.current += 1;
+      setSharedLeaderboardReady(false);
+      return;
+    }
+    if (!currentPlayerId) {
+      sharedLeaderboardRequestIdRef.current += 1;
+      setSharedLeaderboardEntries([]);
+      setSharedLeaderboardReady(false);
+      return;
+    }
+    void fetchSharedLeaderboard();
+  }, [cloudProfilesHydrated, currentPlayerId, fetchSharedLeaderboard, isCloudMode]);
+
+  const refreshLeaderboard = useCallback(() => {
+    if (!isCloudMode) return;
+    void fetchSharedLeaderboard();
+  }, [fetchSharedLeaderboard, isCloudMode]);
 
   const ensureSession = useCallback((): string | null => {
     if (!clientSessionIdRef.current) {
@@ -1631,6 +1691,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
                 await service.updateMatchFields(currentPlayerId, enrichedEntry.id, update);
               }
             }
+            refreshLeaderboard();
           } catch (err) {
             console.error("Failed to log cloud match", err);
           }
@@ -1640,7 +1701,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       }
       return enrichedEntry;
     },
-    [currentPlayerId, currentProfile, ensureSession, isCloudMode],
+    [currentPlayerId, currentProfile, ensureSession, isCloudMode, refreshLeaderboard],
   );
 
   const rounds = useMemo(() => {
@@ -1652,6 +1713,36 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     if (!currentPlayerId || !currentProfile) return [] as MatchSummary[];
     return allMatches.filter(m => m.playerId === currentPlayerId && (m.profileId ?? currentProfile.id) === currentProfile.id);
   }, [allMatches, currentPlayerId, currentProfile]);
+
+  const leaderboardPlayersById = useMemo(() => {
+    const map = new Map<string, LeaderboardPlayerInfo>();
+    players.forEach(player => {
+      map.set(player.id, {
+        name: player.playerName,
+        grade: player.grade,
+      });
+    });
+    return map;
+  }, [players]);
+
+  const localLeaderboardData = useMemo(() => {
+    if (isCloudMode) {
+      return { entries: [] as LeaderboardMatchEntry[], hasPracticeLegacy: false };
+    }
+    const roundsByMatchId = groupRoundsByMatch(allRounds);
+    return collectLeaderboardEntries({
+      matches: allMatches,
+      roundsByMatchId,
+      playersById: leaderboardPlayersById,
+    });
+  }, [allMatches, allRounds, isCloudMode, leaderboardPlayersById]);
+
+  const localLeaderboardEntries = localLeaderboardData.entries;
+  const localLeaderboardHasPracticeLegacy = localLeaderboardData.hasPracticeLegacy;
+
+  const leaderboardEntries = isCloudMode ? sharedLeaderboardEntries : localLeaderboardEntries;
+  const leaderboardReady = isCloudMode ? sharedLeaderboardReady : true;
+  const leaderboardHasPracticeLegacy = isCloudMode ? false : localLeaderboardHasPracticeLegacy;
 
   const statsReady = useMemo(() => {
     if (!currentPlayerId || !currentProfile) return false;
@@ -1813,6 +1904,10 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     adminDeleteRound,
     adminUpdateMatch,
     adminDeleteMatch,
+    leaderboardEntries,
+    leaderboardReady,
+    leaderboardHasPracticeLegacy,
+    refreshLeaderboard,
   }), [
     rounds,
     matches,
@@ -1837,6 +1932,10 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     adminDeleteRound,
     adminUpdateMatch,
     adminDeleteMatch,
+    leaderboardEntries,
+    leaderboardReady,
+    leaderboardHasPracticeLegacy,
+    refreshLeaderboard,
   ]);
 
   return <StatsContext.Provider value={value}>{children}</StatsContext.Provider>;
