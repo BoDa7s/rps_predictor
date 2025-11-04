@@ -22,13 +22,17 @@ export const STATS_ROUNDS_KEY = STATS_ROUNDS_KEY_VALUE;
 export const STATS_MATCHES_KEY = STATS_MATCHES_KEY_VALUE;
 export const STATS_MODEL_STATE_KEY = STATS_MODEL_STATE_KEY_VALUE;
 
-export function clearActiveLocalSession(profileId?: string): void {
+export function clearActiveLocalSession(_profileId?: string): void {
   if (!isBrowser()) return;
-  window.localStorage.removeItem(LOCAL_ACTIVE_ACCOUNT_KEY_VALUE);
-  if (!profileId) return;
-  const currentId = window.localStorage.getItem(CURRENT_PLAYER_STORAGE_KEY_VALUE);
-  if (currentId === profileId) {
-    window.localStorage.removeItem(CURRENT_PLAYER_STORAGE_KEY_VALUE);
+  try {
+    window.localStorage.removeItem(LOCAL_ACTIVE_ACCOUNT_KEY_VALUE);
+  } catch {
+    /* ignore */
+  }
+  try {
+    window.sessionStorage.removeItem(LOCAL_ACTIVE_ACCOUNT_KEY_VALUE);
+  } catch {
+    /* ignore */
   }
 }
 

@@ -1971,6 +1971,7 @@ function RPSDoodleAppInner(){
   const signOutCleanupStartedRef = useRef(false);
   const signOutProfileIdRef = useRef<string | null>(null);
   const signOutNavigatePendingRef = useRef(false);
+  const pendingLocalRestoreRef = useRef<{ playerId: string | null } | null>(null);
   const [helpGuideOpen, setHelpGuideOpen] = useState(false);
   const helpButtonRef = useRef<HTMLButtonElement | null>(null);
   const [helpCenterOpen, setHelpCenterOpen] = useState(false);
@@ -3236,9 +3237,9 @@ function RPSDoodleAppInner(){
           }
         } catch (error) {
           console.error("Failed to sign out from Supabase", error);
-          setToastMessage("We couldn't complete the cloud sign-out. Local session cleared.");
+          setToastMessage("We couldn't complete the cloud sign-out. You're in Local mode.");
           setLive(
-            "Encountered an error while signing out of the cloud session. Local session data has been cleared.",
+            "Encountered an error while signing out of the cloud session. You're in Local mode using your saved data.",
           );
         } finally {
           clearActiveLocalSession(signOutProfileIdRef.current ?? undefined);
@@ -3319,6 +3320,59 @@ function RPSDoodleAppInner(){
       setWelcomeStage,
     ],
   );
+
+  useEffect(() => {
+    if (!pendingLocalRestoreRef.current) return;
+    if (signOutActive) return;
+    if (appMode !== "local") return;
+
+    const pending = pendingLocalRestoreRef.current;
+    const hasPlayers = players.length > 0;
+
+    if (!hasPlayers) {
+      setWelcomeActive(true);
+      pendingLocalRestoreRef.current = null;
+      return;
+    }
+
+    if (players.length === 1) {
+      const onlyPlayer = players[0];
+      pendingLocalRestoreRef.current = null;
+      setWelcomeActive(true);
+      setRestoreDialogOpen(false);
+      setRestoreSelectedPlayerId(null);
+      setCurrentPlayer(onlyPlayer.id);
+      setToastMessage(`Welcome back, ${onlyPlayer.playerName}! Choose a mode when you're ready.`);
+      setLive(`Loaded saved player ${onlyPlayer.playerName}.`);
+      finishWelcomeFlow("restore");
+      return;
+    }
+
+    const preferredId =
+      pending?.playerId && players.some(player => player.id === pending.playerId)
+        ? pending.playerId
+        : players[0].id;
+
+    pendingLocalRestoreRef.current = null;
+    setWelcomeActive(true);
+    setWelcomeStage("restore");
+    setRestoreDialogOpen(true);
+    setRestoreSelectedPlayerId(preferredId);
+    setToastMessage("Pick your local player to continue in Local mode.");
+    setLive("Select a saved local player to continue in Local mode.");
+  }, [
+    appMode,
+    finishWelcomeFlow,
+    players,
+    setCurrentPlayer,
+    setLive,
+    setRestoreDialogOpen,
+    setRestoreSelectedPlayerId,
+    setToastMessage,
+    setWelcomeActive,
+    setWelcomeStage,
+    signOutActive,
+  ]);
 
   const selectedRestorePlayer = useMemo(() => {
     if (!restoreSelectedPlayerId) return null;
@@ -4339,6 +4393,7 @@ function RPSDoodleAppInner(){
 
   const handleSignOutCancel = useCallback(() => {
     setSignOutConfirmOpen(false);
+    pendingLocalRestoreRef.current = null;
     setLive("Sign out cancelled.");
   }, [setLive]);
 
@@ -4346,9 +4401,10 @@ function RPSDoodleAppInner(){
     if (signOutActive) return;
     signOutNavigatePendingRef.current = false;
     setSignOutConfirmOpen(false);
+    pendingLocalRestoreRef.current = { playerId: currentPlayer?.id ?? null };
     setSignOutActive(true);
     setLive("Signing out. Progress indicator running.");
-  }, [signOutActive, setLive]);
+  }, [signOutActive, currentPlayer?.id, setLive]);
 
   const resetMigrationForm = useCallback(() => {
     setMigrationUsername("");
