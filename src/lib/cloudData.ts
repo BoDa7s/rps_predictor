@@ -997,13 +997,16 @@ export class CloudDataService {
     const client = ensureClient(this.client);
     const payload = statsProfileToUpsert(profile);
     await handleMutation(
-      () =>
-        client
-          .from("stats_profiles")
-          .upsert(payload, { onConflict: "user_id,base_name,profile_version" }),
-      "upsert stats profile",
-    );
-  }
+  () =>
+    client
+      .from("stats_profiles")
+      .upsert(payload, {
+        onConflict: "user_id,base_name,profile_version",
+        ignoreDuplicates: false,       // keep default merge behavior
+        defaultToNull: false,          // don’t overwrite missing fields with NULLs
+      }),
+  "upsert stats profile",
+);
 
   async insertRounds(rounds: RoundInsertInput[]): Promise<void> {
     if (rounds.length === 0) return;
