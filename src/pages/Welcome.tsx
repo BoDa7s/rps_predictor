@@ -21,7 +21,6 @@ import {
   setEdgeSession,
 } from "../lib/edgeFunctions";
 import {
-  clearActiveLocalSession,
   CURRENT_PLAYER_STORAGE_KEY,
   LOCAL_ACCOUNTS_KEY,
   LOCAL_ACTIVE_ACCOUNT_KEY,
@@ -31,6 +30,7 @@ import {
   STATS_ROUNDS_KEY,
   STATS_MATCHES_KEY,
   STATS_MODEL_STATE_KEY,
+  updateActiveLocalPointers,
 } from "../lib/localSession";
 import { isProfileMigrated } from "../lib/localBackup";
 import { usePlayMode, type PlayMode } from "../lib/playMode";
@@ -259,12 +259,12 @@ function saveLocalAccounts(accounts: LocalAccountRecord[]) {
   storage.setItem(LOCAL_ACCOUNTS_KEY, JSON.stringify(accounts));
 }
 
-function setActiveLocalAccount(account: LocalAccountRecord) {
+function setActiveLocalAccount(account: LocalAccountRecord, statsProfileId?: string | null) {
   const storage = getScopedStorage("local");
   if (!storage) return;
   if (shouldPreventLocalWrite(storage, [account.profile.id])) return;
   ensurePlayerStored(account.profile, "local");
-  storage.setItem(LOCAL_ACTIVE_ACCOUNT_KEY, account.profile.id);
+  updateActiveLocalPointers(account.profile.id, { statsProfileId });
 }
 
 function loadActiveLocalSession(): LocalSession | null {
@@ -276,7 +276,7 @@ function loadActiveLocalSession(): LocalSession | null {
   const account = accounts.find(candidate => candidate.profile.id === profileId);
   if (account) {
     if (isProfileMigrated(account.profile.id)) {
-      clearActiveLocalSession(account.profile.id);
+      updateActiveLocalPointers(null);
       return null;
     }
     ensurePlayerStored(account.profile, "local");
@@ -285,14 +285,11 @@ function loadActiveLocalSession(): LocalSession | null {
   const storedPlayers = loadStoredPlayers("local");
   const fallbackProfile = storedPlayers.find(player => player.id === profileId);
   if (!fallbackProfile || isProfileMigrated(fallbackProfile.id)) {
-    if (fallbackProfile) {
-      clearActiveLocalSession(fallbackProfile.id);
-    } else {
-      clearActiveLocalSession();
-    }
+    updateActiveLocalPointers(null);
     return null;
   }
   ensurePlayerStored(fallbackProfile, "local");
+  updateActiveLocalPointers(fallbackProfile.id);
   return { profile: fallbackProfile };
 }
 
@@ -749,11 +746,20 @@ function formatLastPlayed(timestamp: string | null): string {
   }
 }
 
-async function hydrateLocalProfileArtifacts(profileId: string): Promise<void> {
-  if (!isBrowser()) return;
+interface LocalHydrationResult {
+  trainingComplete: boolean;
+  statsProfileId: string | null;
+}
+
+async function hydrateLocalProfileArtifacts(profileId: string): Promise<LocalHydrationResult> {
+  if (!isBrowser()) {
+    return { trainingComplete: false, statsProfileId: null };
+  }
   const scope: StorageScope = "local";
   const storage = getScopedStorage(scope);
-  if (!storage) return;
+  if (!storage) {
+    return { trainingComplete: false, statsProfileId: null };
+  }
 
   // Yield to the event loop so loading indicators have a chance to render.
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -778,6 +784,17 @@ async function hydrateLocalProfileArtifacts(profileId: string): Promise<void> {
       // Ignore persistence failures – hydration should continue.
     }
   }
+  const resolvedTrainingCount = Number.isFinite(preferredStatsProfile?.trainingCount)
+    ? Number(preferredStatsProfile?.trainingCount)
+    : 0;
+  const trainingComplete = (() => {
+    if (!preferredStatsProfile) return false;
+    if (preferredStatsProfile.trained === true) return true;
+    if (preferredStatsProfile.trained === false) return false;
+    return resolvedTrainingCount >= TRAINING_ROUNDS_REQUIRED;
+  })();
+
+  return { trainingComplete, statsProfileId: preferredStatsProfile?.id ?? null };
 }
 
 function shouldStartTrainingFromStorage(playerIdHint: string | null, scope: StorageScope): boolean {
@@ -835,10 +852,24 @@ function shouldStartTrainingAfterAuth(
   return shouldStartTrainingFromStorage(playerIdHint, scope);
 }
 
-function resolvePostAuthDestination(
-  mode: PlayMode,
-  options?: { playerId?: string | null; statsProfiles?: StatsProfile[] },
-): string {
+interface PostAuthOptions {
+  playerId?: string | null;
+  statsProfiles?: StatsProfile[];
+  trainingComplete?: boolean;
+}
+
+function resolvePostAuthDestination(mode: PlayMode, options?: PostAuthOptions): string {
+  if (mode === "local") {
+    if (options?.trainingComplete === true) {
+      return MODES_ROUTE;
+    }
+    if (options?.trainingComplete === false) {
+      return TRAINING_ROUTE;
+    }
+    const requireTraining = shouldStartTrainingAfterAuth(mode, options?.playerId ?? null, options?.statsProfiles);
+    return requireTraining ? TRAINING_ROUTE : MODES_ROUTE;
+  }
+
   const defaultPath = getPostAuthPath();
   const requireTraining = shouldStartTrainingAfterAuth(mode, options?.playerId ?? null, options?.statsProfiles);
   if (requireTraining) {
@@ -875,7 +906,7 @@ const defaultAuthMode: AuthMode = isSupabaseConfigured && DEPLOY_ENV === "cloud"
 function usePostAuthNavigation() {
   const navigate = useNavigate();
   return useCallback(
-    (mode: PlayMode, options?: { playerId?: string | null; statsProfiles?: StatsProfile[] }) => {
+    (mode: PlayMode, options?: PostAuthOptions) => {
       const destination = resolvePostAuthDestination(mode, options);
       navigate(destination, { replace: true });
     },
@@ -917,6 +948,7 @@ export default function Welcome(): JSX.Element {
   const [localHydrating, setLocalHydrating] = useState(false);
   const [localHydrationError, setLocalHydrationError] = useState<string | null>(null);
   const localHydrationAbortRef = useRef(false);
+  const localAutoSelectRef = useRef(false);
 
   const supabaseReady = isSupabaseConfigured && Boolean(supabaseClient);
 
@@ -992,15 +1024,6 @@ export default function Welcome(): JSX.Element {
     if (accounts.length === 1) {
       const sole = accounts[0];
       setSelectedLocalProfileId(sole.profile.id);
-      const storage = getScopedStorage("local");
-      try {
-        const activeId = storage?.getItem(LOCAL_ACTIVE_ACCOUNT_KEY) ?? null;
-        if (activeId !== sole.profile.id) {
-          setActiveLocalAccount(sole);
-        }
-      } catch {
-        // ignore pointer rebuild failures
-      }
     } else if (existing) {
       setSelectedLocalProfileId(existing.profile.id);
     }
@@ -1017,6 +1040,7 @@ export default function Welcome(): JSX.Element {
   const localSummaries = useMemo(() => buildLocalProfileSummaries(localAccounts), [localAccounts]);
   const autoSelectedHint =
     localSummaries.length === 1 && selectedLocalProfileId === (localSummaries[0]?.account.profile.id ?? null);
+
 
   const handleCloudSignIn = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
@@ -1210,15 +1234,18 @@ export default function Welcome(): JSX.Element {
         if (!account) {
           throw new Error("We couldn't find that profile on this device.");
         }
-        setActiveLocalAccount(account);
-        setLocalSession({ profile: account.profile });
-        setSelectedLocalProfileId(account.profile.id);
-        setMode("local");
-        await hydrateLocalProfileArtifacts(account.profile.id);
+        const hydration = await hydrateLocalProfileArtifacts(account.profile.id);
         if (localHydrationAbortRef.current) {
           return;
         }
-        navigateToPostAuth("local", { playerId: account.profile.id });
+        setLocalSession({ profile: account.profile });
+        setSelectedLocalProfileId(account.profile.id);
+        setMode("local");
+        setActiveLocalAccount(account, hydration.statsProfileId);
+        navigateToPostAuth("local", {
+          playerId: account.profile.id,
+          trainingComplete: hydration.trainingComplete,
+        });
       } catch (error) {
         if (!localHydrationAbortRef.current) {
           setLocalHydrationError(error instanceof Error ? error.message : "Unable to load local data.");
@@ -1231,6 +1258,32 @@ export default function Welcome(): JSX.Element {
     },
     [navigateToPostAuth, refreshLocalAccounts, setMode],
   );
+
+  useEffect(() => {
+    if (overlay !== "local" || localHydrating) {
+      return;
+    }
+    if (localSummaries.length !== 1) {
+      localAutoSelectRef.current = false;
+      return;
+    }
+    const soleProfileId = localSummaries[0]?.account.profile.id ?? null;
+    if (!soleProfileId) {
+      localAutoSelectRef.current = false;
+      return;
+    }
+    if (localSession?.profile.id === soleProfileId) {
+      localAutoSelectRef.current = false;
+      return;
+    }
+    if (localAutoSelectRef.current) {
+      return;
+    }
+    localAutoSelectRef.current = true;
+    void completeLocalSelection(soleProfileId).finally(() => {
+      localAutoSelectRef.current = false;
+    });
+  }, [completeLocalSelection, localHydrating, localSession, localSummaries, overlay]);
 
   const handleLocalSignUp = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {

@@ -51,14 +51,12 @@ import botSad64 from "./assets/mascot/bot-sad-64.svg";
 import botSad96 from "./assets/mascot/bot-sad-96.svg";
 import HelpCenter, { type HelpQuestion } from "./HelpCenter";
 import { supabaseClient, isSupabaseConfigured } from "./lib/supabaseClient";
-import { clearActiveLocalSession, purgeLocalProfileData } from "./lib/localSession";
 import { usePlayMode } from "./lib/playMode";
 import {
   migrateLocalAccountToCloud,
   type MigrationProgressItem,
   type MigrationStepKey,
 } from "./lib/localMigration";
-import { markProfileMigrated } from "./lib/localBackup";
 import {
   BOOT_ROUTE,
   CHALLENGE_ROUTE,
@@ -3241,7 +3239,6 @@ function RPSDoodleAppInner(){
             "Encountered an error while signing out of the cloud session. Local session data has been cleared.",
           );
         } finally {
-          clearActiveLocalSession(signOutProfileIdRef.current ?? undefined);
           setMode("local");
         }
       })();
@@ -4430,9 +4427,6 @@ function RPSDoodleAppInner(){
             return acc;
           }, {} as Partial<Record<MigrationStepKey, number>>),
         );
-        markProfileMigrated(currentPlayer.id);
-        purgeLocalProfileData(currentPlayer.id);
-        clearActiveLocalSession(currentPlayer.id);
         setMode("cloud");
         setMigrationStep("success");
         setLive("Migration complete. Cloud mode enabled.");

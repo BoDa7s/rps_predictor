@@ -3,6 +3,11 @@ import { usePlayMode, type PlayMode } from "./lib/playMode";
 import { cloudDataService } from "./lib/cloudData";
 import { supabaseClient } from "./lib/supabaseClient";
 import { isProfileMigrated } from "./lib/localBackup";
+import {
+  LOCAL_PROFILE_SELECTED_EVENT,
+  type LocalProfileSelectionDetail,
+  updateActiveLocalPointers,
+} from "./lib/localSession";
 
 export type Grade =
   | "K"
@@ -342,14 +347,49 @@ export function PlayersProvider({ children }: { children: React.ReactNode }){
     }
   }, [isCloudMode, storage, currentPlayerId]);
 
+  useEffect(() => {
+    if (isCloudMode) return;
+    if (typeof window === "undefined") return;
+    if (!storage) return;
+
+    const handleSelection = (event: Event) => {
+      const customEvent = event as CustomEvent<LocalProfileSelectionDetail | undefined>;
+      const detail = customEvent.detail;
+      const reloadedPlayers = loadPlayersFromStorage(storage);
+      setPlayers(reloadedPlayers);
+      if (detail && typeof detail.playerId === "string") {
+        if (detail.playerId !== currentPlayerId) {
+          setCurrentPlayerId(detail.playerId);
+        }
+        return;
+      }
+      if (detail && detail.playerId === null) {
+        setCurrentPlayerId(null);
+        return;
+      }
+      const fallbackId = loadCurrentIdFromStorage(storage, reloadedPlayers);
+      if (fallbackId !== currentPlayerId) {
+        setCurrentPlayerId(fallbackId);
+      }
+    };
+
+    window.addEventListener(LOCAL_PROFILE_SELECTED_EVENT, handleSelection as EventListener);
+    return () => {
+      window.removeEventListener(LOCAL_PROFILE_SELECTED_EVENT, handleSelection as EventListener);
+    };
+  }, [currentPlayerId, isCloudMode, storage]);
+
   const currentPlayer = useMemo(() => players.find(p => p.id === currentPlayerId) || null, [players, currentPlayerId]);
   const hasConsented = currentPlayer != null;
 
   const setCurrentPlayer = useCallback(
     (id: string | null) => {
       setCurrentPlayerId(id);
+      if (!isCloudMode) {
+        updateActiveLocalPointers(id);
+      }
     },
-    [],
+    [isCloudMode],
   );
 
   const createPlayer = useCallback(
@@ -373,6 +413,7 @@ export function PlayersProvider({ children }: { children: React.ReactNode }){
       const profile: PlayerProfile = { ...input, id: makeId("plr"), needsReview: input.needsReview ?? false };
       setPlayers(prev => prev.concat(profile));
       setCurrentPlayerId(profile.id);
+      updateActiveLocalPointers(profile.id);
       return profile;
     },
     [cloudUserId, isCloudMode],
@@ -415,10 +456,12 @@ export function PlayersProvider({ children }: { children: React.ReactNode }){
         return;
       }
 
+      const nextId = currentPlayerId === id ? null : currentPlayerId;
       setPlayers(prev => prev.filter(p => p.id !== id));
       setCurrentPlayerId(prev => (prev === id ? null : prev));
+      updateActiveLocalPointers(nextId);
     },
-    [cloudUserId, isCloudMode],
+    [cloudUserId, currentPlayerId, isCloudMode],
   );
 
   const value = useMemo(() => ({
