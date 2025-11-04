@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { usePlayMode, type PlayMode } from "./lib/playMode";
 import { cloudDataService } from "./lib/cloudData";
 import { supabaseClient } from "./lib/supabaseClient";
-import { isLocalBackupReadOnly } from "./lib/localBackup";
+import { isProfileMigrated } from "./lib/localBackup";
 
 export type Grade =
   | "K"
@@ -126,11 +126,20 @@ function getScopedStorage(scope: StorageScope): Storage | null {
   }
 }
 
-function shouldPreventLocalWrite(storage: Storage | null): boolean {
+function shouldPreventLocalWrite(
+  storage: Storage | null,
+  profileIds?: Iterable<string | null | undefined>,
+): boolean {
   if (typeof window === "undefined") return false;
   if (!storage) return false;
   if (storage !== window.localStorage) return false;
-  return isLocalBackupReadOnly();
+  if (!profileIds) return false;
+  for (const id of profileIds) {
+    if (typeof id === "string" && isProfileMigrated(id)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function resolveScopeFromMode(mode: PlayMode): StorageScope {
@@ -147,7 +156,9 @@ function loadPlayersFromStorage(storage: Storage | null): PlayerProfile[] {
     const normalized: PlayerProfile[] = [];
     val.forEach(item => {
       const profile = normalizePlayer(item);
-      if (profile) normalized.push(profile);
+      if (profile && !isProfileMigrated(profile.id)) {
+        normalized.push(profile);
+      }
     });
     return normalized;
   } catch {
@@ -155,9 +166,13 @@ function loadPlayersFromStorage(storage: Storage | null): PlayerProfile[] {
   }
 }
 
-function savePlayersToStorage(storage: Storage | null, players: PlayerProfile[]) {
+function savePlayersToStorage(
+  storage: Storage | null,
+  players: PlayerProfile[],
+  profileIds?: Iterable<string | null | undefined>,
+) {
   if (!storage) return;
-  if (shouldPreventLocalWrite(storage)) return;
+  if (shouldPreventLocalWrite(storage, profileIds)) return;
   try {
     storage.setItem(PLAYERS_KEY, JSON.stringify(players));
   } catch {
@@ -165,18 +180,31 @@ function savePlayersToStorage(storage: Storage | null, players: PlayerProfile[])
   }
 }
 
-function loadCurrentIdFromStorage(storage: Storage | null): string | null {
+function loadCurrentIdFromStorage(
+  storage: Storage | null,
+  players?: PlayerProfile[],
+): string | null {
   if (!storage) return null;
   try {
-    return storage.getItem(CURRENT_PLAYER_KEY);
+    const id = storage.getItem(CURRENT_PLAYER_KEY);
+    if (!id) return null;
+    if (isProfileMigrated(id)) return null;
+    if (players && players.length > 0 && !players.some(player => player.id === id)) {
+      return null;
+    }
+    return id;
   } catch {
     return null;
   }
 }
 
-function saveCurrentIdToStorage(storage: Storage | null, id: string | null) {
+function saveCurrentIdToStorage(
+  storage: Storage | null,
+  id: string | null,
+  profileIds?: Iterable<string | null | undefined>,
+) {
   if (!storage) return;
-  if (shouldPreventLocalWrite(storage)) return;
+  if (shouldPreventLocalWrite(storage, profileIds)) return;
   try {
     if (id) storage.setItem(CURRENT_PLAYER_KEY, id);
     else storage.removeItem(CURRENT_PLAYER_KEY);
@@ -211,18 +239,26 @@ export function PlayersProvider({ children }: { children: React.ReactNode }){
   const storageScope = useMemo<StorageScope | null>(() => (isCloudMode ? null : resolveScopeFromMode(mode)), [isCloudMode, mode]);
   const storage = useMemo(() => (storageScope ? getScopedStorage(storageScope) : null), [storageScope]);
 
-  const [players, setPlayers] = useState<PlayerProfile[]>(() => (isCloudMode ? [] : loadPlayersFromStorage(storage)));
-  const [currentPlayerId, setCurrentPlayerId] = useState<string | null>(() =>
-    isCloudMode ? null : loadCurrentIdFromStorage(storage),
-  );
+  const initialLocalState = useMemo(() => {
+    if (isCloudMode) {
+      return { players: [] as PlayerProfile[], currentId: null as string | null };
+    }
+    const loadedPlayers = loadPlayersFromStorage(storage);
+    const currentId = loadCurrentIdFromStorage(storage, loadedPlayers);
+    return { players: loadedPlayers, currentId };
+  }, [isCloudMode, storage]);
+
+  const [players, setPlayers] = useState<PlayerProfile[]>(() => initialLocalState.players);
+  const [currentPlayerId, setCurrentPlayerId] = useState<string | null>(() => initialLocalState.currentId);
   const [cloudUserId, setCloudUserId] = useState<string | null>(null);
 
   useEffect(() => {
     if (isCloudMode) {
       return;
     }
-    setPlayers(loadPlayersFromStorage(storage));
-    setCurrentPlayerId(loadCurrentIdFromStorage(storage));
+    const loadedPlayers = loadPlayersFromStorage(storage);
+    setPlayers(loadedPlayers);
+    setCurrentPlayerId(loadCurrentIdFromStorage(storage, loadedPlayers));
     setCloudUserId(null);
   }, [isCloudMode, storage]);
 
@@ -291,16 +327,18 @@ export function PlayersProvider({ children }: { children: React.ReactNode }){
   useEffect(() => {
     if (isCloudMode) {
       const sessionStorage = getScopedStorage("session");
-      savePlayersToStorage(sessionStorage, players);
-      saveCurrentIdToStorage(sessionStorage, currentPlayerId);
+      const touchedProfileIds = players.map(player => player.id);
+      savePlayersToStorage(sessionStorage, players, touchedProfileIds);
+      saveCurrentIdToStorage(sessionStorage, currentPlayerId, [currentPlayerId]);
       return;
     }
-    savePlayersToStorage(storage, players);
-  }, [isCloudMode, players, storage, currentPlayerId]);
+    const touchedProfileIds = players.map(player => player.id);
+    savePlayersToStorage(storage, players, touchedProfileIds);
+  }, [isCloudMode, players, storage]);
 
   useEffect(() => {
     if (!isCloudMode) {
-      saveCurrentIdToStorage(storage, currentPlayerId);
+      saveCurrentIdToStorage(storage, currentPlayerId, [currentPlayerId]);
     }
   }, [isCloudMode, storage, currentPlayerId]);
 

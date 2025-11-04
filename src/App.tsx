@@ -51,14 +51,14 @@ import botSad64 from "./assets/mascot/bot-sad-64.svg";
 import botSad96 from "./assets/mascot/bot-sad-96.svg";
 import HelpCenter, { type HelpQuestion } from "./HelpCenter";
 import { supabaseClient, isSupabaseConfigured } from "./lib/supabaseClient";
-import { clearActiveLocalSession } from "./lib/localSession";
+import { clearActiveLocalSession, purgeLocalProfileData } from "./lib/localSession";
 import { usePlayMode } from "./lib/playMode";
 import {
   migrateLocalAccountToCloud,
   type MigrationProgressItem,
   type MigrationStepKey,
 } from "./lib/localMigration";
-import { markLocalBackupReadOnly } from "./lib/localBackup";
+import { markProfileMigrated } from "./lib/localBackup";
 import {
   BOOT_ROUTE,
   CHALLENGE_ROUTE,
@@ -4429,7 +4429,9 @@ function RPSDoodleAppInner(){
             return acc;
           }, {} as Partial<Record<MigrationStepKey, number>>),
         );
-        markLocalBackupReadOnly();
+        markProfileMigrated(currentPlayer.id);
+        purgeLocalProfileData(currentPlayer.id);
+        clearActiveLocalSession(currentPlayer.id);
         setMode("cloud");
         setMigrationStep("success");
         setLive("Migration complete. Cloud mode enabled.");

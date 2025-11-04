@@ -26,19 +26,19 @@ import {
   LOCAL_ACCOUNTS_KEY,
   LOCAL_ACTIVE_ACCOUNT_KEY,
   PLAYERS_STORAGE_KEY,
+  STATS_PROFILES_KEY,
+  STATS_CURRENT_PROFILE_KEY,
+  STATS_ROUNDS_KEY,
+  STATS_MATCHES_KEY,
+  STATS_MODEL_STATE_KEY,
 } from "../lib/localSession";
-import { isLocalBackupReadOnly } from "../lib/localBackup";
+import { isProfileMigrated } from "../lib/localBackup";
 import { usePlayMode, type PlayMode } from "../lib/playMode";
 import type { StatsProfile } from "../stats";
 import { makeProfileDisplayName } from "../stats";
 
 const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => String(5 + index));
 
-const STATS_PROFILES_KEY = "rps_stats_profiles_v1";
-const STATS_CURRENT_PROFILE_KEY = "rps_current_stats_profile_v1";
-const STATS_ROUNDS_KEY = "rps_stats_rounds_v1";
-const STATS_MATCHES_KEY = "rps_stats_matches_v1";
-const STATS_MODEL_STATE_KEY = "rps_predictor_models_v1";
 const TRAINING_ROUNDS_REQUIRED = 10;
 
 type AuthTab = "signIn" | "signUp";
@@ -107,11 +107,20 @@ function getScopedStorage(scope: StorageScope): Storage | null {
   }
 }
 
-function shouldPreventLocalWrite(storage: Storage | null): boolean {
+function shouldPreventLocalWrite(
+  storage: Storage | null,
+  profileIds?: Iterable<string | null | undefined>,
+): boolean {
   if (!isBrowser()) return false;
   if (!storage) return false;
   if (storage !== window.localStorage) return false;
-  return isLocalBackupReadOnly();
+  if (!profileIds) return false;
+  for (const id of profileIds) {
+    if (typeof id === "string" && isProfileMigrated(id)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function scopeFromMode(mode: PlayMode | AuthMode): StorageScope {
@@ -178,7 +187,9 @@ function loadStoredPlayers(scope: StorageScope): PlayerProfile[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.map(normalizeStoredProfile);
+    return parsed
+      .map(normalizeStoredProfile)
+      .filter(profile => !isProfileMigrated(profile.id));
   } catch {
     return [];
   }
@@ -187,14 +198,14 @@ function loadStoredPlayers(scope: StorageScope): PlayerProfile[] {
 function saveStoredPlayers(scope: StorageScope, players: PlayerProfile[]) {
   const storage = getScopedStorage(scope);
   if (!storage) return;
-  if (shouldPreventLocalWrite(storage)) return;
+  if (shouldPreventLocalWrite(storage, players.map(player => player.id))) return;
   storage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(players));
 }
 
 function ensurePlayerStored(profile: PlayerProfile, scope: StorageScope) {
   const storage = getScopedStorage(scope);
   if (!storage) return;
-  if (shouldPreventLocalWrite(storage)) return;
+  if (shouldPreventLocalWrite(storage, [profile.id])) return;
   const players = loadStoredPlayers(scope);
   const existingIndex = players.findIndex(player => player.id === profile.id);
   const nextPlayers = existingIndex >= 0 ? [...players] : players.concat(profile);
@@ -225,6 +236,9 @@ function loadLocalAccounts(): LocalAccountRecord[] {
           typeof (item as any).createdAt === "string"
             ? (item as any).createdAt
             : new Date().toISOString();
+        if (isProfileMigrated(profile.id)) {
+          return null;
+        }
         return {
           profile,
           createdAt: createdAtValue,
@@ -240,14 +254,14 @@ function loadLocalAccounts(): LocalAccountRecord[] {
 function saveLocalAccounts(accounts: LocalAccountRecord[]) {
   const storage = getScopedStorage("local");
   if (!storage) return;
-  if (shouldPreventLocalWrite(storage)) return;
+  if (shouldPreventLocalWrite(storage, accounts.map(account => account.profile.id))) return;
   storage.setItem(LOCAL_ACCOUNTS_KEY, JSON.stringify(accounts));
 }
 
 function setActiveLocalAccount(account: LocalAccountRecord) {
   const storage = getScopedStorage("local");
   if (!storage) return;
-  if (shouldPreventLocalWrite(storage)) return;
+  if (shouldPreventLocalWrite(storage, [account.profile.id])) return;
   ensurePlayerStored(account.profile, "local");
   storage.setItem(LOCAL_ACTIVE_ACCOUNT_KEY, account.profile.id);
 }
@@ -260,12 +274,23 @@ function loadActiveLocalSession(): LocalSession | null {
   const accounts = loadLocalAccounts();
   const account = accounts.find(candidate => candidate.profile.id === profileId);
   if (account) {
+    if (isProfileMigrated(account.profile.id)) {
+      clearActiveLocalSession(account.profile.id);
+      return null;
+    }
     ensurePlayerStored(account.profile, "local");
     return { profile: account.profile };
   }
   const storedPlayers = loadStoredPlayers("local");
   const fallbackProfile = storedPlayers.find(player => player.id === profileId);
-  if (!fallbackProfile) return null;
+  if (!fallbackProfile || isProfileMigrated(fallbackProfile.id)) {
+    if (fallbackProfile) {
+      clearActiveLocalSession(fallbackProfile.id);
+    } else {
+      clearActiveLocalSession();
+    }
+    return null;
+  }
   ensurePlayerStored(fallbackProfile, "local");
   return { profile: fallbackProfile };
 }
@@ -287,6 +312,9 @@ function loadStoredStatsProfiles(scope: StorageScope): StoredStatsProfileSnapsho
       const id = typeof snapshot.id === "string" ? snapshot.id : null;
       const playerId = typeof snapshot.playerId === "string" ? snapshot.playerId : null;
       if (!id || !playerId) {
+        return;
+      }
+      if (isProfileMigrated(playerId)) {
         return;
       }
       const trainingCount =

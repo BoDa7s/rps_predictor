@@ -3,7 +3,7 @@ import { AIMode, BestOf, Mode, Move, Outcome } from "./gameTypes";
 import { usePlayers } from "./players";
 import { usePlayMode, type PlayMode } from "./lib/playMode";
 import { cloudDataService, isSupabaseUuid, type MatchRecord, type RoundRecord } from "./lib/cloudData";
-import { isLocalBackupReadOnly } from "./lib/localBackup";
+import { isProfileMigrated } from "./lib/localBackup";
 import type { StatsProfileRow } from "./lib/database.types";
 import { computeMatchScore } from "./leaderboard";
 
@@ -206,11 +206,20 @@ function getScopedStorage(scope: StorageScope): Storage | null {
   }
 }
 
-function shouldPreventLocalWrite(storage: Storage | null): boolean {
+function shouldPreventLocalWrite(
+  storage: Storage | null,
+  profileIds?: Iterable<string | null | undefined>,
+): boolean {
   if (typeof window === "undefined") return false;
   if (!storage) return false;
   if (storage !== window.localStorage) return false;
-  return isLocalBackupReadOnly();
+  if (!profileIds) return false;
+  for (const id of profileIds) {
+    if (typeof id === "string" && isProfileMigrated(id)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function resolveScopeFromMode(mode: PlayMode): StorageScope {
@@ -259,9 +268,14 @@ function loadFromStorage<T>(storage: Storage | null, key: string): T[] {
   }
 }
 
-function saveToStorage(storage: Storage | null, key: string, value: unknown) {
+function saveToStorage(
+  storage: Storage | null,
+  key: string,
+  value: unknown,
+  profileIds?: Iterable<string | null | undefined>,
+) {
   if (!storage) return;
-  if (shouldPreventLocalWrite(storage)) return;
+  if (shouldPreventLocalWrite(storage, profileIds)) return;
   try {
     storage.setItem(key, JSON.stringify(value));
   } catch (err) {
@@ -309,9 +323,13 @@ function loadModelStates(storage: Storage | null): StoredPredictorModelState[] {
   }
 }
 
-function saveModelStates(storage: Storage | null, states: StoredPredictorModelState[]) {
+function saveModelStates(
+  storage: Storage | null,
+  states: StoredPredictorModelState[],
+  profileIds?: Iterable<string | null | undefined>,
+) {
   if (!storage) return;
-  if (shouldPreventLocalWrite(storage)) return;
+  if (shouldPreventLocalWrite(storage, profileIds)) return;
   try {
     storage.setItem(MODEL_STATE_KEY, JSON.stringify(states));
   } catch (err) {
@@ -398,9 +416,13 @@ function loadProfiles(storage: Storage | null): StatsProfile[] {
   }
 }
 
-function saveProfiles(storage: Storage | null, profiles: StatsProfile[]) {
+function saveProfiles(
+  storage: Storage | null,
+  profiles: StatsProfile[],
+  profileIds?: Iterable<string | null | undefined>,
+) {
   if (!storage) return;
-  if (shouldPreventLocalWrite(storage)) return;
+  if (shouldPreventLocalWrite(storage, profileIds)) return;
   try {
     storage.setItem(PROFILE_KEY, JSON.stringify(profiles));
   } catch (err) {
@@ -408,19 +430,28 @@ function saveProfiles(storage: Storage | null, profiles: StatsProfile[]) {
   }
 }
 
-function loadCurrentProfileId(storage: Storage | null): string | null {
+function loadCurrentProfileId(storage: Storage | null, profiles?: StatsProfile[]): string | null {
   if (!storage) return null;
   try {
-    return storage.getItem(CURRENT_PROFILE_KEY);
+    const id = storage.getItem(CURRENT_PROFILE_KEY);
+    if (!id) return null;
+    if (profiles && profiles.length > 0 && !profiles.some(profile => profile.id === id)) {
+      return null;
+    }
+    return id;
   } catch (err) {
     console.warn("Failed to read current stats profile", err);
     return null;
   }
 }
 
-function saveCurrentProfileId(storage: Storage | null, id: string | null) {
+function saveCurrentProfileId(
+  storage: Storage | null,
+  id: string | null,
+  profileIds?: Iterable<string | null | undefined>,
+) {
   if (!storage) return;
-  if (shouldPreventLocalWrite(storage)) return;
+  if (shouldPreventLocalWrite(storage, profileIds)) return;
   try {
     if (id) storage.setItem(CURRENT_PROFILE_KEY, id);
     else storage.removeItem(CURRENT_PROFILE_KEY);
@@ -707,21 +738,74 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (isCloudMode) return;
-    setAllRounds(loadFromStorage<RoundLog>(storage, ROUND_KEY));
+
+    const loadedProfiles = loadProfiles(storage);
+    const filteredProfiles = loadedProfiles.filter(profile => !isProfileMigrated(profile.user_id));
+    if (filteredProfiles.length !== loadedProfiles.length) {
+      saveProfiles(
+        storage,
+        filteredProfiles,
+        filteredProfiles.map(profile => profile.user_id),
+      );
+    }
+
+    const allowedStatsProfileIds = new Set(filteredProfiles.map(profile => profile.id));
+
+    const loadedRounds = loadFromStorage<RoundLog>(storage, ROUND_KEY);
+    const filteredRounds = loadedRounds.filter(round => {
+      if (isProfileMigrated(round.playerId)) {
+        return false;
+      }
+      if (round.profileId && !allowedStatsProfileIds.has(round.profileId)) {
+        return false;
+      }
+      return true;
+    });
+    if (filteredRounds.length !== loadedRounds.length) {
+      saveToStorage(
+        storage,
+        ROUND_KEY,
+        filteredRounds,
+        filteredRounds.map(round => round.playerId),
+      );
+    }
+
     const loadedMatches = loadFromStorage<MatchSummary>(storage, MATCH_KEY);
     const migrated = migrateMatchRecords(loadedMatches);
-    if (migrated.changed) {
-      saveToStorage(storage, MATCH_KEY, migrated.matches);
+    const filteredMatches = migrated.matches.filter(match => {
+      if (isProfileMigrated(match.playerId)) {
+        return false;
+      }
+      if (match.profileId && !allowedStatsProfileIds.has(match.profileId)) {
+        return false;
+      }
+      return true;
+    });
+    if (migrated.changed || filteredMatches.length !== migrated.matches.length) {
+      saveToStorage(
+        storage,
+        MATCH_KEY,
+        filteredMatches,
+        filteredMatches.map(match => match.playerId),
+      );
     }
-    setAllMatches(migrated.matches);
-    setProfiles(loadProfiles(storage));
-    setCurrentProfileId(loadCurrentProfileId(storage));
-    setModelStates(loadModelStates(storage));
+
+    const loadedModelStates = loadModelStates(storage);
+    const filteredModelStates = loadedModelStates.filter(state => allowedStatsProfileIds.has(state.profileId));
+    if (filteredModelStates.length !== loadedModelStates.length) {
+      saveModelStates(storage, filteredModelStates, [currentPlayerId]);
+    }
+
+    setAllRounds(filteredRounds);
+    setAllMatches(filteredMatches);
+    setProfiles(filteredProfiles);
+    setCurrentProfileId(loadCurrentProfileId(storage, filteredProfiles));
+    setModelStates(filteredModelStates);
     setRoundsDirty(false);
     setMatchesDirty(false);
     setProfilesDirty(false);
     setModelStatesDirty(false);
-  }, [isCloudMode, storage]);
+  }, [currentPlayerId, isCloudMode, storage]);
 
   useEffect(() => {
     if (!isCloudMode) return;
@@ -943,7 +1027,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       if (currentProfileId) {
         setCurrentProfileId(null);
         if (!isCloudMode) {
-          saveCurrentProfileId(storage, null);
+        saveCurrentProfileId(storage, null, [currentPlayerId]);
         }
       }
       return;
@@ -980,7 +1064,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         });
       } else {
         setProfilesDirty(true);
-        saveCurrentProfileId(storage, defaultProfile.id);
+        saveCurrentProfileId(storage, defaultProfile.id, [currentPlayerId]);
       }
       setCurrentProfileId(defaultProfile.id);
       return;
@@ -991,7 +1075,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       if (fallback && fallback.id !== currentProfileId) {
         setCurrentProfileId(fallback.id);
         if (!isCloudMode) {
-          saveCurrentProfileId(storage, fallback.id);
+          saveCurrentProfileId(storage, fallback.id, [currentPlayerId]);
         }
       }
     }
@@ -1005,7 +1089,12 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (isCloudMode || !roundsDirty) return;
     const timer = window.setTimeout(() => {
-      saveToStorage(storage, ROUND_KEY, allRounds);
+      saveToStorage(
+        storage,
+        ROUND_KEY,
+        allRounds,
+        allRounds.map(round => round.playerId),
+      );
       setRoundsDirty(false);
     }, 250);
     return () => window.clearTimeout(timer);
@@ -1014,7 +1103,12 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (isCloudMode || !matchesDirty) return;
     const timer = window.setTimeout(() => {
-      saveToStorage(storage, MATCH_KEY, allMatches);
+      saveToStorage(
+        storage,
+        MATCH_KEY,
+        allMatches,
+        allMatches.map(match => match.playerId),
+      );
       setMatchesDirty(false);
     }, 250);
     return () => window.clearTimeout(timer);
@@ -1023,7 +1117,11 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (isCloudMode || !profilesDirty) return;
     const timer = window.setTimeout(() => {
-      saveProfiles(storage, profiles);
+      saveProfiles(
+        storage,
+        profiles,
+        profiles.map(profile => profile.user_id),
+      );
       setProfilesDirty(false);
     }, 250);
     return () => window.clearTimeout(timer);
@@ -1032,11 +1130,11 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (isCloudMode || !modelStatesDirty) return;
     const timer = window.setTimeout(() => {
-      saveModelStates(storage, modelStates);
+      saveModelStates(storage, modelStates, [currentPlayerId]);
       setModelStatesDirty(false);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [isCloudMode, modelStates, modelStatesDirty, storage]);
+  }, [currentPlayerId, isCloudMode, modelStates, modelStatesDirty, storage]);
 
   useEffect(() => {
     if (isCloudMode || typeof document === "undefined") return;
@@ -1089,9 +1187,9 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     if (!playerProfiles.some(p => p.id === id)) return;
     setCurrentProfileId(id);
     if (!isCloudMode) {
-      saveCurrentProfileId(storage, id);
+      saveCurrentProfileId(storage, id, [currentPlayerId]);
     }
-  }, [isCloudMode, playerProfiles, storage]);
+  }, [currentPlayerId, isCloudMode, playerProfiles, storage]);
 
   const getModelStateForProfile = useCallback(
     (profileId: string): StoredPredictorModelState | null => {
@@ -1199,7 +1297,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       if (!playerIdOverride || playerIdOverride === currentPlayerId) {
         setCurrentProfileId(profile.id);
         if (!isCloudMode) {
-          saveCurrentProfileId(storage, profile.id);
+          saveCurrentProfileId(storage, profile.id, [currentPlayerId]);
         }
       }
       return profile;
@@ -1345,7 +1443,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         })();
       } else {
         setProfilesDirty(true);
-        saveCurrentProfileId(storage, newProfile.id);
+        saveCurrentProfileId(storage, newProfile.id, [currentPlayerId]);
       }
       return newProfile;
     },
