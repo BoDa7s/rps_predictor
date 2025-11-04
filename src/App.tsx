@@ -3306,7 +3306,7 @@ function RPSDoodleAppInner(){
       signOutNavigatePendingRef.current = false;
       openWelcome({
         announce: "Signing out complete. Returning to the welcome screen.",
-        resetPlayer: true,
+        resetPlayer: false,
         origin: "settings",
         quick: true,
       });

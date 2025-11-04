@@ -219,36 +219,58 @@ function ensurePlayerStored(profile: PlayerProfile, scope: StorageScope) {
 function loadLocalAccounts(): LocalAccountRecord[] {
   const storage = getScopedStorage("local");
   if (!storage) return [];
+
+  const accounts: LocalAccountRecord[] = [];
+  const seenProfileIds = new Set<string>();
+
   try {
     const raw = storage.getItem(LOCAL_ACCOUNTS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map(item => {
-        if (!item || typeof item !== "object") return null;
-        const profile = normalizeStoredProfile((item as any).profile);
-        const storageMode = (item as any).storageMode === "cloud" ? "cloud" : "local";
-        if (storageMode !== "local") {
-          return null;
-        }
-        const createdAtValue =
-          typeof (item as any).createdAt === "string"
-            ? (item as any).createdAt
-            : new Date().toISOString();
-        if (isProfileMigrated(profile.id)) {
-          return null;
-        }
-        return {
-          profile,
-          createdAt: createdAtValue,
-          storageMode: "local",
-        } as LocalAccountRecord;
-      })
-      .filter((account): account is LocalAccountRecord => account !== null);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        parsed.forEach(item => {
+          if (!item || typeof item !== "object") {
+            return;
+          }
+          const profile = normalizeStoredProfile((item as any).profile);
+          if (isProfileMigrated(profile.id)) {
+            return;
+          }
+          const storageMode = (item as any).storageMode === "cloud" ? "cloud" : "local";
+          if (storageMode !== "local") {
+            return;
+          }
+          const createdAtValue =
+            typeof (item as any).createdAt === "string"
+              ? (item as any).createdAt
+              : new Date().toISOString();
+          accounts.push({
+            profile,
+            createdAt: createdAtValue,
+            storageMode: "local",
+          });
+          seenProfileIds.add(profile.id);
+        });
+      }
+    }
   } catch {
-    return [];
+    // Ignore parse errors and fall back to enumerating stored players.
   }
+
+  const storedPlayers = loadStoredPlayers("local");
+  storedPlayers.forEach(profile => {
+    if (seenProfileIds.has(profile.id)) {
+      return;
+    }
+    accounts.push({
+      profile,
+      createdAt: profile.consent?.timestamp ?? new Date(0).toISOString(),
+      storageMode: "local",
+    });
+    seenProfileIds.add(profile.id);
+  });
+
+  return accounts;
 }
 
 function saveLocalAccounts(accounts: LocalAccountRecord[]) {
@@ -269,18 +291,38 @@ function setActiveLocalAccount(account: LocalAccountRecord) {
 function loadActiveLocalSession(): LocalSession | null {
   const storage = getScopedStorage("local");
   if (!storage) return null;
-  const profileId = storage.getItem(LOCAL_ACTIVE_ACCOUNT_KEY);
-  if (!profileId) return null;
+
   const accounts = loadLocalAccounts();
-  const account = accounts.find(candidate => candidate.profile.id === profileId);
-  if (account) {
-    if (isProfileMigrated(account.profile.id)) {
-      clearActiveLocalSession(account.profile.id);
+  const profileId = storage.getItem(LOCAL_ACTIVE_ACCOUNT_KEY);
+
+  let activeAccount: LocalAccountRecord | undefined;
+
+  if (profileId) {
+    activeAccount = accounts.find(candidate => candidate.profile.id === profileId);
+  } else if (accounts.length === 1) {
+    activeAccount = accounts[0];
+    if (!shouldPreventLocalWrite(storage, [activeAccount.profile.id])) {
+      try {
+        storage.setItem(LOCAL_ACTIVE_ACCOUNT_KEY, activeAccount.profile.id);
+      } catch {
+        /* ignore persistence failures */
+      }
+    }
+  }
+
+  if (activeAccount) {
+    if (isProfileMigrated(activeAccount.profile.id)) {
+      clearActiveLocalSession(activeAccount.profile.id);
       return null;
     }
-    ensurePlayerStored(account.profile, "local");
-    return { profile: account.profile };
+    ensurePlayerStored(activeAccount.profile, "local");
+    return { profile: activeAccount.profile };
   }
+
+  if (!profileId) {
+    return null;
+  }
+
   const storedPlayers = loadStoredPlayers("local");
   const fallbackProfile = storedPlayers.find(player => player.id === profileId);
   if (!fallbackProfile || isProfileMigrated(fallbackProfile.id)) {
@@ -292,6 +334,13 @@ function loadActiveLocalSession(): LocalSession | null {
     return null;
   }
   ensurePlayerStored(fallbackProfile, "local");
+  if (!shouldPreventLocalWrite(storage, [fallbackProfile.id])) {
+    try {
+      storage.setItem(LOCAL_ACTIVE_ACCOUNT_KEY, fallbackProfile.id);
+    } catch {
+      /* ignore persistence failures */
+    }
+  }
   return { profile: fallbackProfile };
 }
 
