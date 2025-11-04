@@ -295,6 +295,28 @@ function loadActiveLocalSession(): LocalSession | null {
   return { profile: fallbackProfile };
 }
 
+type RawStoredStatsProfileSnapshot = {
+  id?: unknown;
+  playerId?: unknown;
+  user_id?: unknown;
+  trainingCount?: unknown;
+  training_count?: unknown;
+  trained?: unknown;
+  training_completed?: unknown;
+};
+
+function coerceTrainingCount(value: unknown): number | undefined {
+  if (typeof value !== "number") return undefined;
+  if (!Number.isFinite(value)) return undefined;
+  return value;
+}
+
+function coerceTrained(value: unknown): boolean | undefined {
+  if (value === true) return true;
+  if (value === false) return false;
+  return undefined;
+}
+
 function loadStoredStatsProfiles(scope: StorageScope): StoredStatsProfileSnapshot[] {
   const storage = getScopedStorage(scope);
   if (!storage) return [];
@@ -308,9 +330,14 @@ function loadStoredStatsProfiles(scope: StorageScope): StoredStatsProfileSnapsho
       if (!item || typeof item !== "object") {
         return;
       }
-      const snapshot = item as StoredStatsProfileSnapshot & { id?: unknown; playerId?: unknown };
+      const snapshot = item as RawStoredStatsProfileSnapshot;
       const id = typeof snapshot.id === "string" ? snapshot.id : null;
-      const playerId = typeof snapshot.playerId === "string" ? snapshot.playerId : null;
+      const playerId =
+        typeof snapshot.playerId === "string"
+          ? snapshot.playerId
+          : typeof snapshot.user_id === "string"
+            ? snapshot.user_id
+            : null;
       if (!id || !playerId) {
         return;
       }
@@ -318,10 +345,9 @@ function loadStoredStatsProfiles(scope: StorageScope): StoredStatsProfileSnapsho
         return;
       }
       const trainingCount =
-        typeof snapshot.trainingCount === "number" && Number.isFinite(snapshot.trainingCount)
-          ? snapshot.trainingCount
-          : undefined;
-      const trained = snapshot.trained === true ? true : snapshot.trained === false ? false : undefined;
+        coerceTrainingCount(snapshot.trainingCount) ?? coerceTrainingCount(snapshot.training_count);
+      const trained =
+        coerceTrained(snapshot.trained) ?? coerceTrained(snapshot.training_completed);
       sanitized.push({ id, playerId, trainingCount, trained });
     });
     return sanitized;

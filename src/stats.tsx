@@ -383,16 +383,37 @@ function loadProfiles(storage: Storage | null): StatsProfile[] {
       const metadata =
         item && typeof item.metadata === "object" && item.metadata !== null ? item.metadata : {};
       const archived = item?.archived === true;
+      const trainingCount = (() => {
+        if (typeof item?.training_count === "number" && Number.isFinite(item.training_count)) {
+          return item.training_count;
+        }
+        if (typeof item?.trainingCount === "number" && Number.isFinite(item.trainingCount)) {
+          return item.trainingCount;
+        }
+        return 0;
+      })();
+      const trainingCompleted = (() => {
+        if (item?.training_completed === true) return true;
+        if (item?.training_completed === false) return false;
+        if (item?.trained === true) return true;
+        if (item?.trained === false) return false;
+        return false;
+      })();
       return {
         id: typeof item?.id === "string" ? item.id : makeId("profile"),
-        user_id: typeof item?.playerId === "string" ? item.playerId : "",
+        user_id:
+          typeof item?.user_id === "string"
+            ? item.user_id
+            : typeof item?.playerId === "string"
+              ? item.playerId
+              : "",
         demographics_profile_id:
           typeof item?.demographics_profile_id === "string" ? item.demographics_profile_id : null,
         base_name,
         profile_version,
         display_name: makeProfileDisplayName(base_name, profile_version),
-        training_count: typeof item?.trainingCount === "number" ? item.trainingCount : 0,
-        training_completed: item?.trained === true,
+        training_count: trainingCount,
+        training_completed: trainingCompleted,
         predictor_default:
           item?.predictorDefault !== undefined ? Boolean(item.predictorDefault) : false,
         seen_post_training_cta:
