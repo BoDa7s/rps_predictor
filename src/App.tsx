@@ -1972,6 +1972,8 @@ function RPSDoodleAppInner(){
   const signOutCleanupStartedRef = useRef(false);
   const signOutProfileIdRef = useRef<string | null>(null);
   const signOutNavigatePendingRef = useRef(false);
+  const signOutCompletionToastPendingRef = useRef(false);
+  const signOutEncounteredErrorRef = useRef(false);
   const pendingLocalRestoreRef = useRef<{ playerId: string | null } | null>(null);
   const [helpGuideOpen, setHelpGuideOpen] = useState(false);
   const helpButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -3245,20 +3247,28 @@ function RPSDoodleAppInner(){
 
     if (!signOutCleanupStartedRef.current) {
       signOutCleanupStartedRef.current = true;
+      signOutEncounteredErrorRef.current = false;
+      signOutCompletionToastPendingRef.current = false;
       void (async () => {
         try {
           if (isSupabaseConfigured && supabaseClient) {
-            await supabaseClient.auth.signOut();
+            const { data } = await supabaseClient.auth.getSession();
+            if (data.session) {
+              await supabaseClient.auth.signOut();
+            }
           }
         } catch (error) {
+          signOutEncounteredErrorRef.current = true;
           console.error("Failed to sign out from Supabase", error);
           setToastMessage("We couldn't complete the cloud sign-out. You're in Local mode.");
           setLive(
             "Encountered an error while signing out of the cloud session. You're in Local mode using your saved data.",
           );
         } finally {
-          clearActiveLocalSession(signOutProfileIdRef.current ?? undefined);
           setMode("local");
+          if (!signOutEncounteredErrorRef.current) {
+            signOutCompletionToastPendingRef.current = true;
+          }
         }
       })();
     }
@@ -3310,8 +3320,12 @@ function RPSDoodleAppInner(){
         origin: "settings",
         quick: true,
       });
+      if (signOutCompletionToastPendingRef.current) {
+        signOutCompletionToastPendingRef.current = false;
+        setToastMessage("Signed out of cloud. Local mode is ready.");
+      }
     }
-  }, [signOutActive, openWelcome]);
+  }, [signOutActive, openWelcome, setToastMessage]);
 
   const finishWelcomeFlow = useCallback(
     (reason: "setup" | "restore" | "dismiss") => {
@@ -4417,9 +4431,17 @@ function RPSDoodleAppInner(){
     signOutNavigatePendingRef.current = false;
     setSignOutConfirmOpen(false);
     pendingLocalRestoreRef.current = { playerId: currentPlayer?.id ?? null };
+    signOutCompletionToastPendingRef.current = false;
+    signOutEncounteredErrorRef.current = false;
     setSignOutActive(true);
-    setLive("Signing out. Progress indicator running.");
-  }, [signOutActive, currentPlayer?.id, setLive]);
+    setToastMessage("Signing out of cloud… Keeping your local data. Switching to Local mode.");
+    setLive("Signing out of cloud. Progress indicator running. Local data will stay on this device.");
+  }, [
+    signOutActive,
+    currentPlayer?.id,
+    setLive,
+    setToastMessage,
+  ]);
 
   const resetMigrationForm = useCallback(() => {
     setMigrationUsername("");
@@ -5735,8 +5757,8 @@ function RPSDoodleAppInner(){
             >
               <div className="space-y-4">
                 <div className="space-y-1">
-                  <div className="text-base font-semibold text-slate-900">Signing you out…</div>
-                  <p className="text-sm text-slate-500">Wrapping things up and returning to the welcome screen.</p>
+                  <div className="text-base font-semibold text-slate-900">Signing you out of cloud…</div>
+                  <p className="text-sm text-slate-500">Keeping your local progress safe while we switch to Local mode.</p>
                 </div>
                 <div className="space-y-2">
                   <div className="h-3 w-full rounded-full bg-rose-100/70">
