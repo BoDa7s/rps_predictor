@@ -13,7 +13,7 @@ export async function proxySupabaseEdgeFunction(request: Request, env: ProxyEnv,
     });
   }
 
-  const target = `https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/${name}`;
+  const body = request.method === "GET" ? undefined : await request.text();
   const init: RequestInit = {
     method: request.method,
     headers: {
@@ -21,12 +21,45 @@ export async function proxySupabaseEdgeFunction(request: Request, env: ProxyEnv,
       apikey: VITE_SUPABASE_ANON_KEY,
       Authorization: `Bearer ${VITE_SUPABASE_ANON_KEY}`,
     },
-    body: request.method === "GET" ? undefined : await request.text(),
+    body,
   };
-  const response = await fetch(target, init);
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: new Headers(response.headers),
+
+  const potentialTargets = [
+    `https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/${name}`,
+    `https://${SUPABASE_PROJECT_REF}.functions.supabase.co/${name}`,
+  ];
+
+  let fallbackBody: ArrayBuffer | null = null;
+  let fallbackStatus = 500;
+  let fallbackStatusText = "Internal Server Error";
+  let fallbackHeaders: HeadersInit = { "content-type": "application/json" };
+
+  for (const target of potentialTargets) {
+    const response = await fetch(target, init);
+    const responseBody = await response.arrayBuffer();
+    const headers = new Headers(response.headers);
+
+    const isNotFound = response.status === 404;
+    const bodyText = new TextDecoder().decode(responseBody);
+    const mentionsMissingFunction = /requested function was not found/i.test(bodyText);
+
+    if (!isNotFound || !mentionsMissingFunction) {
+      return new Response(responseBody, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    }
+
+    fallbackBody = responseBody;
+    fallbackStatus = response.status;
+    fallbackStatusText = response.statusText;
+    fallbackHeaders = headers;
+  }
+
+  return new Response(fallbackBody ?? new TextEncoder().encode(JSON.stringify({ error: "Function not found." })), {
+    status: fallbackStatus,
+    statusText: fallbackStatusText,
+    headers: fallbackHeaders,
   });
 }
