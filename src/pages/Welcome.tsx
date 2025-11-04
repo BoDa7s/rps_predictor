@@ -203,6 +203,63 @@ function saveStoredPlayers(scope: StorageScope, players: PlayerProfile[]) {
   storage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(players));
 }
 
+const LOCAL_ACCOUNTS_CACHE_NAME = "rps-predictor-local-profiles-v1";
+const LOCAL_ACCOUNTS_CACHE_URL = "/rps-local-profiles";
+
+function hasCacheStorage(): boolean {
+  return isBrowser() && typeof window.caches !== "undefined";
+}
+
+function sanitizeLocalAccountRecord(raw: any): LocalAccountRecord | null {
+  if (!raw || typeof raw !== "object") return null;
+  const profile = normalizeStoredProfile((raw as any).profile);
+  if (isProfileMigrated(profile.id)) {
+    return null;
+  }
+  const storageMode = (raw as any).storageMode === "cloud" ? "cloud" : "local";
+  if (storageMode !== "local") {
+    return null;
+  }
+  const createdAtValue =
+    typeof (raw as any).createdAt === "string" && (raw as any).createdAt.trim()
+      ? (raw as any).createdAt
+      : new Date().toISOString();
+  return {
+    profile,
+    createdAt: createdAtValue,
+    storageMode: "local",
+  };
+}
+
+async function persistLocalAccountsToCache(accounts: LocalAccountRecord[]): Promise<void> {
+  if (!hasCacheStorage()) return;
+  try {
+    const cache = await window.caches.open(LOCAL_ACCOUNTS_CACHE_NAME);
+    const response = new Response(JSON.stringify(accounts), {
+      headers: { "Content-Type": "application/json" },
+    });
+    await cache.put(LOCAL_ACCOUNTS_CACHE_URL, response);
+  } catch {
+    // Ignore cache persistence failures.
+  }
+}
+
+async function loadLocalAccountsFromCache(): Promise<LocalAccountRecord[] | null> {
+  if (!hasCacheStorage()) return null;
+  try {
+    const cache = await window.caches.open(LOCAL_ACCOUNTS_CACHE_NAME);
+    const match = await cache.match(LOCAL_ACCOUNTS_CACHE_URL);
+    if (!match) return null;
+    const parsed = await match.json();
+    if (!Array.isArray(parsed)) return null;
+    return parsed
+      .map(item => sanitizeLocalAccountRecord(item))
+      .filter((account): account is LocalAccountRecord => account !== null);
+  } catch {
+    return null;
+  }
+}
+
 function ensurePlayerStored(profile: PlayerProfile, scope: StorageScope) {
   const storage = getScopedStorage(scope);
   if (!storage) return;
@@ -226,26 +283,7 @@ function loadLocalAccounts(): LocalAccountRecord[] {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed
-      .map(item => {
-        if (!item || typeof item !== "object") return null;
-        const profile = normalizeStoredProfile((item as any).profile);
-        const storageMode = (item as any).storageMode === "cloud" ? "cloud" : "local";
-        if (storageMode !== "local") {
-          return null;
-        }
-        const createdAtValue =
-          typeof (item as any).createdAt === "string"
-            ? (item as any).createdAt
-            : new Date().toISOString();
-        if (isProfileMigrated(profile.id)) {
-          return null;
-        }
-        return {
-          profile,
-          createdAt: createdAtValue,
-          storageMode: "local",
-        } as LocalAccountRecord;
-      })
+      .map(item => sanitizeLocalAccountRecord(item))
       .filter((account): account is LocalAccountRecord => account !== null);
   } catch {
     return [];
@@ -257,6 +295,7 @@ function saveLocalAccounts(accounts: LocalAccountRecord[]) {
   if (!storage) return;
   if (shouldPreventLocalWrite(storage, accounts.map(account => account.profile.id))) return;
   storage.setItem(LOCAL_ACCOUNTS_KEY, JSON.stringify(accounts));
+  void persistLocalAccountsToCache(accounts);
 }
 
 function setActiveLocalAccount(account: LocalAccountRecord, statsProfileId?: string | null) {
@@ -948,7 +987,6 @@ export default function Welcome(): JSX.Element {
   const [localHydrating, setLocalHydrating] = useState(false);
   const [localHydrationError, setLocalHydrationError] = useState<string | null>(null);
   const localHydrationAbortRef = useRef(false);
-  const localAutoSelectRef = useRef(false);
 
   const supabaseReady = isSupabaseConfigured && Boolean(supabaseClient);
 
@@ -1013,6 +1051,36 @@ export default function Welcome(): JSX.Element {
     }
     setShowLocalCreateForm(accounts.length === 0);
   }, [refreshLocalAccounts]);
+
+  useEffect(() => {
+    if (localAccounts.length > 0) {
+      return;
+    }
+    let cancelled = false;
+    const restoreFromCache = async () => {
+      const cachedAccounts = await loadLocalAccountsFromCache();
+      if (cancelled || !cachedAccounts || cachedAccounts.length === 0) {
+        return;
+      }
+      saveLocalAccounts(cachedAccounts);
+      if (cancelled) {
+        return;
+      }
+      setLocalAccounts(cachedAccounts);
+      setShowLocalCreateForm(false);
+      const existing = loadActiveLocalSession();
+      setLocalSession(existing);
+      if (existing) {
+        setSelectedLocalProfileId(existing.profile.id);
+      } else if (!selectedLocalProfileId) {
+        setSelectedLocalProfileId(cachedAccounts[0].profile.id);
+      }
+    };
+    void restoreFromCache();
+    return () => {
+      cancelled = true;
+    };
+  }, [localAccounts.length, selectedLocalProfileId]);
 
   useEffect(() => {
     if (overlay !== "local") {
@@ -1259,32 +1327,6 @@ export default function Welcome(): JSX.Element {
     [navigateToPostAuth, refreshLocalAccounts, setMode],
   );
 
-  useEffect(() => {
-    if (overlay !== "local" || localHydrating) {
-      return;
-    }
-    if (localSummaries.length !== 1) {
-      localAutoSelectRef.current = false;
-      return;
-    }
-    const soleProfileId = localSummaries[0]?.account.profile.id ?? null;
-    if (!soleProfileId) {
-      localAutoSelectRef.current = false;
-      return;
-    }
-    if (localSession?.profile.id === soleProfileId) {
-      localAutoSelectRef.current = false;
-      return;
-    }
-    if (localAutoSelectRef.current) {
-      return;
-    }
-    localAutoSelectRef.current = true;
-    void completeLocalSelection(soleProfileId).finally(() => {
-      localAutoSelectRef.current = false;
-    });
-  }, [completeLocalSelection, localHydrating, localSession, localSummaries, overlay]);
-
   const handleLocalSignUp = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
@@ -1472,7 +1514,7 @@ export default function Welcome(): JSX.Element {
                 )}
                 {autoSelectedHint ? (
                   <p className="text-xs font-medium text-slate-200">
-                    Selected: {localSummaries[0].account.profile.playerName}
+                    Preselected: {localSummaries[0].account.profile.playerName}. Confirm below to continue.
                   </p>
                 ) : null}
               </div>
