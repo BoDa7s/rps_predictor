@@ -262,7 +262,6 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
 
   useEffect(() => {
     if (!open) return;
-    if (!DEV_MODE_SECURE) return;
     if (!cloudDataService) return;
     if (!ready) return;
     let cancelled = false;
