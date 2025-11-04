@@ -241,43 +241,40 @@ const PlayerContext = createContext<PlayerContextValue | null>(null);
 export function PlayersProvider({ children }: { children: React.ReactNode }){
   const { mode } = usePlayMode();
   const isCloudMode = mode === "cloud";
-  const storageScope = useMemo<StorageScope | null>(() => (isCloudMode ? null : resolveScopeFromMode(mode)), [isCloudMode, mode]);
-  const storage = useMemo(() => (storageScope ? getScopedStorage(storageScope) : null), [storageScope]);
+  const [cloudUserId, setCloudUserId] = useState<string | null>(null);
+  const hasCloudSession = Boolean(cloudUserId);
+  const effectiveMode: PlayMode = isCloudMode && hasCloudSession ? "cloud" : "local";
+  const storageScope = useMemo<StorageScope>(() => resolveScopeFromMode(effectiveMode), [effectiveMode]);
+  const storage = useMemo(() => getScopedStorage(storageScope), [storageScope]);
+  const shouldUseCloudPersistence = isCloudMode && hasCloudSession;
 
   const initialLocalState = useMemo(() => {
-    if (isCloudMode) {
-      return { players: [] as PlayerProfile[], currentId: null as string | null };
-    }
-    const loadedPlayers = loadPlayersFromStorage(storage);
-    const currentId = loadCurrentIdFromStorage(storage, loadedPlayers);
+    const localStorage = getScopedStorage("local");
+    const loadedPlayers = loadPlayersFromStorage(localStorage);
+    const currentId = loadCurrentIdFromStorage(localStorage, loadedPlayers);
     return { players: loadedPlayers, currentId };
-  }, [isCloudMode, storage]);
+  }, []);
 
   const [players, setPlayers] = useState<PlayerProfile[]>(() => initialLocalState.players);
   const [currentPlayerId, setCurrentPlayerId] = useState<string | null>(() => initialLocalState.currentId);
-  const [cloudUserId, setCloudUserId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (isCloudMode) {
+    if (shouldUseCloudPersistence) {
       return;
     }
-    const loadedPlayers = loadPlayersFromStorage(storage);
+    const localStorage = getScopedStorage("local");
+    const loadedPlayers = loadPlayersFromStorage(localStorage);
     setPlayers(loadedPlayers);
-    setCurrentPlayerId(loadCurrentIdFromStorage(storage, loadedPlayers));
-    setCloudUserId(null);
-  }, [isCloudMode, storage]);
+    setCurrentPlayerId(loadCurrentIdFromStorage(localStorage, loadedPlayers));
+    if (!isCloudMode) {
+      setCloudUserId(null);
+    }
+  }, [shouldUseCloudPersistence, isCloudMode]);
 
   useEffect(() => {
     if (!isCloudMode) {
       return;
     }
-
-    const sessionStorage = getScopedStorage("session");
-    const fallbackPlayers = loadPlayersFromStorage(sessionStorage);
-    const fallbackCurrentId = loadCurrentIdFromStorage(sessionStorage);
-
-    setPlayers(fallbackPlayers);
-    setCurrentPlayerId(fallbackCurrentId);
 
     const service = cloudDataService;
     const client = supabaseClient;
@@ -301,6 +298,13 @@ export function PlayersProvider({ children }: { children: React.ReactNode }){
         if (!userId) {
           return;
         }
+
+        const sessionStorage = getScopedStorage("session");
+        const fallbackPlayers = loadPlayersFromStorage(sessionStorage);
+        const fallbackCurrentId = loadCurrentIdFromStorage(sessionStorage);
+
+        setPlayers(fallbackPlayers);
+        setCurrentPlayerId(fallbackCurrentId);
 
         try {
           const profile = await service.loadPlayerProfile(userId);
@@ -330,25 +334,21 @@ export function PlayersProvider({ children }: { children: React.ReactNode }){
   }, [isCloudMode, supabaseClient, cloudDataService]);
 
   useEffect(() => {
-    if (isCloudMode) {
-      const sessionStorage = getScopedStorage("session");
-      const touchedProfileIds = players.map(player => player.id);
-      savePlayersToStorage(sessionStorage, players, touchedProfileIds);
-      saveCurrentIdToStorage(sessionStorage, currentPlayerId, [currentPlayerId]);
-      return;
-    }
     const touchedProfileIds = players.map(player => player.id);
     savePlayersToStorage(storage, players, touchedProfileIds);
-  }, [isCloudMode, players, storage]);
-
-  useEffect(() => {
-    if (!isCloudMode) {
+    if (shouldUseCloudPersistence) {
       saveCurrentIdToStorage(storage, currentPlayerId, [currentPlayerId]);
     }
-  }, [isCloudMode, storage, currentPlayerId]);
+  }, [players, storage, shouldUseCloudPersistence, currentPlayerId]);
 
   useEffect(() => {
-    if (isCloudMode) return;
+    if (!shouldUseCloudPersistence) {
+      saveCurrentIdToStorage(storage, currentPlayerId, [currentPlayerId]);
+    }
+  }, [shouldUseCloudPersistence, storage, currentPlayerId]);
+
+  useEffect(() => {
+    if (shouldUseCloudPersistence) return;
     if (typeof window === "undefined") return;
     if (!storage) return;
 
@@ -377,7 +377,7 @@ export function PlayersProvider({ children }: { children: React.ReactNode }){
     return () => {
       window.removeEventListener(LOCAL_PROFILE_SELECTED_EVENT, handleSelection as EventListener);
     };
-  }, [currentPlayerId, isCloudMode, storage]);
+  }, [currentPlayerId, shouldUseCloudPersistence, storage]);
 
   const currentPlayer = useMemo(() => players.find(p => p.id === currentPlayerId) || null, [players, currentPlayerId]);
   const hasConsented = currentPlayer != null;
@@ -385,16 +385,16 @@ export function PlayersProvider({ children }: { children: React.ReactNode }){
   const setCurrentPlayer = useCallback(
     (id: string | null) => {
       setCurrentPlayerId(id);
-      if (!isCloudMode) {
+      if (!shouldUseCloudPersistence) {
         updateActiveLocalPointers(id);
       }
     },
-    [isCloudMode],
+    [shouldUseCloudPersistence],
   );
 
   const createPlayer = useCallback(
     (input: Omit<PlayerProfile, "id">) => {
-      if (isCloudMode) {
+      if (shouldUseCloudPersistence) {
         const targetId = cloudUserId ?? makeId("plr");
         const profile: PlayerProfile = { ...input, id: targetId, needsReview: input.needsReview ?? false };
         setPlayers(prev => {
@@ -416,7 +416,7 @@ export function PlayersProvider({ children }: { children: React.ReactNode }){
       updateActiveLocalPointers(profile.id);
       return profile;
     },
-    [cloudUserId, isCloudMode],
+    [cloudUserId, shouldUseCloudPersistence],
   );
 
   const updatePlayer = useCallback(
@@ -435,18 +435,18 @@ export function PlayersProvider({ children }: { children: React.ReactNode }){
         }),
       );
 
-      if (isCloudMode && cloudUserId && id === cloudUserId && updatedProfile && cloudDataService) {
+      if (shouldUseCloudPersistence && cloudUserId && id === cloudUserId && updatedProfile && cloudDataService) {
         void cloudDataService.upsertPlayerProfile(updatedProfile).catch(err => {
           console.error("Failed to persist cloud player profile", err);
         });
       }
     },
-    [cloudUserId, isCloudMode],
+    [cloudUserId, shouldUseCloudPersistence],
   );
 
   const deletePlayer = useCallback(
     (id: string) => {
-      if (isCloudMode) {
+      if (shouldUseCloudPersistence) {
         if (cloudUserId && id === cloudUserId) {
           console.warn("Cannot delete the active cloud player profile.");
           return;
@@ -461,7 +461,7 @@ export function PlayersProvider({ children }: { children: React.ReactNode }){
       setCurrentPlayerId(prev => (prev === id ? null : prev));
       updateActiveLocalPointers(nextId);
     },
-    [cloudUserId, currentPlayerId, isCloudMode],
+    [cloudUserId, currentPlayerId, shouldUseCloudPersistence],
   );
 
   const value = useMemo(() => ({

@@ -1408,7 +1408,10 @@ export default function Welcome(): JSX.Element {
     setLocalHydrationError(null);
     setCloudSignInError(null);
     setCloudSignUpError(null);
-  }, []);
+    if (!session) {
+      setMode("local");
+    }
+  }, [session, setMode]);
 
   const localContinueDisabled = !selectedLocalProfileId || localHydrating;
   const localProfilesEmpty = localSummaries.length === 0;
