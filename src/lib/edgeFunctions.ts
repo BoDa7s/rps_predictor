@@ -6,6 +6,7 @@ export const api = {
   signup: "/api/auth_signup",
   resetPassword: "/api/auth_reset_password",
   recoverUsername: "/api/auth_recover_username",
+  autoLocalAuth: "/api/auto_local_auth",
 } as const;
 
 type ApiRoute = keyof typeof api;
@@ -149,6 +150,17 @@ export interface ResetPasswordResult {
   success: boolean;
 }
 
+export interface AutoLocalAuthPayload extends Record<string, unknown> {
+  localProfileId: string;
+  firstName?: string;
+  lastInitial?: string;
+  grade?: string;
+  age?: string;
+  school?: string;
+  priorExperience?: string;
+  appMetadata?: Record<string, unknown>;
+}
+
 export async function signup(payload: SignupPayload): Promise<EdgeFunctionResponse<AuthSessionResponse>> {
   return callEdgeFunction<AuthSessionResponse, SignupPayload>("signup", payload);
 }
@@ -192,4 +204,20 @@ export async function setEdgeSession(tokens: EdgeSessionTokens): Promise<Session
     throw error;
   }
   return data.session;
+}
+
+export async function autoLocalAuth(
+  payload: AutoLocalAuthPayload,
+): Promise<EdgeFunctionResponse<AuthSessionResponse>> {
+  const normalizedPayload = {
+    local_profile_id: payload.localProfileId,
+    first_name: payload.firstName,
+    last_initial: payload.lastInitial,
+    grade: payload.grade,
+    age: payload.age,
+    school: payload.school,
+    prior_experience: payload.priorExperience,
+    app_metadata: payload.appMetadata,
+  } satisfies Record<string, unknown>;
+  return callEdgeFunction<AuthSessionResponse, typeof normalizedPayload>("autoLocalAuth", normalizedPayload);
 }

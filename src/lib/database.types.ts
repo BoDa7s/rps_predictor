@@ -177,6 +177,46 @@ export interface Database {
           },
         ];
       };
+      local_account_links: {
+        Row: {
+          local_profile_id: string;
+          auth_user_id: string | null;
+          email: string;
+          username: string;
+          password_ciphertext: string;
+          app_metadata: Json | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          local_profile_id: string;
+          auth_user_id?: string | null;
+          email: string;
+          username: string;
+          password_ciphertext: string;
+          app_metadata?: Json | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          local_profile_id?: string;
+          auth_user_id?: string | null;
+          email?: string;
+          username?: string;
+          password_ciphertext?: string;
+          app_metadata?: Json | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "local_account_links_auth_user_id_fkey";
+            columns: ["auth_user_id"];
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       dev_dataset_snapshots: {
         Row: {
           id: string;

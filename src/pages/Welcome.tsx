@@ -16,10 +16,13 @@ import {
 } from "../players";
 import { useNavigate } from "react-router-dom";
 import {
+  autoLocalAuth,
   login as loginThroughEdge,
   signup as signupThroughEdge,
   setEdgeSession,
 } from "../lib/edgeFunctions";
+import type { AutoLocalAuthPayload } from "../lib/edgeFunctions";
+import type { Json } from "../lib/database.types";
 import {
   clearActiveLocalSession,
   CURRENT_PLAYER_STORAGE_KEY,
@@ -36,6 +39,7 @@ import { isProfileMigrated } from "../lib/localBackup";
 import { usePlayMode, type PlayMode } from "../lib/playMode";
 import type { MatchSummary, RoundLog, StatsProfile, StoredPredictorModelState } from "../stats";
 import { makeProfileDisplayName } from "../stats";
+import { syncSnapshotToCloudWithSession, type MigrationSnapshot } from "../lib/localMigration";
 
 const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => String(5 + index));
 
@@ -67,10 +71,26 @@ interface CloudHydrationResult {
   statsProfiles: StatsProfile[];
 }
 
+interface LocalAccountDemographics {
+  firstName?: string;
+  lastInitial?: string;
+  grade?: string;
+  age?: string;
+  school?: string;
+  priorExperience?: string;
+}
+
+interface LocalAccountCloudState {
+  lastFullSyncAt?: string;
+  supabaseUserId?: string;
+}
+
 interface LocalAccountRecord {
   profile: PlayerProfile;
   createdAt: string;
   storageMode: AuthMode;
+  demographics?: LocalAccountDemographics;
+  cloud?: LocalAccountCloudState;
 }
 
 interface LocalSession {
@@ -230,9 +250,6 @@ function loadLocalAccounts(): LocalAccountRecord[] {
         if (!item || typeof item !== "object") return null;
         const profile = normalizeStoredProfile((item as any).profile);
         const storageMode = (item as any).storageMode === "cloud" ? "cloud" : "local";
-        if (storageMode !== "local") {
-          return null;
-        }
         const createdAtValue =
           typeof (item as any).createdAt === "string"
             ? (item as any).createdAt
@@ -240,11 +257,61 @@ function loadLocalAccounts(): LocalAccountRecord[] {
         if (isProfileMigrated(profile.id)) {
           return null;
         }
-        return {
+        const rawDemographics = (item as any).demographics;
+        const demographics: LocalAccountDemographics | undefined = (() => {
+          if (!rawDemographics || typeof rawDemographics !== "object") {
+            return undefined;
+          }
+          const firstName = typeof rawDemographics.firstName === "string" ? rawDemographics.firstName : undefined;
+          const lastInitialValue =
+            typeof rawDemographics.lastInitial === "string"
+              ? rawDemographics.lastInitial.charAt(0).toUpperCase()
+              : undefined;
+          const gradeValue = typeof rawDemographics.grade === "string" ? rawDemographics.grade : undefined;
+          const ageValue = (() => {
+            if (typeof rawDemographics.age === "string") return rawDemographics.age;
+            if (typeof rawDemographics.age === "number" && Number.isFinite(rawDemographics.age)) {
+              return String(rawDemographics.age);
+            }
+            return undefined;
+          })();
+          const schoolValue = typeof rawDemographics.school === "string" ? rawDemographics.school : undefined;
+          const priorExperienceValue =
+            typeof rawDemographics.priorExperience === "string" ? rawDemographics.priorExperience : undefined;
+          const normalized: LocalAccountDemographics = {
+            firstName,
+            lastInitial: lastInitialValue,
+            grade: gradeValue,
+            age: ageValue,
+            school: schoolValue,
+            priorExperience: priorExperienceValue,
+          };
+          return Object.values(normalized).some(value => value != null) ? normalized : undefined;
+        })();
+        const rawCloud = (item as any).cloud;
+        const cloudState: LocalAccountCloudState | undefined = (() => {
+          if (!rawCloud || typeof rawCloud !== "object") {
+            return undefined;
+          }
+          const lastFullSyncAt = typeof rawCloud.lastFullSyncAt === "string" ? rawCloud.lastFullSyncAt : undefined;
+          const supabaseUserId = typeof rawCloud.supabaseUserId === "string" ? rawCloud.supabaseUserId : undefined;
+          if (!lastFullSyncAt && !supabaseUserId) {
+            return undefined;
+          }
+          return { lastFullSyncAt, supabaseUserId };
+        })();
+        const account: LocalAccountRecord = {
           profile,
           createdAt: createdAtValue,
-          storageMode: "local",
-        } as LocalAccountRecord;
+          storageMode,
+        };
+        if (demographics) {
+          account.demographics = demographics;
+        }
+        if (cloudState) {
+          account.cloud = cloudState;
+        }
+        return account;
       })
       .filter((account): account is LocalAccountRecord => account !== null);
   } catch {
@@ -265,6 +332,178 @@ function setActiveLocalAccount(account: LocalAccountRecord) {
   if (shouldPreventLocalWrite(storage, [account.profile.id])) return;
   ensurePlayerStored(account.profile, "local");
   storage.setItem(LOCAL_ACTIVE_ACCOUNT_KEY, account.profile.id);
+}
+
+function deriveAccountNameParts(profile: PlayerProfile): { firstName: string | null; lastInitial: string | null } {
+  const trimmed = profile.playerName.trim();
+  if (!trimmed) {
+    return { firstName: null, lastInitial: null };
+  }
+  const [first, ...rest] = trimmed.split(/\s+/);
+  const normalizedFirst = first?.trim() ?? "";
+  const remainder = rest.join(" ").replace(/\.+$/, "").trim();
+  const lastInitial = remainder ? remainder.charAt(0).toUpperCase() : null;
+  return {
+    firstName: normalizedFirst || null,
+    lastInitial,
+  };
+}
+
+function getAccountDemographics(account: LocalAccountRecord): LocalAccountDemographics {
+  const stored = account.demographics ?? {};
+  const nameParts = deriveAccountNameParts(account.profile);
+  const firstName = stored.firstName ?? nameParts.firstName ?? undefined;
+  const lastInitial = stored.lastInitial ?? nameParts.lastInitial ?? undefined;
+  const grade = stored.grade ?? account.profile.grade ?? undefined;
+  const age = stored.age ?? (account.profile.age != null ? String(account.profile.age) : undefined);
+  const school = stored.school ?? account.profile.school ?? undefined;
+  const priorExperience = stored.priorExperience ?? account.profile.priorExperience ?? undefined;
+  return {
+    firstName,
+    lastInitial,
+    grade,
+    age,
+    school,
+    priorExperience,
+  };
+}
+
+function buildMigrationSnapshotForAccount(account: LocalAccountRecord): MigrationSnapshot {
+  const scope: StorageScope = "local";
+  const playerId = account.profile.id;
+  const rawStatsProfiles = readScopedStorageArray<any>(scope, STATS_PROFILES_KEY);
+  const sanitizedStats = loadStoredStatsProfiles(scope);
+  const sanitizedMap = new Map(sanitizedStats.map(snapshot => [snapshot.id, snapshot]));
+  const statsProfiles = rawStatsProfiles
+    .map(item => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const id = typeof (item as { id?: unknown }).id === "string" ? (item as { id: string }).id : null;
+      const ownerId = (() => {
+        if (typeof (item as { user_id?: unknown }).user_id === "string") {
+          return (item as { user_id: string }).user_id;
+        }
+        if (typeof (item as { playerId?: unknown }).playerId === "string") {
+          return (item as { playerId: string }).playerId;
+        }
+        return null;
+      })();
+      if (!id || ownerId !== playerId) {
+        return null;
+      }
+      const snapshot = sanitizedMap.get(id);
+      const baseNameCandidate =
+        typeof (item as { base_name?: unknown }).base_name === "string"
+          ? ((item as { base_name: string }).base_name || "").trim()
+          : null;
+      const displayNameCandidate =
+        typeof (item as { display_name?: unknown }).display_name === "string"
+          ? ((item as { display_name: string }).display_name || "").trim()
+          : null;
+      const baseName = baseNameCandidate || displayNameCandidate || "Primary";
+      const displayName = displayNameCandidate || baseName;
+      const updatedAt =
+        typeof (item as { updated_at?: unknown }).updated_at === "string"
+          ? (item as { updated_at: string }).updated_at
+          : new Date().toISOString();
+      const createdAt =
+        typeof (item as { created_at?: unknown }).created_at === "string"
+          ? (item as { created_at: string }).created_at
+          : updatedAt;
+      const trainingCount = (() => {
+        if (Number.isFinite((item as { training_count?: unknown }).training_count)) {
+          return Number((item as { training_count: number }).training_count);
+        }
+        return snapshot?.trainingCount ?? 0;
+      })();
+      const trainingCompleted = (() => {
+        if (typeof (item as { training_completed?: unknown }).training_completed === "boolean") {
+          return (item as { training_completed: boolean }).training_completed;
+        }
+        return snapshot?.trained ?? false;
+      })();
+      const profileVersionRaw = (item as { profile_version?: unknown }).profile_version;
+      const profileVersion = Number.isFinite(profileVersionRaw)
+        ? Math.max(1, Math.floor(profileVersionRaw as number))
+        : 1;
+      const versionRaw = (item as { version?: unknown }).version;
+      const version = Number.isFinite(versionRaw) ? Math.max(1, Math.floor(versionRaw as number)) : 1;
+      const previousProfileId =
+        typeof (item as { previous_profile_id?: unknown }).previous_profile_id === "string"
+          ? (item as { previous_profile_id: string }).previous_profile_id
+          : null;
+      const nextProfileId =
+        typeof (item as { next_profile_id?: unknown }).next_profile_id === "string"
+          ? (item as { next_profile_id: string }).next_profile_id
+          : null;
+      const predictorDefault = Boolean((item as { predictor_default?: unknown }).predictor_default);
+      const seenCta = Boolean((item as { seen_post_training_cta?: unknown }).seen_post_training_cta);
+      const archived = Boolean((item as { archived?: unknown }).archived);
+      const metadata =
+        (item as { metadata?: unknown }).metadata && typeof (item as { metadata: unknown }).metadata === "object"
+          ? ((item as { metadata: Json }).metadata ?? {})
+          : {};
+      const profile: StatsProfile = {
+        id,
+        user_id: playerId,
+        demographics_profile_id: playerId,
+        base_name: baseName,
+        profile_version: profileVersion,
+        display_name: displayName,
+        training_count: trainingCount,
+        training_completed: trainingCompleted,
+        predictor_default: predictorDefault,
+        seen_post_training_cta: seenCta,
+        previous_profile_id: previousProfileId,
+        next_profile_id: nextProfileId,
+        archived,
+        metadata,
+        created_at: createdAt,
+        updated_at: updatedAt,
+        version,
+      };
+      return profile;
+    })
+    .filter((profile): profile is StatsProfile => profile !== null);
+  if (statsProfiles.length === 0) {
+    const timestamp = new Date().toISOString();
+    statsProfiles.push({
+      id: `${playerId}-primary`,
+      user_id: playerId,
+      demographics_profile_id: playerId,
+      base_name: "Primary",
+      profile_version: 1,
+      display_name: account.profile.playerName || "Primary",
+      training_count: 0,
+      training_completed: false,
+      predictor_default: true,
+      seen_post_training_cta: false,
+      previous_profile_id: null,
+      next_profile_id: null,
+      archived: false,
+      metadata: {},
+      created_at: timestamp,
+      updated_at: timestamp,
+      version: 1,
+    });
+  }
+  const rounds = readScopedStorageArray<RoundLog>(scope, STATS_ROUNDS_KEY)
+    .filter(round => round && typeof round === "object" && (round as RoundLog).playerId === playerId)
+    .map(round => ({ ...(round as RoundLog) }));
+  const matches = readScopedStorageArray<MatchSummary>(scope, STATS_MATCHES_KEY)
+    .filter(match => match && typeof match === "object" && (match as MatchSummary).playerId === playerId)
+    .map(match => ({ ...(match as MatchSummary) }));
+  const modelStates = loadStoredModelStates(scope)
+    .filter(state => state && typeof state === "object" && (state as StoredPredictorModelState).profileId)
+    .map(state => ({ ...(state as StoredPredictorModelState) }));
+  return {
+    playerProfile: { ...account.profile },
+    statsProfiles,
+    rounds,
+    matches,
+    modelStates,
+  };
 }
 
 function loadActiveLocalSession(): LocalSession | null {
@@ -1206,13 +1445,120 @@ export default function Welcome(): JSX.Element {
       setLocalHydrationError(null);
       try {
         const accounts = refreshLocalAccounts();
-        const account = accounts.find(candidate => candidate.profile.id === profileId);
-        if (!account) {
+        const accountIndex = accounts.findIndex(candidate => candidate.profile.id === profileId);
+        if (accountIndex < 0) {
           throw new Error("We couldn't find that profile on this device.");
         }
+        let account = accounts[accountIndex];
         setActiveLocalAccount(account);
         setLocalSession({ profile: account.profile });
         setSelectedLocalProfileId(account.profile.id);
+        const demographics = getAccountDemographics(account);
+        const attemptCloudSync = async () => {
+          if (!supabaseReady) {
+            return false;
+          }
+          const payload = {
+            localProfileId: account.profile.id,
+            firstName: demographics.firstName,
+            lastInitial: demographics.lastInitial,
+            grade: demographics.grade ?? account.profile.grade,
+            age: demographics.age ?? (account.profile.age != null ? String(account.profile.age) : undefined),
+            school: demographics.school,
+            priorExperience: demographics.priorExperience,
+            appMetadata: {
+              storage_mode: account.storageMode,
+              local_created_at: account.createdAt,
+            },
+          } satisfies AutoLocalAuthPayload;
+          const response = await autoLocalAuth(payload);
+          if (response.error || !response.data) {
+            throw new Error(response.error ?? response.data?.message ?? "Unable to connect to cloud services.");
+          }
+          if (!response.data.session) {
+            throw new Error("Cloud session was not returned by the server.");
+          }
+          const nextSession = await setEdgeSession(response.data.session);
+          if (!nextSession) {
+            throw new Error("Unable to establish Supabase session.");
+          }
+          const supabaseUserId = nextSession.user?.id ?? undefined;
+          let updatedAccount: LocalAccountRecord = {
+            ...account,
+            storageMode: "cloud",
+            cloud: {
+              ...account.cloud,
+              supabaseUserId: supabaseUserId ?? account.cloud?.supabaseUserId,
+              lastFullSyncAt: account.cloud?.lastFullSyncAt,
+            },
+            demographics: {
+              firstName: demographics.firstName,
+              lastInitial: demographics.lastInitial,
+              grade: demographics.grade ?? account.profile.grade,
+              age: demographics.age ?? (account.profile.age != null ? String(account.profile.age) : undefined),
+              school: demographics.school ?? account.profile.school ?? undefined,
+              priorExperience: demographics.priorExperience ?? account.profile.priorExperience ?? undefined,
+            },
+          };
+          if (!updatedAccount.cloud?.lastFullSyncAt) {
+            const snapshot = buildMigrationSnapshotForAccount(updatedAccount);
+            try {
+              await syncSnapshotToCloudWithSession({ snapshot, session: nextSession });
+              updatedAccount = {
+                ...updatedAccount,
+                cloud: {
+                  ...updatedAccount.cloud,
+                  lastFullSyncAt: new Date().toISOString(),
+                  supabaseUserId: supabaseUserId ?? updatedAccount.cloud?.supabaseUserId,
+                },
+              };
+            } catch (syncError) {
+              console.warn("Failed to sync local data to cloud", syncError);
+            }
+          }
+          const nextAccounts = [...accounts];
+          nextAccounts[accountIndex] = updatedAccount;
+          saveLocalAccounts(nextAccounts);
+          setLocalAccounts(nextAccounts);
+          setActiveLocalAccount(updatedAccount);
+          account = updatedAccount;
+          const hydration = await hydrateCloudPlayerState(nextSession, {
+            firstName: updatedAccount.demographics?.firstName ?? undefined,
+            lastInitial: updatedAccount.demographics?.lastInitial ?? undefined,
+            grade: updatedAccount.demographics?.grade ?? undefined,
+            age: updatedAccount.demographics?.age ?? undefined,
+            school: updatedAccount.demographics?.school ?? undefined,
+            priorExperience: updatedAccount.demographics?.priorExperience ?? undefined,
+          });
+          if (localHydrationAbortRef.current) {
+            return true;
+          }
+          setMode("cloud");
+          navigateToPostAuth(
+            "cloud",
+            hydration ? { playerId: hydration.playerId, statsProfiles: hydration.statsProfiles } : undefined,
+          );
+          return true;
+        };
+
+        let cloudSucceeded = false;
+        if (supabaseReady) {
+          try {
+            cloudSucceeded = await attemptCloudSync();
+          } catch (error) {
+            console.warn("Cloud bootstrap failed", error);
+            if (!localHydrationAbortRef.current) {
+              setLocalHydrationError(
+                error instanceof Error ? error.message : "We couldn't sync to the cloud. Continuing locally.",
+              );
+            }
+          }
+        }
+
+        if (cloudSucceeded || localHydrationAbortRef.current) {
+          return;
+        }
+
         setMode("local");
         await hydrateLocalProfileArtifacts(account.profile.id);
         if (localHydrationAbortRef.current) {
@@ -1229,7 +1575,7 @@ export default function Welcome(): JSX.Element {
         }
       }
     },
-    [navigateToPostAuth, refreshLocalAccounts, setMode],
+    [navigateToPostAuth, refreshLocalAccounts, setMode, supabaseReady],
   );
 
   const handleLocalSignUp = useCallback(
@@ -1261,10 +1607,19 @@ export default function Welcome(): JSX.Element {
       try {
         const accounts = loadLocalAccounts();
         const profile = buildPlayerProfileFromForm(localSignUpForm);
+        const demographics: LocalAccountDemographics = {
+          firstName: firstName.trim() || undefined,
+          lastInitial: lastInitial.trim().charAt(0).toUpperCase() || undefined,
+          grade: profile.grade,
+          age: profile.age != null ? String(profile.age) : undefined,
+          school: profile.school ?? undefined,
+          priorExperience: profile.priorExperience ?? undefined,
+        };
         const nextAccount: LocalAccountRecord = {
           profile,
           createdAt: new Date().toISOString(),
           storageMode: "local",
+          demographics,
         };
         const deduped = accounts.filter(candidate => candidate.profile.id !== profile.id).concat(nextAccount);
         saveLocalAccounts(deduped);

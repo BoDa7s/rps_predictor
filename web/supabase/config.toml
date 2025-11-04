@@ -11,3 +11,6 @@ verify_jwt = false
 
 [functions.auth_reset_password]
 verify_jwt = false
+
+[functions.auto_local_auth]
+verify_jwt = false

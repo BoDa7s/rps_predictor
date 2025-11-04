@@ -259,60 +259,32 @@ function prepareSnapshot(snapshot: MigrationSnapshot, userId: string) {
   };
 }
 
-export async function migrateLocalAccountToCloud(options: MigrationOptions): Promise<MigrationResult> {
+interface SnapshotUploadOptions {
+  snapshot: MigrationSnapshot;
+  session: Session;
+  userId: string;
+  onProgress?: (progress: MigrationProgressItem[]) => void;
+  resume?: Partial<Record<MigrationStepKey, number>>;
+}
+
+async function uploadSnapshotToCloud(options: SnapshotUploadOptions): Promise<MigrationResult> {
   const service = getService();
-  const { credentials, onProgress, resume } = options;
-  const playerProfile = options.snapshot.playerProfile;
-  const { firstName, lastInitial } = deriveNameSeed(playerProfile);
-  const consentTimestamp = playerProfile.consent?.timestamp ?? new Date().toISOString();
-
-  if (!credentials.username.trim()) {
-    throw new Error("Username is required.");
-  }
-  if (!credentials.password) {
-    throw new Error("Password is required.");
-  }
-
-  const totals: Record<MigrationStepKey, number> = computeMigrationTotals(options.snapshot);
+  const { snapshot, session, userId, onProgress, resume } = options;
+  const totals = computeMigrationTotals(snapshot);
   const completed: Partial<Record<MigrationStepKey, number>> = { ...resume };
-
-  let session: Session | null = null;
-  let userId: string | null = null;
 
   updateProgress("profile", totals, completed, onProgress);
 
   if ((completed.profile ?? 0) < totals.profile) {
-    const response = await signupThroughEdge({
-      firstName,
-      lastInitial: lastInitial ?? "",
-      grade: playerProfile.grade,
-      age: playerProfile.age != null ? String(playerProfile.age) : "",
-      username: credentials.username.trim(),
-      password: credentials.password,
-      school: playerProfile.school ?? undefined,
-      priorExperience: playerProfile.priorExperience ?? undefined,
-    });
-    if (!response.data || response.error) {
-      throw new Error(response.error ?? response.data?.message ?? "Unable to create cloud account.");
-    }
-    const tokens = response.data.session;
-    if (!tokens) {
-      throw new Error("Sign-up succeeded, but a session was not created.");
-    }
-    session = await setEdgeSession(tokens as EdgeSessionTokens);
-    if (!session) {
-      throw new Error("Unable to establish Supabase session after sign-up.");
-    }
-    userId = session.user?.id ?? response.data.user?.id ?? null;
-    if (!userId) {
-      throw new Error("Supabase session is missing a user id.");
-    }
+    const playerProfile = snapshot.playerProfile;
+    const { firstName, lastInitial } = deriveNameSeed(playerProfile);
+    const consentTimestamp = playerProfile.consent?.timestamp ?? new Date().toISOString();
     const normalizedProfile = cloneProfile(playerProfile);
     normalizedProfile.id = userId;
     normalizedProfile.playerName = (() => {
       if (firstName && lastInitial) return `${firstName} ${lastInitial}.`;
       if (firstName) return firstName;
-      return credentials.username.trim();
+      return playerProfile.playerName || "Player";
     })();
     normalizedProfile.consent = {
       agreed: true,
@@ -329,24 +301,9 @@ export async function migrateLocalAccountToCloud(options: MigrationOptions): Pro
     });
     completed.profile = 1;
     updateProgress("profile", totals, completed, onProgress);
-  } else {
-    const client = supabaseClient;
-    if (!client) {
-      throw new Error("Supabase client is not available to resume migration.");
-    }
-    const { data } = await client.auth.getSession();
-    session = data.session ?? null;
-    userId = session?.user?.id ?? null;
-    if (!session || !userId) {
-      throw new Error("Resume requested but Supabase session is not available.");
-    }
   }
 
-  if (!session || !userId) {
-    throw new Error("Supabase session could not be established.");
-  }
-
-  const prepared = prepareSnapshot(options.snapshot, userId);
+  const prepared = prepareSnapshot(snapshot, userId);
   totals.sessions = prepared.sessions.length;
   totals.statsProfiles = prepared.statsProfiles.length;
   totals.aiStates = prepared.modelStates.length;
@@ -500,4 +457,93 @@ export async function migrateLocalAccountToCloud(options: MigrationOptions): Pro
 
   const finalProgress = buildProgressSnapshot(totals, completed);
   return { session, userId, progress: finalProgress };
+}
+
+export async function migrateLocalAccountToCloud(options: MigrationOptions): Promise<MigrationResult> {
+  const { credentials, onProgress, resume } = options;
+  const playerProfile = options.snapshot.playerProfile;
+  const { firstName, lastInitial } = deriveNameSeed(playerProfile);
+  const resumeState = { ...resume };
+
+  if (!credentials.username.trim()) {
+    throw new Error("Username is required.");
+  }
+  if (!credentials.password) {
+    throw new Error("Password is required.");
+  }
+
+  let session: Session | null = null;
+  let userId: string | null = null;
+
+  const needsSignup = (resumeState.profile ?? 0) < 1;
+
+  if (needsSignup) {
+    const response = await signupThroughEdge({
+      firstName,
+      lastInitial: lastInitial ?? "",
+      grade: playerProfile.grade,
+      age: playerProfile.age != null ? String(playerProfile.age) : "",
+      username: credentials.username.trim(),
+      password: credentials.password,
+      school: playerProfile.school ?? undefined,
+      priorExperience: playerProfile.priorExperience ?? undefined,
+    });
+    if (!response.data || response.error) {
+      throw new Error(response.error ?? response.data?.message ?? "Unable to create cloud account.");
+    }
+    const tokens = response.data.session;
+    if (!tokens) {
+      throw new Error("Sign-up succeeded, but a session was not created.");
+    }
+    session = await setEdgeSession(tokens as EdgeSessionTokens);
+    if (!session) {
+      throw new Error("Unable to establish Supabase session after sign-up.");
+    }
+    userId = session.user?.id ?? response.data.user?.id ?? null;
+    if (!userId) {
+      throw new Error("Supabase session is missing a user id.");
+    }
+  } else {
+    const client = supabaseClient;
+    if (!client) {
+      throw new Error("Supabase client is not available to resume migration.");
+    }
+    const { data } = await client.auth.getSession();
+    session = data.session ?? null;
+    userId = session?.user?.id ?? null;
+    if (!session || !userId) {
+      throw new Error("Resume requested but Supabase session is not available.");
+    }
+  }
+
+  if (!session || !userId) {
+    throw new Error("Supabase session could not be established.");
+  }
+
+  return uploadSnapshotToCloud({
+    snapshot: options.snapshot,
+    session,
+    userId,
+    onProgress,
+    resume: resumeState,
+  });
+}
+
+export async function syncSnapshotToCloudWithSession(options: {
+  snapshot: MigrationSnapshot;
+  session: Session;
+  onProgress?: (progress: MigrationProgressItem[]) => void;
+  resume?: Partial<Record<MigrationStepKey, number>>;
+}): Promise<MigrationResult> {
+  const userId = options.session.user?.id;
+  if (!userId) {
+    throw new Error("Supabase session is missing a user id.");
+  }
+  return uploadSnapshotToCloud({
+    snapshot: options.snapshot,
+    session: options.session,
+    userId,
+    onProgress: options.onProgress,
+    resume: options.resume,
+  });
 }
