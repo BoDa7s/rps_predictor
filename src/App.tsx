@@ -2460,12 +2460,12 @@ function RPSDoodleAppInner(){
   const welcomeSlides = useMemo(
     () => [
       {
-        title: "Welcome to RPS AI Lab",
-        body: `You’ll train for ${TRAIN_ROUNDS} rounds, then choose a Mode: Challenge (Smarter AI prediction) or Practice (Experiment and learn).`,
+        title: "Welcome to Rock Paper Scissors AI Predictor!",
+        body: `You’ll train for ${TRAIN_ROUNDS} rounds, then unlock the Challenge mode where the AI plays against you trying to predict your moves.`,
       },
       {
-        title: "Your data",
-        body: "We collect gameplay for learning. Exports will include your data and demographics.",
+        title: "Your Data",
+        body: "We collect gameplay data for learning. Exports will include your data and demographics.",
       },
     ],
     [TRAIN_ROUNDS],
@@ -3824,24 +3824,24 @@ function RPSDoodleAppInner(){
     [setLive]
   );
 
-  const handleReboot = useCallback(() => {
-    setToastMessage("Confirm reboot? This will replay the welcome intro after the boot sequence.");
+  const handleLogOut = useCallback(() => {
+    setToastMessage("Confirm log out? This will log you out into the welcome screen after the boot sequence.");
     setToastConfirm({
-      confirmLabel: "Reboot now",
+      confirmLabel: "Log out now",
       cancelLabel: "Cancel",
       onConfirm: () => {
         setToastConfirm(null);
         setToastMessage(null);
         handleCloseSettings(false);
         openWelcome({
-          announce: "Rebooting. Boot sequence starting for the welcome intro.",
+          announce: "Logging out. Boot sequence starting for the welcome intro.",
           resetPlayer: true,
           bootFirst: true,
           origin: "launch",
         });
       },
     });
-    setLive("Reboot requested. Confirm via toast to restart.");
+    setLive("Log out requested. Confirm via toast to log out and reboot.");
   }, [handleCloseSettings, openWelcome, setLive, setToastConfirm, setToastMessage]);
 
   const handleCreateProfile = useCallback(() => {
@@ -4788,7 +4788,8 @@ function RPSDoodleAppInner(){
                 </button>
                 <button
                   type="button"
-                  className="rounded-full bg-sky-600 px-4 py-1.5 text-sm font-semibold text-white shadow hover:bg-sky-700"
+                  className="rounded-full bg-red-600 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-red-700 
+                                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-2"
                   onClick={() => {
                     toastConfirm.onConfirm();
                   }}
@@ -5296,9 +5297,9 @@ function RPSDoodleAppInner(){
                   ? "bg-white/50 text-slate-400 cursor-not-allowed"
                   : "bg-white/70 hover:bg-white text-sky-900")
               }
-              data-dev-label="hdr.modes"
+              data-dev-label="hdr.home"
             >
-              Modes
+              🏠 Home
             </button>
             <button
               ref={helpButtonRef}
@@ -5338,7 +5339,7 @@ function RPSDoodleAppInner(){
               aria-expanded={settingsOpen}
               data-dev-label="hdr.settings"
             >
-            Settings ⚙️
+            ⚙️ Settings
           </button>
           </div>
         </motion.div>
@@ -5697,16 +5698,17 @@ function RPSDoodleAppInner(){
                     </div>
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <div className="text-sm font-semibold text-slate-800">Reboot</div>
-                        <p className="text-xs text-slate-500">Restart with the boot animation and welcome intro.</p>
+                        <div className="text-sm font-semibold text-slate-800">Log out</div>
+                        <p className="text-xs text-slate-500">Log out and reboot into the welcome screen.</p>
                       </div>
                       <button
                         type="button"
-                        onClick={handleReboot}
-                        className="rounded-full bg-slate-900/90 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-slate-900"
-                        data-dev-label="set.reboot"
+                        onClick={handleLogOut}
+                        className="rounded-full bg-red-600 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-red-700 
+                                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-2"
+                        data-dev-label="set.logout"
                       >
-                        Reboot
+                        Log out
                       </button>
                     </div>
                   </div>
@@ -5888,8 +5890,8 @@ function RPSDoodleAppInner(){
                 <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 rounded-3xl bg-white/95 p-6 text-slate-700 shadow-2xl ring-1 ring-sky-100">
                   <div className="flex items-start justify-between gap-4">
                     <div className="space-y-1">
-                      <h2 className="text-xl font-semibold text-sky-800">Nice job—training complete!</h2>
-                      <p className="text-sm text-slate-600">You’re ready to play. Pick a mode:</p>
+                      <h2 className="text-xl font-semibold text-sky-800">Nice job! Training complete!</h2>
+                      <p className="text-sm text-slate-600">You’re ready to challenge the AI and play for points.</p>
                     </div>
                     <button
                       type="button"
@@ -5906,28 +5908,15 @@ function RPSDoodleAppInner(){
                   </div>
                   <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-slate-600">
                     <li>
-                      <span className="font-semibold text-slate-800">Practice</span> — Try strategies without points. No leaderboard scores here.
-                    </li>
-                    <li>
-                      <span className="font-semibold text-slate-800">Challenge</span> — Play for points. Your best scores go to the leaderboard.
+                      <span className="font-semibold text-slate-800">On Challenge,</span> Your best scores go to the leaderboard. Can you beat the high scores?
                     </li>
                   </ul>
                   <div className="flex flex-wrap gap-3 pt-2">
                     <button
                       type="button"
-                      className={`rounded-full px-4 py-2 text-sm font-semibold shadow transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500 ${
-                        predictorMode
-                          ? "bg-white text-sky-700 hover:bg-sky-50"
-                          : "bg-sky-600 text-white hover:bg-sky-700"
-                      }`}
-                      onClick={() => handleModeSelect("practice")}
-                    >
-                      Play Practice
-                    </button>
-                    <button
-                      type="button"
                       disabled={!predictorMode}
-                      className={`rounded-full px-4 py-2 text-sm font-semibold shadow transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500 ${
+                      className={`rounded-full px-4 py-2 text-sm font-semibold shadow transition focus-visible:outline focus-visible:outline-2 
+                        focus-visible:outline-offset-2 focus-visible:outline-sky-500 ${
                         predictorMode
                           ? "bg-sky-600 text-white hover:bg-sky-700"
                           : "cursor-not-allowed bg-slate-200 text-slate-400"
@@ -5942,13 +5931,17 @@ function RPSDoodleAppInner(){
                   </div>
                   {!predictorMode && (
                     <p className="text-xs font-medium text-amber-600">
-                      Enable AI to play Challenge (Settings → AI predictor).
-                      <button
-                        type="button"
-                        className="ml-2 font-semibold text-sky-600 underline decoration-dotted underline-offset-2 transition hover:text-sky-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
-                        onClick={handleEnablePredictorForChallenge}
-                      >
-                        Enable AI
+                        Enable AI to play Challenge. Open{" "}
+                        <span className="rounded bg-slate-100 px-1">Settings</span>
+                        <span className="px-1" aria-hidden="true" role="presentation">›</span>
+                        <span className="rounded bg-slate-100 px-1">AI Predictor</span>.
+                        <button
+                          type="button"
+                          className="ml-2 font-semibold text-sky-600 underline decoration-dotted underline-offset-2 transition hover:text-sky-700 
+                          focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
+                          onClick={handleEnablePredictorForChallenge}
+                        >
+                          Enable AI now
                       </button>
                     </p>
                   )}
@@ -6068,7 +6061,7 @@ function RPSDoodleAppInner(){
                       </span>
                       <span className="leading-none">
                         {needsTraining || trainingActive
-                          ? "TRAINIGN  PHASE"
+                          ? "TRAINING PHASE"
                           : `${modeLabel(activeMatchMode)} Mode`}
                       </span>
                     </div>
@@ -6149,7 +6142,7 @@ function RPSDoodleAppInner(){
                             )}
                           </div>
                           <span
-                            className={`inline-flex items-center justify-center rounded-full px-4 py-1 text-xs font-semibold uppercase tracking-wide ${
+                            className={`inline-flex items-center justify-center rounded-full px-5 py-2 text-xs font-bold uppercase tracking-widest ring-2 ring-current shadow-lg ${
                               (phase === "resolve" || phase === "feedback") && outcome
                                 ? outcome === "win"
                                   ? "bg-emerald-100 text-emerald-700"
@@ -6161,11 +6154,11 @@ function RPSDoodleAppInner(){
                           >
                             {(phase === "resolve" || phase === "feedback") && outcome
                               ? outcome === "win"
-                                ? "WIN"
+                                ? "YOU WON"
                                 : outcome === "lose"
-                                  ? "LOSS"
-                                  : "TIE"
-                              : "READY"}
+                                  ? "YOU LOST"
+                                  : "WE TIED"
+                              : "LEAD THE ROUND"}
                           </span>
                           <div className="flex items-center gap-6 text-2xl font-semibold text-slate-900 sm:gap-8">
                             <div className="flex flex-col items-center gap-1 text-base font-normal text-slate-500">
@@ -6432,10 +6425,11 @@ function RPSDoodleAppInner(){
                 </button>
                 <button
                   type="button"
-                  className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow hover:bg-slate-50"
+                  className="rounded-full bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-red-700 
+                            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
                   onClick={() => goToMode()}
                 >
-                  Change Mode
+                  Exit Match
                 </button>
                 <button
                   type="button"
