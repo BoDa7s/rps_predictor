@@ -887,31 +887,9 @@ const OUTCOME_CARD_STYLES: Record<
   Outcome,
   { border: string; badge: string; label: string }
 > = {
-  win: {
-    border: "border-emerald-300",
-    badge:
-      "inline-flex items-center gap-1 px-3 py-1.5 rounded-full " +
-      "bg-emerald-100 text-emerald-700 text-base md:text-lg " +
-      "font-extrabold uppercase tracking-wide ring-2 ring-emerald-300/70 shadow-sm",
-    label: "YOU WON",
-  },
-  lose: {
-    border: "border-rose-300",
-    badge:
-      "inline-flex items-center gap-1 px-3 py-1.5 rounded-full " +
-      "bg-rose-100 text-rose-700 text-base md:text-lg " +
-      "font-extrabold uppercase tracking-wide ring-2 ring-rose-300/70 shadow-sm " +
-      "animate-pulse", // remove if you don't want motion
-    label: "YOU LOST",
-  },
-  tie: {
-    border: "border-amber-300",
-    badge:
-      "inline-flex items-center gap-1 px-3 py-1.5 rounded-full " +
-      "bg-amber-100 text-amber-700 text-base md:text-lg " +
-      "font-extrabold uppercase tracking-wide ring-2 ring-amber-300/70 shadow-sm",
-    label: "WE TIED",
-  },
+  win: { border: "border-emerald-200", badge: "bg-emerald-100 text-emerald-700", label: "Win" },
+  lose: { border: "border-rose-200", badge: "bg-rose-100 text-rose-700", label: "Loss" },
+  tie: { border: "border-amber-200", badge: "bg-amber-100 text-amber-700", label: "Tie" },
 };
 
 function confidenceBucket(value: number): "low" | "medium" | "high" {
