@@ -887,9 +887,31 @@ const OUTCOME_CARD_STYLES: Record<
   Outcome,
   { border: string; badge: string; label: string }
 > = {
-  win: { border: "border-emerald-200", badge: "bg-emerald-100 text-emerald-700", label: "Win" },
-  lose: { border: "border-rose-200", badge: "bg-rose-100 text-rose-700", label: "Loss" },
-  tie: { border: "border-amber-200", badge: "bg-amber-100 text-amber-700", label: "Tie" },
+  win: {
+    border: "border-emerald-300",
+    badge:
+      "inline-flex items-center gap-1 px-3 py-1.5 rounded-full " +
+      "bg-emerald-100 text-emerald-700 text-base md:text-lg " +
+      "font-extrabold uppercase tracking-wide ring-2 ring-emerald-300/70 shadow-sm",
+    label: "YOU WON",
+  },
+  lose: {
+    border: "border-rose-300",
+    badge:
+      "inline-flex items-center gap-1 px-3 py-1.5 rounded-full " +
+      "bg-rose-100 text-rose-700 text-base md:text-lg " +
+      "font-extrabold uppercase tracking-wide ring-2 ring-rose-300/70 shadow-sm " +
+      "animate-pulse", // remove if you don't want motion
+    label: "YOU LOST",
+  },
+  tie: {
+    border: "border-amber-300",
+    badge:
+      "inline-flex items-center gap-1 px-3 py-1.5 rounded-full " +
+      "bg-amber-100 text-amber-700 text-base md:text-lg " +
+      "font-extrabold uppercase tracking-wide ring-2 ring-amber-300/70 shadow-sm",
+    label: "WE TIED",
+  },
 };
 
 function confidenceBucket(value: number): "low" | "medium" | "high" {
@@ -2460,12 +2482,12 @@ function RPSDoodleAppInner(){
   const welcomeSlides = useMemo(
     () => [
       {
-        title: "Welcome to RPS AI Lab",
-        body: `You’ll train for ${TRAIN_ROUNDS} rounds, then choose a Mode: Challenge (Smarter AI prediction) or Practice (Experiment and learn).`,
+        title: "Welcome to Rock Paper Scissors AI Predictor!",
+        body: `You’ll train for ${TRAIN_ROUNDS} rounds, then unlock the Challenge mode where the AI plays against you trying to predict your moves.`,
       },
       {
-        title: "Your data",
-        body: "We collect gameplay for learning. Exports will include your data and demographics.",
+        title: "Your Data",
+        body: "We collect gameplay data for learning. Exports will include your data and demographics.",
       },
     ],
     [TRAIN_ROUNDS],
@@ -5888,8 +5910,8 @@ function RPSDoodleAppInner(){
                 <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 rounded-3xl bg-white/95 p-6 text-slate-700 shadow-2xl ring-1 ring-sky-100">
                   <div className="flex items-start justify-between gap-4">
                     <div className="space-y-1">
-                      <h2 className="text-xl font-semibold text-sky-800">Nice job—training complete!</h2>
-                      <p className="text-sm text-slate-600">You’re ready to play. Pick a mode:</p>
+                      <h2 className="text-xl font-semibold text-sky-800">Nice job! Training complete!</h2>
+                      <p className="text-sm text-slate-600">You’re ready to challenge the AI and play for points.</p>
                     </div>
                     <button
                       type="button"
@@ -5909,7 +5931,7 @@ function RPSDoodleAppInner(){
                       <span className="font-semibold text-slate-800">Practice</span> — Try strategies without points. No leaderboard scores here.
                     </li>
                     <li>
-                      <span className="font-semibold text-slate-800">Challenge</span> — Play for points. Your best scores go to the leaderboard.
+                      <span className="font-semibold text-slate-800">Challenge</span> — Your best scores go to the leaderboard. Can you beat the high scores?
                     </li>
                   </ul>
                   <div className="flex flex-wrap gap-3 pt-2">
@@ -6068,7 +6090,7 @@ function RPSDoodleAppInner(){
                       </span>
                       <span className="leading-none">
                         {needsTraining || trainingActive
-                          ? "TRAINIGN  PHASE"
+                          ? "TRAINING PHASE"
                           : `${modeLabel(activeMatchMode)} Mode`}
                       </span>
                     </div>
