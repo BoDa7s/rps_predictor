@@ -5297,9 +5297,9 @@ function RPSDoodleAppInner(){
                   ? "bg-white/50 text-slate-400 cursor-not-allowed"
                   : "bg-white/70 hover:bg-white text-sky-900")
               }
-              data-dev-label="hdr.modes"
+              data-dev-label="hdr.home"
             >
-              Modes
+              🏠 Home
             </button>
             <button
               ref={helpButtonRef}
@@ -5339,7 +5339,7 @@ function RPSDoodleAppInner(){
               aria-expanded={settingsOpen}
               data-dev-label="hdr.settings"
             >
-            Settings ⚙️
+            ⚙️ Settings
           </button>
           </div>
         </motion.div>
