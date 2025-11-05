@@ -6149,7 +6149,7 @@ function RPSDoodleAppInner(){
                             )}
                           </div>
                           <span
-                            className={`inline-flex items-center justify-center rounded-full px-4 py-1 text-xs font-semibold uppercase tracking-wide ${
+                            className={`inline-flex items-center justify-center rounded-full px-5 py-2 text-xs font-bold uppercase tracking-widest ring-2 ring-current shadow-lg ${
                               (phase === "resolve" || phase === "feedback") && outcome
                                 ? outcome === "win"
                                   ? "bg-emerald-100 text-emerald-700"
@@ -6161,11 +6161,11 @@ function RPSDoodleAppInner(){
                           >
                             {(phase === "resolve" || phase === "feedback") && outcome
                               ? outcome === "win"
-                                ? "WIN"
+                                ? "YOU WON"
                                 : outcome === "lose"
-                                  ? "LOSS"
-                                  : "TIE"
-                              : "READY"}
+                                  ? "YOU LOST"
+                                  : "WE TIED"
+                              : "LEAD THE ROUND"}
                           </span>
                           <div className="flex items-center gap-6 text-2xl font-semibold text-slate-900 sm:gap-8">
                             <div className="flex flex-col items-center gap-1 text-base font-normal text-slate-500">
