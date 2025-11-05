@@ -5908,28 +5908,15 @@ function RPSDoodleAppInner(){
                   </div>
                   <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-slate-600">
                     <li>
-                      <span className="font-semibold text-slate-800">Practice</span> — Try strategies without points. No leaderboard scores here.
-                    </li>
-                    <li>
-                      <span className="font-semibold text-slate-800">Challenge</span> — Your best scores go to the leaderboard. Can you beat the high scores?
+                      <span className="font-semibold text-slate-800">On Challenge,</span> Your best scores go to the leaderboard. Can you beat the high scores?
                     </li>
                   </ul>
                   <div className="flex flex-wrap gap-3 pt-2">
                     <button
                       type="button"
-                      className={`rounded-full px-4 py-2 text-sm font-semibold shadow transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500 ${
-                        predictorMode
-                          ? "bg-white text-sky-700 hover:bg-sky-50"
-                          : "bg-sky-600 text-white hover:bg-sky-700"
-                      }`}
-                      onClick={() => handleModeSelect("practice")}
-                    >
-                      Play Practice
-                    </button>
-                    <button
-                      type="button"
                       disabled={!predictorMode}
-                      className={`rounded-full px-4 py-2 text-sm font-semibold shadow transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500 ${
+                      className={`rounded-full px-4 py-2 text-sm font-semibold shadow transition focus-visible:outline focus-visible:outline-2 
+                        focus-visible:outline-offset-2 focus-visible:outline-sky-500 ${
                         predictorMode
                           ? "bg-sky-600 text-white hover:bg-sky-700"
                           : "cursor-not-allowed bg-slate-200 text-slate-400"
@@ -5944,13 +5931,17 @@ function RPSDoodleAppInner(){
                   </div>
                   {!predictorMode && (
                     <p className="text-xs font-medium text-amber-600">
-                      Enable AI to play Challenge (Settings → AI predictor).
-                      <button
-                        type="button"
-                        className="ml-2 font-semibold text-sky-600 underline decoration-dotted underline-offset-2 transition hover:text-sky-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
-                        onClick={handleEnablePredictorForChallenge}
-                      >
-                        Enable AI
+                        Enable AI to play Challenge. Open{" "}
+                        <span className="rounded bg-slate-100 px-1">Settings</span>
+                        <span className="px-1" aria-hidden="true" role="presentation">›</span>
+                        <span className="rounded bg-slate-100 px-1">AI Predictor</span>.
+                        <button
+                          type="button"
+                          className="ml-2 font-semibold text-sky-600 underline decoration-dotted underline-offset-2 transition hover:text-sky-700 
+                          focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
+                          onClick={handleEnablePredictorForChallenge}
+                        >
+                          Enable AI now
                       </button>
                     </p>
                   )}
