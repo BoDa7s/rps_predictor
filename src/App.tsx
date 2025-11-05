@@ -3824,24 +3824,24 @@ function RPSDoodleAppInner(){
     [setLive]
   );
 
-  const handleReboot = useCallback(() => {
-    setToastMessage("Confirm reboot? This will replay the welcome intro after the boot sequence.");
+  const handleLogOut = useCallback(() => {
+    setToastMessage("Confirm log out? This will log you out into the welcome screen after the boot sequence.");
     setToastConfirm({
-      confirmLabel: "Reboot now",
+      confirmLabel: "Log out now",
       cancelLabel: "Cancel",
       onConfirm: () => {
         setToastConfirm(null);
         setToastMessage(null);
         handleCloseSettings(false);
         openWelcome({
-          announce: "Rebooting. Boot sequence starting for the welcome intro.",
+          announce: "Logging out. Boot sequence starting for the welcome intro.",
           resetPlayer: true,
           bootFirst: true,
           origin: "launch",
         });
       },
     });
-    setLive("Reboot requested. Confirm via toast to restart.");
+    setLive("Log out requested. Confirm via toast to log out and reboot.");
   }, [handleCloseSettings, openWelcome, setLive, setToastConfirm, setToastMessage]);
 
   const handleCreateProfile = useCallback(() => {
@@ -4788,7 +4788,8 @@ function RPSDoodleAppInner(){
                 </button>
                 <button
                   type="button"
-                  className="rounded-full bg-sky-600 px-4 py-1.5 text-sm font-semibold text-white shadow hover:bg-sky-700"
+                  className="rounded-full bg-red-600 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-red-700 
+                                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-2"
                   onClick={() => {
                     toastConfirm.onConfirm();
                   }}
@@ -5697,16 +5698,17 @@ function RPSDoodleAppInner(){
                     </div>
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <div className="text-sm font-semibold text-slate-800">Reboot</div>
-                        <p className="text-xs text-slate-500">Restart with the boot animation and welcome intro.</p>
+                        <div className="text-sm font-semibold text-slate-800">Log out</div>
+                        <p className="text-xs text-slate-500">Log out and reboot into the welcome screen.</p>
                       </div>
                       <button
                         type="button"
-                        onClick={handleReboot}
-                        className="rounded-full bg-slate-900/90 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-slate-900"
-                        data-dev-label="set.reboot"
+                        onClick={handleLogOut}
+                        className="rounded-full bg-red-600 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-red-700 
+                                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-2"
+                        data-dev-label="set.logout"
                       >
-                        Reboot
+                        Log out
                       </button>
                     </div>
                   </div>
@@ -6432,10 +6434,11 @@ function RPSDoodleAppInner(){
                 </button>
                 <button
                   type="button"
-                  className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow hover:bg-slate-50"
+                  className="rounded-full bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-red-700 
+                            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
                   onClick={() => goToMode()}
                 >
-                  Change Mode
+                  Exit Match
                 </button>
                 <button
                   type="button"
