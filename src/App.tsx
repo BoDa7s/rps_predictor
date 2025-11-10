@@ -73,7 +73,8 @@ function mulberry32(a:number){
 
 // Types
 const MOVES: Move[] = ["rock", "paper", "scissors"];
-const MODES: Mode[] = ["challenge","practice"];
+const MODES: Mode[] = ["challenge", "practice"];
+const VISIBLE_MODE_OPTIONS: Mode[] = MODES.filter(mode => mode !== "practice");
 
 const DIFFICULTY_INFO: Record<AIMode, { label: string; helper: string }> = {
   fair: { label: "Fair", helper: "Gentle counterplay tuned for learning." },
@@ -2248,9 +2249,10 @@ function RPSDoodleAppInner(){
   useEffect(() => {
     if (!toastMessage) return;
     if (toastReaderOpen) return;
+    if (toastConfirm?.context === "logout") return;
     const id = window.setTimeout(() => setToastMessage(null), 4000);
     return () => window.clearTimeout(id);
-  }, [toastMessage, toastReaderOpen]);
+  }, [toastMessage, toastReaderOpen, toastConfirm]);
   useEffect(() => {
     if (!modernToast) return;
     if (modernToastTimeoutRef.current !== null) {
@@ -4861,11 +4863,18 @@ function RPSDoodleAppInner(){
       })()}
 
       {toastMessage && toastConfirm ? (
-        <div className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/50 px-4">
+        <div
+          className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/50 px-4"
+          onClick={() => {
+            setToastConfirm(null);
+            setToastMessage(null);
+          }}
+        >
           <div
             role="dialog"
             aria-modal="true"
             className="w-full max-w-sm rounded-2xl bg-white p-6 text-slate-800 shadow-2xl"
+            onClick={event => event.stopPropagation()}
           >
             <div className="space-y-4">
               <div className="text-base font-semibold text-slate-900">Confirm action</div>
@@ -6080,7 +6089,7 @@ function RPSDoodleAppInner(){
               <>
                 <motion.div layout className="text-4xl font-black text-sky-700">Choose Your Mode</motion.div>
                 <div className="mode-grid">
-                  {MODES.map(m => {
+                  {VISIBLE_MODE_OPTIONS.map(m => {
                     const isChallenge = m === "challenge";
                     const disabledBase = (isChallenge && needsTraining) || !hasConsented;
                     const challengeNeedsPredictor =
