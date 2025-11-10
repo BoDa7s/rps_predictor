@@ -25,6 +25,7 @@ import {
   normalizeMatchTimings,
   saveMatchTimings,
 } from "./matchTimings";
+import AboutModal from "./AboutModal";
 import LeaderboardModal from "./LeaderboardModal";
 import InsightPanel, { type LiveInsightSnapshot } from "./InsightPanel";
 import { computeMatchScore } from "./leaderboard";
@@ -1791,15 +1792,20 @@ function RPSDoodleAppInner(){
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastReaderOpen, setToastReaderOpen] = useState(false);
   const [toastConfirm, setToastConfirm] = useState<
-    { confirmLabel: string; cancelLabel?: string; onConfirm: () => void } | null
+    { confirmLabel: string; cancelLabel?: string; onConfirm: () => void; context?: "logout" } | null
   >(null);
+  const [logoutAutoExport, setLogoutAutoExport] = useState(false);
+  const logoutAutoExportRef = useRef(false);
   const [helpToast, setHelpToast] = useState<{ title: string; message: string } | null>(null);
   const [modernToast, setModernToast] = useState<ModernToast | null>(null);
   const modernToastTimeoutRef = useRef<number | null>(null);
   const [helpGuideOpen, setHelpGuideOpen] = useState(false);
   const helpButtonRef = useRef<HTMLButtonElement | null>(null);
+  const aboutButtonRef = useRef<HTMLButtonElement | null>(null);
   const [helpCenterOpen, setHelpCenterOpen] = useState(false);
-  const headerOverlayActive = statsOpen || leaderboardOpen || settingsOpen || helpCenterOpen;
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const headerOverlayActive =
+    statsOpen || leaderboardOpen || settingsOpen || helpCenterOpen || aboutOpen;
   const previousHeaderOverlayActiveRef = useRef(headerOverlayActive);
   const [helpActiveQuestionId, setHelpActiveQuestionId] = useState<string | null>(
     AI_FAQ_QUESTIONS[0]?.id ?? null,
@@ -2090,6 +2096,22 @@ function RPSDoodleAppInner(){
     openInsightPanel(null, { focus: false, persistPreference: false });
   }, [insightPanelOpen, insightPreferred, openInsightPanel, scene]);
 
+  const handleCloseAbout = useCallback(() => {
+    setAboutOpen(false);
+    setLive("About closed.");
+    if (typeof window !== "undefined") {
+      requestAnimationFrame(() => {
+        aboutButtonRef.current?.focus();
+      });
+    }
+  }, [setLive]);
+
+  const handleOpenAbout = useCallback(() => {
+    suspendInsightPanelForHeader();
+    setAboutOpen(true);
+    setLive("About opened. Press Escape to close.");
+  }, [setLive, suspendInsightPanelForHeader]);
+
   useEffect(() => {
     const wasActive = previousHeaderOverlayActiveRef.current;
     if (headerOverlayActive && !wasActive) {
@@ -2254,6 +2276,14 @@ function RPSDoodleAppInner(){
     if (toastMessage) return;
     setToastConfirm(null);
   }, [toastMessage]);
+  useEffect(() => {
+    logoutAutoExportRef.current = logoutAutoExport;
+  }, [logoutAutoExport]);
+  useEffect(() => {
+    if (!toastConfirm || toastConfirm.context !== "logout") {
+      setLogoutAutoExport(false);
+    }
+  }, [toastConfirm]);
   useEffect(() => {
     if (!toastReaderOpen) return;
     requestAnimationFrame(() => toastReaderCloseRef.current?.focus());
@@ -3861,14 +3891,36 @@ function RPSDoodleAppInner(){
     [setLive]
   );
 
+  const performCsvExport = useCallback(() => {
+    if (!currentPlayer || !currentProfile || !hasExportData) return;
+    const data = exportRoundsCsv();
+    const blob = new Blob([data], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const profileSegment = sanitizeForFile(currentProfile.name || "profile") || "profile";
+    a.download = `rps-${profileSegment}-rounds.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    const label = currentProfile.name ? ` for ${currentProfile.name}` : "";
+    setToastMessage(`CSV export ready${label}. Check your downloads.`);
+    setLive(`Rounds exported as CSV${label}. Download starting.`);
+  }, [currentPlayer, currentProfile, exportRoundsCsv, hasExportData, sanitizeForFile, setLive, setToastMessage]);
+
   const handleLogOut = useCallback(() => {
+    setLogoutAutoExport(false);
+    logoutAutoExportRef.current = false;
     setToastMessage("Confirm log out? This will log you out into the welcome screen after the boot sequence.");
     setToastConfirm({
       confirmLabel: "Log out now",
       cancelLabel: "Cancel",
+      context: "logout",
       onConfirm: () => {
         setToastConfirm(null);
         setToastMessage(null);
+        if (logoutAutoExportRef.current && canExportData) {
+          performCsvExport();
+        }
         handleCloseSettings(false);
         openWelcome({
           announce: "Logging out. Boot sequence starting for the welcome intro.",
@@ -3879,7 +3931,16 @@ function RPSDoodleAppInner(){
       },
     });
     setLive("Log out requested. Confirm via toast to log out and reboot.");
-  }, [handleCloseSettings, openWelcome, setLive, setToastConfirm, setToastMessage]);
+  }, [
+    canExportData,
+    handleCloseSettings,
+    logoutAutoExportRef,
+    openWelcome,
+    performCsvExport,
+    setLive,
+    setToastConfirm,
+    setToastMessage,
+  ]);
 
   const handleCreateProfile = useCallback(() => {
     if (settingsOpen) {
@@ -3909,22 +3970,6 @@ function RPSDoodleAppInner(){
     setToastMessage(message);
     setLive(`New statistics profile created: ${created.name}. Training starts now (${TRAIN_ROUNDS} rounds). Previous results remain available in Statistics.`);
   }, [createStatsProfile, setToastMessage, setLive, TRAIN_ROUNDS]);
-
-  const performCsvExport = useCallback(() => {
-    if (!currentPlayer || !currentProfile || !hasExportData) return;
-    const data = exportRoundsCsv();
-    const blob = new Blob([data], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    const profileSegment = sanitizeForFile(currentProfile.name || "profile") || "profile";
-    a.download = `rps-${profileSegment}-rounds.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    const label = currentProfile.name ? ` for ${currentProfile.name}` : "";
-    setToastMessage(`CSV export ready${label}. Check your downloads.`);
-    setLive(`Rounds exported as CSV${label}. Download starting.`);
-  }, [currentPlayer, currentProfile, exportRoundsCsv, hasExportData, sanitizeForFile, setLive, setToastMessage]);
 
   const closeExportDialog = useCallback(
     (announce?: string) => {
@@ -4825,6 +4870,31 @@ function RPSDoodleAppInner(){
             <div className="space-y-4">
               <div className="text-base font-semibold text-slate-900">Confirm action</div>
               <p className="text-sm text-slate-600">{toastMessage}</p>
+              {toastConfirm.context === "logout" && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-sm text-slate-600">
+                  <label className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+                      checked={logoutAutoExport}
+                      onChange={event => setLogoutAutoExport(event.target.checked)}
+                      disabled={!canExportData}
+                      data-dev-label="logout.autoExport"
+                    />
+                    <span className="leading-snug">
+                      Auto-export my match data before logging out.
+                      {!canExportData && (
+                        <>
+                          <br />
+                          <span className="text-xs text-slate-500">
+                            No exportable data yet — play a match to enable this option.
+                          </span>
+                        </>
+                      )}
+                    </span>
+                  </label>
+                </div>
+              )}
               <div className="flex justify-end gap-3">
                 <button
                   type="button"
@@ -5277,11 +5347,12 @@ function RPSDoodleAppInner(){
                 setStatsOpen(true);
               }}
               disabled={postTrainingLockActive}
-              className={`px-3 py-1.5 rounded-xl shadow text-sm ${
+              className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl shadow text-sm ${
                 postTrainingLockActive ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900"
               }`}
               data-dev-label="hdr.stats"
             >
+              <span aria-hidden className="text-base leading-none">📊</span>
               Statistics
             </button>
             <button
@@ -5303,7 +5374,8 @@ function RPSDoodleAppInner(){
               title={!hasConsented ? "Select a player to continue." : postTrainingLockActive ? "Choose a mode or dismiss the banner first." : undefined}
               data-dev-label="hdr.leaderboard"
             >
-              Leaderboard
+              <span aria-hidden className="text-base leading-none">🏆</span>
+              <span>Leaderboard</span>
               {showLeaderboardHeaderBadge && (
                 <span
                   className="inline-flex items-center gap-1 rounded-full bg-slate-900/90 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-[0.22em] text-white shadow"
@@ -5373,6 +5445,26 @@ function RPSDoodleAppInner(){
             >
               <span aria-hidden className="text-base leading-none">ℹ️</span>
               Help
+            </button>
+            <button
+              ref={aboutButtonRef}
+              type="button"
+              onClick={() => {
+                if (aboutOpen) {
+                  handleCloseAbout();
+                } else {
+                  handleOpenAbout();
+                }
+              }}
+              className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl shadow text-sm transition ${
+                aboutOpen ? "bg-sky-600 text-white" : "bg-white/70 hover:bg-white text-sky-900"
+              }`}
+              aria-haspopup="dialog"
+              aria-expanded={aboutOpen}
+              data-dev-label="hdr.about"
+            >
+              <span aria-hidden className="text-base leading-none">📘</span>
+              About
             </button>
             <button
               ref={settingsButtonRef}
@@ -6469,7 +6561,7 @@ function RPSDoodleAppInner(){
                 </button>
                 <button
                   type="button"
-                  className="rounded-full bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-red-700 
+                  className="rounded-full bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-red-700
                             focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
                   onClick={() => goToMode()}
                 >
@@ -6485,6 +6577,44 @@ function RPSDoodleAppInner(){
                   View Leaderboard
                 </button>
               </div>
+              <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                <label className="flex flex-col gap-1">
+                  <span className="font-semibold text-slate-800">Change Best Of</span>
+                  <select
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-inner"
+                    value={bestOf}
+                    onChange={event => setBestOf(Number(event.target.value) as BestOf)}
+                    data-dev-label="results.bestOf"
+                  >
+                    {BEST_OF_OPTIONS.map(option => (
+                      <option key={option} value={option}>
+                        Best of {option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="flex flex-col gap-1">
+                  <span className="font-semibold text-slate-800">AI Difficulty</span>
+                  <select
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-inner disabled:cursor-not-allowed disabled:bg-slate-100"
+                    value={aiMode}
+                    onChange={event => setAiMode(event.target.value as AIMode)}
+                    disabled={difficultyDisabled}
+                    data-dev-label="results.difficulty"
+                  >
+                    {DIFFICULTY_SEQUENCE.map(level => (
+                      <option key={level} value={level}>
+                        {DIFFICULTY_INFO[level].label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className={`text-xs ${difficultyDisabled ? "text-amber-600" : "text-slate-500"}`}>
+                    {difficultyDisabled
+                      ? "Enable the AI predictor to adjust difficulty."
+                      : DIFFICULTY_INFO[aiMode].helper}
+                  </p>
+                </div>
+              </div>
               <div className="pointer-events-none absolute -top-10 right-6">
                 <Confetti />
               </div>
@@ -6498,6 +6628,10 @@ function RPSDoodleAppInner(){
 
       {/* Calibration modal */}
       {/* Calibration modal removed */}
+
+      <AnimatePresence>
+        {aboutOpen && <AboutModal open={aboutOpen} onClose={handleCloseAbout} />}
+      </AnimatePresence>
 
       <AnimatePresence>
         {leaderboardOpen && (
