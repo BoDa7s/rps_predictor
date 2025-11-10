@@ -783,7 +783,6 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       "playerId",
       "playerName",
       "grade",
-      "age",
       "school",
       "priorExperience",
       "profileName",
@@ -803,7 +802,6 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     const lines = [headers.join(",")];
     const playerName = currentPlayer?.playerName ?? "";
     const grade = currentPlayer?.grade ?? "";
-    const age = currentPlayer?.age != null ? currentPlayer.age : "";
     const school = currentPlayer?.school ?? "";
     const prior = currentPlayer?.priorExperience ?? "";
     const profileName = currentProfile?.name ?? "";
@@ -812,7 +810,6 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         r.playerId,
         JSON.stringify(playerName),
         grade,
-        age,
         JSON.stringify(school ?? ""),
         JSON.stringify(prior ?? ""),
         JSON.stringify(profileName),

@@ -16,7 +16,6 @@ export type Grade =
   | "12"
   | "Not applicable";
 
-export type Age = number;
 export interface PlayerConsent {
   agreed: boolean;
   timestamp?: string; // ISO
@@ -27,7 +26,6 @@ export interface PlayerProfile {
   id: string; // uuid-like
   playerName: string;
   grade: Grade;
-  age: Age | null;
   school?: string;
   priorExperience?: string; // free text or simple flag
   consent: PlayerConsent;
@@ -59,18 +57,6 @@ function isGrade(value: unknown): value is Grade {
   return typeof value === "string" && GRADE_OPTIONS.includes(value as Grade);
 }
 
-export function sanitizeAge(value: unknown): Age | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const rounded = Math.round(value);
-    if (rounded >= 5 && rounded <= 100) return rounded;
-  }
-  if (typeof value === "string" && value.trim() !== "") {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed) && parsed >= 5 && parsed <= 100) return parsed;
-  }
-  return null;
-}
-
 function normalizeConsent(value: any): PlayerConsent {
   const timestamp = value && typeof value.timestamp === "string" ? value.timestamp : undefined;
   const version = value && typeof value.consentTextVersion === "string" ? value.consentTextVersion : CONSENT_TEXT_VERSION;
@@ -90,20 +76,17 @@ function normalizePlayer(raw: any): PlayerProfile | null {
 
   const gradeFromValue = isGrade(raw.grade) ? raw.grade : undefined;
   const grade = gradeFromValue ?? "Not applicable";
-
-  const age = sanitizeAge(raw.age);
   const school = typeof raw.school === "string" ? raw.school : undefined;
   const priorExperience = typeof raw.priorExperience === "string" ? raw.priorExperience : undefined;
   const consent = normalizeConsent(raw.consent);
 
   const hadLegacyBand = typeof raw.gradeBand === "string" || typeof raw.ageBand === "string";
-  const needsReview = Boolean(raw.needsReview) || hadLegacyBand || !gradeFromValue || age === null;
+  const needsReview = Boolean(raw.needsReview) || hadLegacyBand || !gradeFromValue;
 
   return {
     id,
     playerName: normalizedName,
     grade,
-    age,
     school,
     priorExperience,
     consent,

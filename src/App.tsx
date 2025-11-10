@@ -85,6 +85,7 @@ const BEST_OF_OPTIONS: BestOf[] = [3, 5, 7];
 const LEGACY_WELCOME_SEEN_KEY = "rps_welcome_seen_v1";
 const WELCOME_PREF_KEY = "rps_welcome_pref_v1";
 const INSIGHT_PANEL_STATE_KEY = "rps_insight_panel_open_v1";
+const SCENE_STORAGE_KEY = "rps_last_scene_v1";
 type WelcomePreference = "show" | "skip";
 
 type RobotVariant = "idle" | "happy" | "meh" | "sad";
@@ -97,6 +98,8 @@ type ModernToast = {
   title: string;
   message: string;
 };
+
+type Scene = "WELCOME" | "BOOT" | "MODE" | "MATCH" | "RESULTS";
 
 const MODERN_TOAST_BASE_CLASSES =
   "pointer-events-auto flex w-[min(22rem,calc(100vw-2rem))] items-start gap-3 rounded-2xl px-4 py-3 text-sm text-slate-700 shadow-2xl";
@@ -301,6 +304,19 @@ function getInitialWelcomePreference(): WelcomePreference {
     /* noop */
   }
   return "show";
+}
+
+function getInitialScene(): Scene {
+  if (typeof window === "undefined") return "BOOT";
+  try {
+    const stored = window.sessionStorage.getItem(SCENE_STORAGE_KEY);
+    if (stored === "WELCOME" || stored === "MODE" || stored === "MATCH" || stored === "RESULTS") {
+      return stored;
+    }
+  } catch {
+    /* noop */
+  }
+  return "BOOT";
 }
 
 // ---- Core game logic (pure) ----
@@ -1504,9 +1520,13 @@ function RPSDoodleAppInner(){
     initialWelcomePreferenceRef.current = getInitialWelcomePreference();
   }
   const initialWelcomePreference = initialWelcomePreferenceRef.current;
-  const [welcomePreference, setWelcomePreference] = useState<WelcomePreference>(initialWelcomePreference);
+  const initialSceneRef = useRef<Scene | null>(null);
+  if (initialSceneRef.current === null) {
+    initialSceneRef.current = getInitialScene();
+  }
+  const initialScene = initialSceneRef.current;
   const [welcomeSeen, setWelcomeSeen] = useState<boolean>(initialWelcomePreference === "skip");
-  const [welcomeActive, setWelcomeActive] = useState(false);
+  const [welcomeActive, setWelcomeActive] = useState(initialScene === "WELCOME");
   const [welcomeStage, setWelcomeStage] = useState<"intro" | "create" | "restore">("intro");
   const [welcomeOrigin, setWelcomeOrigin] = useState<"launch" | "settings" | null>(null);
   const [welcomeSlide, setWelcomeSlide] = useState(0);
@@ -1727,10 +1747,9 @@ function RPSDoodleAppInner(){
   const isPlayerModalOpen = playerModalMode !== "hidden";
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [restoreSelectedPlayerId, setRestoreSelectedPlayerId] = useState<string | null>(null);
-  type Scene = "WELCOME"|"BOOT"|"MODE"|"MATCH"|"RESULTS";
-  const [scene, setScene] = useState<Scene>("BOOT");
+  const [scene, setScene] = useState<Scene>(initialScene);
   const [bootNext, setBootNext] = useState<"WELCOME" | "AUTO">(
-    initialWelcomePreference === "show" ? "WELCOME" : "AUTO"
+    initialScene === "BOOT" ? (initialWelcomePreference === "show" ? "WELCOME" : "AUTO") : "AUTO"
   );
   const [bootProgress, setBootProgress] = useState(0);
   const [bootReady, setBootReady] = useState(false);
@@ -1740,6 +1759,18 @@ function RPSDoodleAppInner(){
   const [pendingWelcomeExit, setPendingWelcomeExit] = useState<
     null | { reason: "setup" | "restore" | "dismiss" }
   >(null);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      if (scene === "BOOT") {
+        window.sessionStorage.removeItem(SCENE_STORAGE_KEY);
+      } else {
+        window.sessionStorage.setItem(SCENE_STORAGE_KEY, scene);
+      }
+    } catch {
+      /* noop */
+    }
+  }, [scene]);
   useEffect(() => {
     if (welcomeActive || restoreDialogOpen) return;
     if (scene === "BOOT") return;
@@ -2267,19 +2298,6 @@ function RPSDoodleAppInner(){
     });
   }, [insightPanelOpen]);
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(WELCOME_PREF_KEY, welcomePreference);
-      if (welcomePreference === "skip") {
-        window.localStorage.setItem(LEGACY_WELCOME_SEEN_KEY, "true");
-      } else {
-        window.localStorage.removeItem(LEGACY_WELCOME_SEEN_KEY);
-      }
-    } catch {
-      /* noop */
-    }
-  }, [welcomePreference]);
-  useEffect(() => {
     if (welcomeActive) {
       setWelcomeSlide(0);
     }
@@ -2738,6 +2756,20 @@ function RPSDoodleAppInner(){
     activeMatchMode === "challenge"
       ? "border-rose-200 bg-rose-100 text-rose-700"
       : "border-sky-200 bg-sky-100 text-sky-700";
+  const aiStatusPill = useMemo(() => {
+    const offState = {
+      label: "AI OFF (Random)",
+      className: "border border-slate-200 bg-white/80 text-slate-600",
+    };
+    if (trainingActive || needsTraining || !isTrained || !predictorMode) {
+      return offState;
+    }
+    const difficultyLabel = `${DIFFICULTY_INFO[aiMode].label} Mode`;
+    return {
+      label: `AI ACTIVE (${difficultyLabel})`,
+      className: "border border-emerald-200 bg-emerald-50 text-emerald-700",
+    };
+  }, [aiMode, isTrained, needsTraining, predictorMode, trainingActive]);
 
   const handlePredictorToggle = useCallback(
     (checked: boolean) => {
@@ -2841,6 +2873,14 @@ function RPSDoodleAppInner(){
       if (options.resetPlayer) {
         setCurrentPlayer(null);
       }
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(WELCOME_PREF_KEY, "show");
+          window.localStorage.removeItem(LEGACY_WELCOME_SEEN_KEY);
+        } catch {
+          /* noop */
+        }
+      }
       setWelcomeSeen(false);
       setWelcomeSlide(0);
       setWelcomeStage("intro");
@@ -2912,6 +2952,16 @@ function RPSDoodleAppInner(){
     ],
   );
 
+  const persistWelcomeSeen = useCallback(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(WELCOME_PREF_KEY, "skip");
+      window.localStorage.setItem(LEGACY_WELCOME_SEEN_KEY, "true");
+    } catch {
+      /* noop */
+    }
+  }, []);
+
   const finishWelcomeFlow = useCallback(
     (reason: "setup" | "restore" | "dismiss") => {
       setWelcomeActive(false);
@@ -2919,6 +2969,7 @@ function RPSDoodleAppInner(){
       setWelcomeStage("intro");
       setBootNext("AUTO");
       setWelcomeSeen(true);
+      persistWelcomeSeen();
       setWelcomeOrigin(null);
       welcomeToastShownRef.current = false;
       welcomeFinalToastShownRef.current = false;
@@ -2932,6 +2983,7 @@ function RPSDoodleAppInner(){
       setWelcomeSeen,
       setWelcomeSlide,
       setWelcomeStage,
+      persistWelcomeSeen,
     ],
   );
 
@@ -3771,21 +3823,6 @@ function RPSDoodleAppInner(){
     selectProfile(id);
   }, [selectProfile]);
 
-  const handleWelcomeReplayToggle = useCallback(
-    (value: boolean) => {
-      const nextPreference: WelcomePreference = value ? "show" : "skip";
-      setWelcomePreference(nextPreference);
-      if (nextPreference === "show") {
-        setToastMessage("The welcome intro will show next time you open RPS AI Lab.");
-        setLive("Welcome intro scheduled to replay on the next launch.");
-      } else {
-        setToastMessage("The welcome intro will stay hidden on launch.");
-        setLive("Welcome intro replay disabled.");
-      }
-    },
-    [setLive, setToastMessage, setWelcomePreference],
-  );
-
   const handleOpenSettings = useCallback(() => {
     setSettingsOpen(true);
     setLive(
@@ -4403,6 +4440,12 @@ function RPSDoodleAppInner(){
 
   useEffect(() => {
     if (previousTrainingCountRef.current < TRAIN_ROUNDS && trainingCount >= TRAIN_ROUNDS) {
+      if (currentProfile && !currentProfile.predictorDefault) {
+        updateStatsProfile(currentProfile.id, { predictorDefault: true });
+      }
+      if (!predictorMode) {
+        setPredictorMode(true);
+      }
       if (currentProfile && !currentProfile.seenPostTrainingCTA && !postTrainingCtaAcknowledged) {
         setPostTrainingCtaOpen(true);
         setHelpGuideOpen(false);
@@ -4416,7 +4459,14 @@ function RPSDoodleAppInner(){
       setPostTrainingCtaOpen(false);
     }
     previousTrainingCountRef.current = trainingCount;
-  }, [currentProfile, postTrainingCtaAcknowledged, scene, trainingCount]);
+  }, [
+    currentProfile,
+    postTrainingCtaAcknowledged,
+    predictorMode,
+    scene,
+    trainingCount,
+    updateStatsProfile,
+  ]);
 
   useEffect(() => {
     if (!currentProfile) {
@@ -5162,7 +5212,6 @@ function RPSDoodleAppInner(){
                     </p>
                     <p className="text-xs text-slate-500">
                       Grade {selectedRestorePlayer.grade}
-                      {selectedRestorePlayer.age ? ` • Age ${selectedRestorePlayer.age}` : ""}
                       {selectedRestorePlayer.needsReview ? " • Needs review" : ""}
                     </p>
                   </div>
@@ -5418,7 +5467,7 @@ function RPSDoodleAppInner(){
                         </button>
                       </div>
                       {demographicsNeedReview && (
-                        <p className="text-xs text-amber-600">Update grade and age from Edit demographics.</p>
+                        <p className="text-xs text-amber-600">Update grade from Edit demographics.</p>
                       )}
                     </div>
                     <div className="space-y-2">
@@ -5683,18 +5732,6 @@ function RPSDoodleAppInner(){
                         <span>Default</span>
                         <span>Larger</span>
                       </div>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-semibold text-slate-800">Show welcome again</div>
-                        <p className="text-xs text-slate-500">Replay the intro on the next launch.</p>
-                      </div>
-                      <OnOffToggle
-                        value={welcomePreference === "show"}
-                        onChange={handleWelcomeReplayToggle}
-                        onLabel="set.welcomeAgain.on"
-                        offLabel="set.welcomeAgain.off"
-                      />
                     </div>
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -6065,21 +6102,14 @@ function RPSDoodleAppInner(){
                           : `${modeLabel(activeMatchMode)} Mode`}
                       </span>
                     </div>
-                    {(needsTraining || trainingActive) ? (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between text-sm text-slate-700">
-                          <span>Training the AI on your moves…</span>
-                          <span>{trainingDisplayCount} / {TRAIN_ROUNDS}</span>
-                        </div>
-                        <div className="h-2 bg-slate-200 rounded">
-                          <div className="h-full bg-sky-500 rounded" style={{ width: `${Math.min(100, trainingProgress * 100)}%` }} />
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex w-full flex-col items-center gap-4">
+                    <div className="absolute right-4 top-3 flex items-center gap-2">
+                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${aiStatusPill.className}`}>
+                        {aiStatusPill.label}
+                      </span>
+                      {!needsTraining && !trainingActive && (
                         <button
                           type="button"
-                          className={`absolute right-4 top-3 rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-700 shadow focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                          className={`rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-700 shadow focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
                             hudInsightDisabled ? "cursor-not-allowed opacity-60" : "hover:bg-sky-200"
                           }`}
                           onClick={event => {
@@ -6109,6 +6139,20 @@ function RPSDoodleAppInner(){
                             <span className="sr-only">Enable AI to view insights</span>
                           )}
                         </button>
+                      )}
+                    </div>
+                    {(needsTraining || trainingActive) ? (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-sm text-slate-700">
+                          <span>Training the AI on your moves…</span>
+                          <span>{trainingDisplayCount} / {TRAIN_ROUNDS}</span>
+                        </div>
+                        <div className="h-2 bg-slate-200 rounded">
+                          <div className="h-full bg-sky-500 rounded" style={{ width: `${Math.min(100, trainingProgress * 100)}%` }} />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex w-full flex-col items-center gap-4">
                         <div className="flex w-full flex-col items-center gap-3 text-center">
                           <div className="flex flex-wrap items-center justify-center gap-2 text-sm text-slate-700">
                             <div>Round <strong>{round}</strong> • Best of {bestOf}</div>
@@ -7289,8 +7333,6 @@ interface PlayerSetupFormProps {
   onBack?: () => void;
 }
 
-const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => 5 + index);
-
 function extractNameParts(fullName: string){
   const trimmed = fullName.trim();
   if (!trimmed) return { firstName: "", lastInitial: "" };
@@ -7314,7 +7356,6 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
   const [firstName, setFirstName] = useState("");
   const [lastInitial, setLastInitial] = useState("");
   const [grade, setGrade] = useState<Grade | "">(player?.grade ?? "");
-  const [age, setAge] = useState<string>(player?.age != null ? String(player.age) : "");
   const [school, setSchool] = useState(player?.school ?? "");
   const [priorExperience, setPriorExperience] = useState(player?.priorExperience ?? "");
 
@@ -7323,12 +7364,11 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
     setFirstName(parts.firstName);
     setLastInitial(parts.lastInitial);
     setGrade(player?.grade ?? "");
-    setAge(player?.age != null ? String(player.age) : "");
     setSchool(player?.school ?? "");
     setPriorExperience(player?.priorExperience ?? "");
   }, [player, mode]);
 
-  const saveDisabled = !firstName.trim() || !lastInitial.trim() || !grade || !age;
+  const saveDisabled = !firstName.trim() || !lastInitial.trim() || !grade;
   const title = mode === "edit" ? "Edit player demographics" : "Create new player";
   const showReviewNotice = mode === "edit" && player?.needsReview;
   const showBackButton = origin === "welcome" && mode === "create";
@@ -7344,9 +7384,7 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
     event.preventDefault();
     const trimmedFirst = firstName.trim();
     const trimmedLast = lastInitial.trim();
-    if (!trimmedFirst || !trimmedLast || !grade || !age) return;
-    const parsedAge = Number.parseInt(age, 10);
-    if (!Number.isFinite(parsedAge)) return;
+    if (!trimmedFirst || !trimmedLast || !grade) return;
     const schoolValue = school.trim();
     const priorValue = priorExperience.trim();
     const formattedLastInitial = formatLastInitial(trimmedLast);
@@ -7359,7 +7397,6 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
     const payload = {
       playerName: combinedName,
       grade: grade as Grade,
-      age: parsedAge,
       school: schoolValue ? schoolValue : undefined,
       priorExperience: priorValue ? priorValue : undefined,
       consent,
@@ -7394,7 +7431,7 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
         <div className="space-y-3 pb-5">
           {showReviewNotice && (
             <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-              Please confirm the player name, grade, and age to continue.
+              Please confirm the player name and grade to continue.
             </div>
           )}
           {mode === "create" && (
@@ -7437,24 +7474,6 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
                 Select grade
               </option>
               {GRADE_OPTIONS.map(option => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            Age
-            <select
-              value={age}
-              onChange={e => setAge(e.target.value)}
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
-              required
-            >
-              <option value="" disabled>
-                Select age
-              </option>
-              {AGE_OPTIONS.map(option => (
                 <option key={option} value={option}>
                   {option}
                 </option>
