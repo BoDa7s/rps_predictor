@@ -6938,10 +6938,10 @@ function RPSDoodleAppInner(){
                             className={`inline-flex items-center justify-center rounded-full px-5 py-2 text-xs font-bold uppercase tracking-widest ring-2 ring-current shadow-lg ${
                               (phase === "resolve" || phase === "feedback") && outcome
                                 ? outcome === "win"
-                                  ? "bg-emerald-100 text-emerald-700"
+                                  ? "bg-emerald-500 text-white"
                                   : outcome === "lose"
-                                    ? "bg-rose-100 text-rose-700"
-                                    : "bg-amber-100 text-amber-700"
+                                    ? "bg-rose-500 text-white"
+                                    : "bg-[#A65613] text-white"
                                 : "bg-slate-200 text-slate-600"
                             }`}
                           >
@@ -7349,39 +7349,39 @@ function RPSDoodleAppInner(){
                     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                       <div
                         className="rounded-2xl border p-4 shadow-sm"
-                        style={{ backgroundColor: "var(--app-accent-soft)", borderColor: "var(--app-accent-muted)", color: "var(--app-text-strong)" }}
+                        style={{ backgroundColor: "var(--app-accent)", borderColor: "var(--app-accent-strong)", color: "#000000" }}
                       >
-                        <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--app-text-secondary)" }}>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-black">
                           Matches
                         </div>
-                        <div className="mt-2 text-3xl font-bold" style={{ color: "var(--app-text-strong)" }}>{totalMatches}</div>
-                        <p className="mt-1 text-xs" style={{ color: "var(--app-text-secondary)" }}>
+                        <div className="mt-2 text-3xl font-bold text-black">{totalMatches}</div>
+                        <p className="mt-1 text-xs text-black">
                           How many games you played.
                         </p>
                       </div>
                       <div
                         className="rounded-2xl border p-4 shadow-sm"
-                        style={{ backgroundColor: "var(--app-accent-soft)", borderColor: "var(--app-accent-muted)", color: "var(--app-text-strong)" }}
+                        style={{ backgroundColor: "var(--app-accent)", borderColor: "var(--app-accent-strong)", color: "#000000" }}
                       >
-                        <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--app-text-secondary)" }}>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-black">
                           Rounds
                         </div>
-                        <div className="mt-2 text-3xl font-bold" style={{ color: "var(--app-text-strong)" }}>{totalRounds}</div>
-                        <p className="mt-1 text-xs" style={{ color: "var(--app-text-secondary)" }}>
+                        <div className="mt-2 text-3xl font-bold text-black">{totalRounds}</div>
+                        <p className="mt-1 text-xs text-black">
                           Total turns logged.
                         </p>
                       </div>
                       <div
                         className="rounded-2xl border p-4 shadow-sm"
-                        style={{ backgroundColor: "var(--app-accent-soft)", borderColor: "var(--app-accent-muted)", color: "var(--app-text-strong)" }}
+                        style={{ backgroundColor: "var(--app-accent)", borderColor: "var(--app-accent-strong)", color: "#000000" }}
                       >
-                        <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--app-text-secondary)" }}>
+                        <div className="text-xs font-semibold uppercase tracking-wide text-black">
                           Win rate
                         </div>
-                        <div className="mt-2 text-3xl font-bold" style={{ color: "var(--app-text-strong)" }}>
+                        <div className="mt-2 text-3xl font-bold text-black">
                           {totalMatches ? `${Math.round(overallWinRate * 100)}%` : "—"}
                         </div>
-                        <p className="mt-1 text-xs" style={{ color: "var(--app-text-secondary)" }}>
+                        <p className="mt-1 text-xs text-black">
                           Wins per match.
                         </p>
                       </div>
