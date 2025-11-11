@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AIMode, BestOf, Mode, Move, Outcome } from "./gameTypes";
+import { normalizeHexColor } from "./colorUtils";
 import { usePlayers } from "./players";
 
 export type SerializedExpertState =
@@ -134,22 +135,91 @@ export interface MatchSummary {
 
 export type ThemePreference = "system" | "light" | "dark";
 
-export interface ProfilePreferences {
-  theme?: ThemePreference;
+export type ThemeMode = "light" | "dark";
+
+export interface ThemeModeColors {
+  accent: string;
+  background: string;
 }
 
-const DEFAULT_PROFILE_PREFERENCES: ProfilePreferences = { theme: "system" } as const;
+export type ThemeColorPreferences = Record<ThemeMode, ThemeModeColors>;
+
+export interface ProfilePreferences {
+  theme: ThemePreference;
+  themeColors: ThemeColorPreferences;
+}
+
+export const DEFAULT_THEME_COLOR_PREFERENCES: ThemeColorPreferences = {
+  light: {
+    accent: "#0EA5E9",
+    background: "#F8FAFC",
+  },
+  dark: {
+    accent: "#FF7849",
+    background: "#070F27",
+  },
+} as const;
+
+export const DEFAULT_PROFILE_PREFERENCES: ProfilePreferences = {
+  theme: "system",
+  themeColors: {
+    light: { ...DEFAULT_THEME_COLOR_PREFERENCES.light },
+    dark: { ...DEFAULT_THEME_COLOR_PREFERENCES.dark },
+  },
+} as const;
+
+function cloneThemeModeColors(value: ThemeModeColors): ThemeModeColors {
+  return { accent: value.accent, background: value.background };
+}
+
+export function cloneProfilePreferences(
+  preferences: ProfilePreferences = DEFAULT_PROFILE_PREFERENCES,
+): ProfilePreferences {
+  return {
+    theme: preferences.theme,
+    themeColors: {
+      light: cloneThemeModeColors(preferences.themeColors.light),
+      dark: cloneThemeModeColors(preferences.themeColors.dark),
+    },
+  };
+}
+
+function normalizeThemeModeColors(value: unknown, fallback: ThemeModeColors): ThemeModeColors {
+  if (!value || typeof value !== "object") {
+    return cloneThemeModeColors(fallback);
+  }
+  const input = value as { accent?: unknown; background?: unknown };
+  return {
+    accent: normalizeHexColor(input.accent, fallback.accent),
+    background: normalizeHexColor(input.background, fallback.background),
+  };
+}
+
+function normalizeThemeColors(value: unknown): ThemeColorPreferences {
+  if (!value || typeof value !== "object") {
+    return {
+      light: cloneThemeModeColors(DEFAULT_THEME_COLOR_PREFERENCES.light),
+      dark: cloneThemeModeColors(DEFAULT_THEME_COLOR_PREFERENCES.dark),
+    };
+  }
+  const input = value as { light?: unknown; dark?: unknown };
+  return {
+    light: normalizeThemeModeColors(input.light, DEFAULT_THEME_COLOR_PREFERENCES.light),
+    dark: normalizeThemeModeColors(input.dark, DEFAULT_THEME_COLOR_PREFERENCES.dark),
+  };
+}
 
 function normalizePreferences(value: unknown): ProfilePreferences {
   if (!value || typeof value !== "object") {
-    return { ...DEFAULT_PROFILE_PREFERENCES };
+    return cloneProfilePreferences();
   }
-  const input = value as { theme?: unknown };
+  const input = value as { theme?: unknown; themeColors?: unknown };
   const theme =
     input.theme === "dark" || input.theme === "light" || input.theme === "system"
       ? input.theme
       : DEFAULT_PROFILE_PREFERENCES.theme;
-  return { theme };
+  const themeColors = normalizeThemeColors(input.themeColors);
+  return { theme, themeColors };
 }
 
 export interface StatsProfile {
@@ -495,7 +565,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         seenPostTrainingCTA: false,
         previousProfileId: null,
         nextProfileId: null,
-        preferences: { ...DEFAULT_PROFILE_PREFERENCES },
+        preferences: cloneProfilePreferences(),
       };
       setProfiles(prev => prev.concat(defaultProfile));
       setProfilesDirty(true);
@@ -666,7 +736,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         seenPostTrainingCTA: false,
         previousProfileId: null,
         nextProfileId: null,
-        preferences: { ...DEFAULT_PROFILE_PREFERENCES },
+        preferences: cloneProfilePreferences(),
       };
       setProfiles(prev => prev.concat(profile));
       setProfilesDirty(true);
@@ -683,6 +753,9 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     setProfiles(prev => prev.map(p => {
       if (p.id !== id) return p;
       const next = { ...p, ...patch };
+      if (patch.preferences) {
+        next.preferences = cloneProfilePreferences(patch.preferences);
+      }
       if (patch.baseName || patch.version) {
         const baseName = normalizeBaseName(patch.baseName ?? next.baseName);
         const rawVersion = patch.version ?? next.version ?? 1;
@@ -721,7 +794,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       seenPostTrainingCTA: false,
       previousProfileId: source.id,
       nextProfileId: null,
-      preferences: { ...source.preferences },
+      preferences: cloneProfilePreferences(source.preferences),
     };
     setProfiles(prev => {
       const updated = prev.map(p => {

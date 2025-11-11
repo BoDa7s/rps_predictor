@@ -46,6 +46,21 @@ button {
   --app-border-strong: rgba(148, 163, 184, 0.55);
   --app-ring: rgba(148, 163, 184, 0.45);
   --app-overlay: rgba(15, 23, 42, 0.6);
+  --app-accent: #0ea5e9;
+  --app-accent-strong: #0284c7;
+  --app-accent-hover: #0284c7;
+  --app-accent-active: #0369a1;
+  --app-accent-soft: #e0f2fe;
+  --app-accent-muted: #bae6fd;
+  --app-on-accent: #ffffff;
+  --app-gradient-start: #e0f2fe;
+  --app-gradient-middle: #f1f5f9;
+  --app-gradient-end: #ffffff;
+  --app-orb-primary: #bae6fd;
+  --app-orb-secondary: #93c5fd;
+  --app-orb-tertiary: #bfdbfe;
+  --app-orb-opacity: 0.55;
+  --app-surface-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
   min-height: 100vh;
   width: 100%;
   color: var(--app-text-primary);
@@ -73,6 +88,19 @@ button {
   --app-overlay: rgba(4, 10, 33, 0.74);
   --app-accent: #ff7849;
   --app-accent-strong: #ff935f;
+  --app-accent-hover: #ff8f63;
+  --app-accent-active: #ff9f74;
+  --app-accent-soft: rgba(255, 120, 73, 0.22);
+  --app-accent-muted: rgba(255, 120, 73, 0.32);
+  --app-on-accent: #0f172a;
+  --app-gradient-start: #0c1734;
+  --app-gradient-middle: #12254a;
+  --app-gradient-end: #162b55;
+  --app-orb-primary: rgba(20, 39, 82, 0.9);
+  --app-orb-secondary: rgba(26, 53, 107, 0.8);
+  --app-orb-tertiary: rgba(17, 37, 79, 0.75);
+  --app-orb-opacity: 0.3;
+  --app-surface-shadow: 0 18px 40px rgba(4, 8, 24, 0.55);
   background-color: var(--app-bg);
   color: var(--app-text-primary);
   color-scheme: dark;
@@ -155,19 +183,6 @@ button {
   border: 1px solid var(--app-border) !important;
 }
 
-.app-theme[data-theme='dark'] .bg-sky-50,
-.app-theme[data-theme='dark'] .bg-sky-50\/80,
-.app-theme[data-theme='dark'] .bg-sky-100 {
-  background-color: rgba(255, 120, 73, 0.16) !important;
-  color: var(--app-text-primary) !important;
-  border: 1px solid rgba(255, 142, 92, 0.45) !important;
-}
-
-.app-theme[data-theme='dark'] .bg-sky-200 {
-  background-color: rgba(255, 120, 73, 0.24) !important;
-  border: 1px solid rgba(255, 142, 92, 0.55) !important;
-}
-
 .app-theme[data-theme='dark'] .border-slate-100,
 .app-theme[data-theme='dark'] .border-slate-200,
 .app-theme[data-theme='dark'] .border-slate-200\/80,
@@ -175,28 +190,9 @@ button {
   border-color: var(--app-border-strong) !important;
 }
 
-.app-theme[data-theme='dark'] .border-sky-200 {
-  border-color: rgba(255, 142, 92, 0.65) !important;
-}
-
 .app-theme[data-theme='dark'] .ring-slate-200,
 .app-theme[data-theme='dark'] .ring-slate-200\/70 {
   --tw-ring-color: var(--app-ring) !important;
-}
-
-.app-theme[data-theme='dark'] .focus-visible\:outline-sky-500:focus-visible,
-.app-theme[data-theme='dark'] .focus-visible\:outline-sky-400:focus-visible {
-  outline: none !important;
-  box-shadow: 0 0 0 2px rgba(7, 15, 39, 0.65), 0 0 0 4px rgba(255, 120, 73, 0.4);
-  border-color: var(--app-accent) !important;
-}
-
-.app-theme[data-theme='dark'] .focus-visible\:ring-sky-400:focus-visible,
-.app-theme[data-theme='dark'] .focus-visible\:ring-sky-500:focus-visible,
-.app-theme[data-theme='dark'] .focus-visible\:ring-amber-400:focus-visible {
-  --tw-ring-color: rgba(255, 120, 73, 0.5) !important;
-  box-shadow: 0 0 0 2px rgba(7, 15, 39, 0.65), 0 0 0 4px rgba(255, 120, 73, 0.35);
-  border-color: var(--app-accent) !important;
 }
 
 .app-theme[data-theme='dark'] .text-slate-900,
@@ -224,71 +220,92 @@ button {
   color: rgba(148, 163, 184, 0.6) !important;
 }
 
-.app-theme[data-theme='dark'] .text-slate-200\/80 {
-  color: rgba(226, 232, 240, 0.8) !important;
+.app-theme[data-theme='dark'] .text-white\/80 {
+  color: rgba(248, 251, 255, 0.8) !important;
 }
 
-.app-theme[data-theme='dark'] .text-sky-900,
-.app-theme[data-theme='dark'] .text-sky-800,
-.app-theme[data-theme='dark'] .text-sky-700,
-.app-theme[data-theme='dark'] .text-sky-600,
-.app-theme[data-theme='dark'] .text-sky-500 {
+.app-theme .bg-sky-50,
+.app-theme .bg-sky-50\/80,
+.app-theme .bg-sky-100 {
+  background-color: var(--app-accent-soft) !important;
+  color: var(--app-text-primary) !important;
+  border: 1px solid var(--app-accent-muted) !important;
+}
+
+.app-theme .bg-sky-200 {
+  background-color: var(--app-accent-muted) !important;
+  border: 1px solid var(--app-accent-hover) !important;
+}
+
+.app-theme .bg-sky-300,
+.app-theme .bg-sky-400,
+.app-theme .bg-sky-500,
+.app-theme .bg-sky-600,
+.app-theme .bg-sky-700,
+.app-theme .bg-sky-800,
+.app-theme .bg-sky-900 {
+  background-color: var(--app-accent) !important;
+  color: var(--app-on-accent) !important;
+  border: 1px solid var(--app-accent-strong) !important;
+}
+
+.app-theme .hover\:bg-sky-600:hover,
+.app-theme .hover\:bg-sky-500:hover,
+.app-theme .hover\:bg-sky-700:hover,
+.app-theme .hover\:bg-sky-800:hover {
+  background-color: var(--app-accent-hover) !important;
+}
+
+.app-theme .active\:bg-sky-600:active,
+.app-theme .active\:bg-sky-500:active,
+.app-theme .active\:bg-sky-700:active,
+.app-theme .bg-sky-600:active,
+.app-theme .bg-sky-500:active,
+.app-theme .bg-sky-700:active {
+  background-color: var(--app-accent-active) !important;
+}
+
+.app-theme .border-sky-200,
+.app-theme .border-sky-300,
+.app-theme .border-sky-400,
+.app-theme .border-sky-500,
+.app-theme .border-sky-600,
+.app-theme .border-sky-700 {
+  border-color: var(--app-accent-strong) !important;
+}
+
+.app-theme .text-sky-900,
+.app-theme .text-sky-800,
+.app-theme .text-sky-700 {
   color: var(--app-accent-strong) !important;
 }
 
-.app-theme[data-theme='dark'] .bg-sky-100:hover,
-.app-theme[data-theme='dark'] .hover\:bg-sky-100:hover,
-.app-theme[data-theme='dark'] .hover\:bg-sky-200:hover {
-  background-color: rgba(255, 142, 92, 0.32) !important;
+.app-theme .text-sky-600,
+.app-theme .text-sky-500,
+.app-theme .text-sky-400,
+.app-theme a {
+  color: var(--app-accent) !important;
 }
 
-.app-theme[data-theme='dark'] .bg-sky-300,
-.app-theme[data-theme='dark'] .bg-sky-400,
-.app-theme[data-theme='dark'] .bg-sky-500,
-.app-theme[data-theme='dark'] .bg-sky-600,
-.app-theme[data-theme='dark'] .bg-sky-700,
-.app-theme[data-theme='dark'] .bg-sky-800 {
-  background-color: var(--app-accent) !important;
-  color: #fffdf6 !important;
-  border: 1px solid rgba(255, 156, 110, 0.85) !important;
-  box-shadow: 0 10px 24px rgba(255, 120, 73, 0.35);
+.app-theme a:hover,
+.app-theme .hover\:text-sky-600:hover,
+.app-theme .hover\:text-sky-500:hover {
+  color: var(--app-accent-hover) !important;
 }
 
-.app-theme[data-theme='dark'] .hover\:bg-sky-700:hover,
-.app-theme[data-theme='dark'] .hover\:bg-sky-600:hover,
-.app-theme[data-theme='dark'] .hover\:bg-sky-500:hover {
-  background-color: var(--app-accent-strong) !important;
-  box-shadow: 0 0 0 1px rgba(255, 214, 197, 0.35), 0 12px 28px rgba(255, 143, 95, 0.4);
+.app-theme .focus-visible\:outline-sky-500:focus-visible,
+.app-theme .focus-visible\:outline-sky-400:focus-visible {
+  outline: none !important;
+  box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.12), 0 0 0 4px var(--app-accent-soft);
+  border-color: var(--app-accent) !important;
 }
 
-.app-theme[data-theme='dark'] .active\:bg-sky-700:active,
-.app-theme[data-theme='dark'] .active\:bg-sky-600:active,
-.app-theme[data-theme='dark'] .active\:bg-sky-500:active,
-.app-theme[data-theme='dark'] .bg-sky-700:active,
-.app-theme[data-theme='dark'] .bg-sky-600:active,
-.app-theme[data-theme='dark'] .bg-sky-500:active {
-  background-color: #e46637 !important;
-  box-shadow: 0 4px 12px rgba(203, 86, 42, 0.45) inset, 0 8px 20px rgba(203, 86, 42, 0.45);
-}
-
-.app-theme[data-theme='dark'] .bg-sky-400,
-.app-theme[data-theme='dark'] .bg-sky-500 {
-  background-image: linear-gradient(135deg, rgba(255, 120, 73, 0.95), rgba(255, 163, 110, 0.92));
-}
-
-.app-theme[data-theme='dark'] .bg-sky-400 > *,
-.app-theme[data-theme='dark'] .bg-sky-500 > * {
-  color: inherit !important;
-}
-
-.app-theme[data-theme='dark'] .border-sky-500,
-.app-theme[data-theme='dark'] .border-sky-600,
-.app-theme[data-theme='dark'] .border-sky-700 {
-  border-color: rgba(255, 142, 92, 0.85) !important;
-}
-
-.app-theme[data-theme='dark'] .text-white\/80 {
-  color: rgba(248, 251, 255, 0.8) !important;
+.app-theme .focus-visible\:ring-sky-400:focus-visible,
+.app-theme .focus-visible\:ring-sky-500:focus-visible,
+.app-theme .focus-visible\:ring-amber-400:focus-visible {
+  --tw-ring-color: var(--app-accent-muted) !important;
+  box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.12), 0 0 0 4px var(--app-accent-soft);
+  border-color: var(--app-accent) !important;
 }
 
 .app-theme[data-theme='dark'] .underline-offset-2:hover {

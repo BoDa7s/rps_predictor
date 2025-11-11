@@ -12,6 +12,12 @@ import {
   HedgeMixerSerializedState,
   SerializedExpertState,
   ThemePreference,
+  ThemeMode,
+  ThemeModeColors,
+  ThemeColorPreferences,
+  DEFAULT_PROFILE_PREFERENCES,
+  DEFAULT_THEME_COLOR_PREFERENCES,
+  cloneProfilePreferences,
 } from "./stats";
 import { PlayersProvider, usePlayers, Grade, PlayerProfile, CONSENT_TEXT_VERSION, GRADE_OPTIONS } from "./players";
 import { DEV_MODE_ENABLED } from "./devMode";
@@ -50,6 +56,13 @@ import botSad48 from "./assets/mascot/bot-sad-48.svg";
 import botSad64 from "./assets/mascot/bot-sad-64.svg";
 import botSad96 from "./assets/mascot/bot-sad-96.svg";
 import HelpCenter, { type HelpQuestion } from "./HelpCenter";
+import {
+  darken,
+  getReadableTextColor,
+  lighten,
+  mixHexColors,
+  normalizeHexColor,
+} from "./colorUtils";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -90,6 +103,7 @@ const WELCOME_PREF_KEY = "rps_welcome_pref_v1";
 const INSIGHT_PANEL_STATE_KEY = "rps_insight_panel_open_v1";
 const SCENE_STORAGE_KEY = "rps_last_scene_v1";
 const THEME_PREFERENCE_STORAGE_KEY = "rps_theme_pref_v1";
+const THEME_COLOR_STORAGE_KEY = "rps_theme_colors_v1";
 type WelcomePreference = "show" | "skip";
 
 type RobotVariant = "idle" | "happy" | "meh" | "sad";
@@ -130,6 +144,116 @@ const MODERN_TOAST_STYLES: Record<ModernToastVariant, {
     dismiss: "rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-200",
   },
 };
+
+type PartialThemeColorPreferences = Partial<Record<ThemeMode, Partial<ThemeModeColors>>>;
+
+function mergeThemeColorPreferences(
+  base: ThemeColorPreferences,
+  override?: PartialThemeColorPreferences | ThemeColorPreferences | null,
+): ThemeColorPreferences {
+  const result: ThemeColorPreferences = {
+    light: { ...base.light },
+    dark: { ...base.dark },
+  };
+  if (!override) {
+    return result;
+  }
+  (Object.keys(override) as ThemeMode[]).forEach(mode => {
+    if (!override[mode]) return;
+    const next = override[mode]!;
+    if (next.accent) {
+      result[mode].accent = normalizeHexColor(next.accent, result[mode].accent);
+    }
+    if (next.background) {
+      result[mode].background = normalizeHexColor(next.background, result[mode].background);
+    }
+  });
+  return result;
+}
+
+function parseStoredThemeColors(raw: string | null): ThemeColorPreferences | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as PartialThemeColorPreferences;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    return mergeThemeColorPreferences(DEFAULT_THEME_COLOR_PREFERENCES, parsed);
+  } catch {
+    return null;
+  }
+}
+
+function themeModeColorsEqual(a: ThemeModeColors, b: ThemeModeColors): boolean {
+  return a.accent === b.accent && a.background === b.background;
+}
+
+function themeColorPreferencesEqual(
+  a: ThemeColorPreferences,
+  b: ThemeColorPreferences,
+): boolean {
+  return themeModeColorsEqual(a.light, b.light) && themeModeColorsEqual(a.dark, b.dark);
+}
+
+function deriveThemeCssVariables(mode: ThemeMode, colors: ThemeModeColors): Record<string, string> {
+  const defaults = DEFAULT_THEME_COLOR_PREFERENCES[mode];
+  const accent = normalizeHexColor(colors.accent, defaults.accent);
+  const background = normalizeHexColor(colors.background, defaults.background);
+  const accentStrong = mode === "dark" ? lighten(accent, 0.25) : darken(accent, 0.2);
+  const accentHover = mode === "dark" ? lighten(accent, 0.15) : darken(accent, 0.12);
+  const accentActive = mode === "dark" ? lighten(accent, 0.22) : darken(accent, 0.2);
+  const accentSoft = mode === "dark" ? lighten(accent, 0.75) : lighten(accent, 0.7);
+  const accentMuted = mode === "dark" ? lighten(accent, 0.55) : lighten(accent, 0.5);
+  const onAccent = getReadableTextColor(accent);
+  const textStrong = mode === "dark" ? lighten(background, 0.85) : darken(background, 0.85);
+  const textPrimary = mode === "dark" ? lighten(background, 0.75) : darken(background, 0.75);
+  const textSecondary = mode === "dark" ? lighten(background, 0.6) : darken(background, 0.6);
+  const textMuted = mode === "dark" ? lighten(background, 0.45) : darken(background, 0.45);
+  const surfaceCard = mode === "dark" ? lighten(background, 0.18) : lighten(background, 0.93);
+  const surfaceInput = mode === "dark" ? lighten(background, 0.24) : lighten(background, 0.88);
+  const surfaceSubtle = mode === "dark" ? lighten(background, 0.14) : lighten(background, 0.82);
+  const surfaceHover = mode === "dark" ? lighten(background, 0.3) : lighten(background, 0.76);
+  const border = mode === "dark" ? lighten(background, 0.38) : darken(background, 0.2);
+  const borderStrong = mode === "dark" ? lighten(background, 0.52) : darken(background, 0.28);
+  const ring = mode === "dark" ? lighten(accent, 0.4) : darken(accent, 0.18);
+  const overlay = mode === "dark" ? "rgba(4, 10, 33, 0.74)" : "rgba(15, 23, 42, 0.4)";
+  const gradientStart = mode === "dark" ? lighten(background, 0.08) : lighten(background, 0.7);
+  const gradientMiddle = mode === "dark" ? lighten(background, 0.16) : lighten(background, 0.85);
+  const gradientEnd = mode === "dark" ? lighten(background, 0.25) : lighten(background, 0.95);
+  const orbPrimary = mixHexColors(accent, background, mode === "dark" ? 0.4 : 0.25);
+  const orbSecondary = mixHexColors(accent, background, mode === "dark" ? 0.55 : 0.35);
+  const orbTertiary = mixHexColors(accent, background, mode === "dark" ? 0.7 : 0.5);
+  const orbOpacity = mode === "dark" ? "0.3" : "0.55";
+  return {
+    "--app-bg": background,
+    "--app-accent": accent,
+    "--app-accent-strong": accentStrong,
+    "--app-accent-hover": accentHover,
+    "--app-accent-active": accentActive,
+    "--app-accent-soft": accentSoft,
+    "--app-accent-muted": accentMuted,
+    "--app-on-accent": onAccent,
+    "--app-text-strong": textStrong,
+    "--app-text-primary": textPrimary,
+    "--app-text-secondary": textSecondary,
+    "--app-text-muted": textMuted,
+    "--app-surface-card": surfaceCard,
+    "--app-surface-input": surfaceInput,
+    "--app-surface-subtle": surfaceSubtle,
+    "--app-surface-hover": surfaceHover,
+    "--app-border": border,
+    "--app-border-strong": borderStrong,
+    "--app-ring": ring,
+    "--app-overlay": overlay,
+    "--app-gradient-start": gradientStart,
+    "--app-gradient-middle": gradientMiddle,
+    "--app-gradient-end": gradientEnd,
+    "--app-orb-primary": orbPrimary,
+    "--app-orb-secondary": orbSecondary,
+    "--app-orb-tertiary": orbTertiary,
+    "--app-orb-opacity": orbOpacity,
+  };
+}
 
 const ROBOT_ASSETS: Record<RobotVariant, { 48: string; 64: string; 96: string }> = {
   idle: { 48: botIdle48, 64: botIdle64, 96: botIdle96 },
@@ -1573,10 +1697,22 @@ function RPSDoodleAppInner(){
       return "system";
     }
   });
+  const [fallbackThemeColors, setFallbackThemeColors] = useState<ThemeColorPreferences>(() => {
+    const defaults = cloneProfilePreferences(DEFAULT_PROFILE_PREFERENCES).themeColors;
+    if (typeof window === "undefined") return defaults;
+    try {
+      const stored = window.localStorage.getItem(THEME_COLOR_STORAGE_KEY);
+      const parsed = parseStoredThemeColors(stored);
+      return parsed ?? defaults;
+    } catch {
+      return defaults;
+    }
+  });
   const systemPrefersDark = useMediaQuery("(prefers-color-scheme: dark)");
-  const themePreference: ThemePreference = currentProfile?.preferences?.theme ?? fallbackThemePreference;
+  const themePreference: ThemePreference = currentProfile?.preferences.theme ?? fallbackThemePreference;
   const resolvedTheme = themePreference === "system" ? (systemPrefersDark ? "dark" : "light") : themePreference;
-  const isDarkTheme = resolvedTheme === "dark";
+  const resolvedThemeMode: ThemeMode = resolvedTheme === "dark" ? "dark" : "light";
+  const isDarkTheme = resolvedThemeMode === "dark";
   const themeOptions = useMemo(
     () => [
       {
@@ -1615,19 +1751,68 @@ function RPSDoodleAppInner(){
       : themePreference === "dark"
         ? "Dark"
         : "Light";
-  const backgroundGradientClass = isDarkTheme
-    ? "from-[#040b1f] via-[#0a1a3d] to-[#020714]"
-    : "from-sky-100 to-white";
-  const backgroundOrbOpacity = isDarkTheme ? "opacity-30" : "opacity-60";
-  const orbPrimaryClass = isDarkTheme
-    ? "bg-[rgba(20,39,82,0.9)] border border-[rgba(118,153,219,0.55)]"
-    : "bg-sky-200";
-  const orbSecondaryClass = isDarkTheme
-    ? "bg-[rgba(26,53,107,0.8)] border border-[rgba(96,134,205,0.45)]"
-    : "bg-sky-300";
-  const orbTertiaryClass = isDarkTheme
-    ? "bg-[rgba(17,37,79,0.75)] border border-[rgba(80,110,178,0.42)]"
-    : "bg-sky-200";
+  const profileThemeColors = currentProfile?.preferences.themeColors;
+  const mergedThemeColors = useMemo(() => {
+    const withFallback = mergeThemeColorPreferences(
+      DEFAULT_THEME_COLOR_PREFERENCES,
+      fallbackThemeColors,
+    );
+    return profileThemeColors
+      ? mergeThemeColorPreferences(withFallback, profileThemeColors)
+      : withFallback;
+  }, [fallbackThemeColors, profileThemeColors]);
+  const activeThemeColors = mergedThemeColors[resolvedThemeMode];
+  const themeVariables = useMemo(
+    () => deriveThemeCssVariables(resolvedThemeMode, activeThemeColors),
+    [resolvedThemeMode, activeThemeColors.accent, activeThemeColors.background],
+  );
+  const backgroundGradientStyle = useMemo(
+    () => ({
+      backgroundImage: `linear-gradient(180deg, ${themeVariables["--app-gradient-start"]} 0%, ${themeVariables["--app-gradient-middle"]} 50%, ${themeVariables["--app-gradient-end"]} 100%)`,
+    }),
+    [themeVariables],
+  );
+  const orbStyles = useMemo(
+    () => ({
+      primary: {
+        backgroundColor: themeVariables["--app-orb-primary"],
+        borderColor: themeVariables["--app-border-strong"],
+        borderWidth: 1,
+        borderStyle: "solid" as const,
+      },
+      secondary: {
+        backgroundColor: themeVariables["--app-orb-secondary"],
+        borderColor: themeVariables["--app-border"],
+        borderWidth: 1,
+        borderStyle: "solid" as const,
+      },
+      tertiary: {
+        backgroundColor: themeVariables["--app-orb-tertiary"],
+        borderColor: themeVariables["--app-border"],
+        borderWidth: 1,
+        borderStyle: "solid" as const,
+      },
+    }),
+    [themeVariables],
+  );
+  const orbOpacity = useMemo(() => {
+    const raw = themeVariables["--app-orb-opacity"];
+    const parsed = raw ? parseFloat(raw) : null;
+    if (parsed !== null && !Number.isNaN(parsed)) {
+      return Math.max(0, Math.min(1, parsed));
+    }
+    return isDarkTheme ? 0.3 : 0.55;
+  }, [isDarkTheme, themeVariables]);
+  const [themeColorEditingMode, setThemeColorEditingMode] = useState<ThemeMode>(resolvedThemeMode);
+  useEffect(() => {
+    setThemeColorEditingMode(resolvedThemeMode);
+  }, [resolvedThemeMode]);
+  const themeColorEditingColors = mergedThemeColors[themeColorEditingMode];
+  const isEditingModeDefault = themeModeColorsEqual(
+    mergedThemeColors[themeColorEditingMode],
+    DEFAULT_THEME_COLOR_PREFERENCES[themeColorEditingMode],
+  );
+  const editingModeLabel = themeColorEditingMode === "dark" ? "Dark" : "Light";
   const [statsTab, setStatsTab] = useState<"overview" | "rounds" | "insights">("overview");
   const [roundsViewMode, setRoundsViewMode] = useState<"card" | "table">(() => {
     if (typeof window === "undefined") return "card";
@@ -1672,10 +1857,16 @@ function RPSDoodleAppInner(){
     }
   }, [roundsViewMode]);
   useEffect(() => {
-    const profileTheme = currentProfile?.preferences?.theme;
+    const profileTheme = currentProfile?.preferences.theme;
     if (!profileTheme) return;
     setFallbackThemePreference(prev => (prev === profileTheme ? prev : profileTheme));
-  }, [currentProfile?.preferences?.theme]);
+  }, [currentProfile?.preferences.theme]);
+  useEffect(() => {
+    const profileColors = currentProfile?.preferences.themeColors;
+    if (!profileColors) return;
+    const cloned = cloneProfilePreferences(currentProfile.preferences).themeColors;
+    setFallbackThemeColors(prev => (themeColorPreferencesEqual(prev, cloned) ? prev : cloned));
+  }, [currentProfile?.preferences, currentProfile?.preferences.themeColors]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
@@ -1684,6 +1875,14 @@ function RPSDoodleAppInner(){
       /* noop */
     }
   }, [themePreference]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(THEME_COLOR_STORAGE_KEY, JSON.stringify(fallbackThemeColors));
+    } catch {
+      /* noop */
+    }
+  }, [fallbackThemeColors]);
   function resetSessionMixer() {
     sessionMixerRef.current = instantiateMixerFromState(null);
   }
@@ -1933,10 +2132,8 @@ function RPSDoodleAppInner(){
         return;
       }
       if (currentProfile) {
-        const nextPreferences = {
-          ...(currentProfile.preferences ?? { theme: "system" as ThemePreference }),
-          theme: value,
-        };
+        const nextPreferences = cloneProfilePreferences(currentProfile.preferences);
+        nextPreferences.theme = value;
         updateStatsProfile(currentProfile.id, { preferences: nextPreferences });
       }
       setFallbackThemePreference(prev => (prev === value ? prev : value));
@@ -1965,6 +2162,52 @@ function RPSDoodleAppInner(){
       applyThemePreference(value);
     },
     [applyThemePreference],
+  );
+  const handleThemeColorInputChange = useCallback(
+    (mode: ThemeMode, key: keyof ThemeModeColors, value: string) => {
+      const currentValue = mergedThemeColors[mode][key];
+      const sanitized = normalizeHexColor(value, currentValue);
+      if (sanitized === currentValue) {
+        return;
+      }
+      setFallbackThemeColors(prev => {
+        const next = mergeThemeColorPreferences(prev, { [mode]: { [key]: sanitized } });
+        return themeColorPreferencesEqual(prev, next) ? prev : next;
+      });
+      if (currentProfile) {
+        const nextPreferences = cloneProfilePreferences(currentProfile.preferences);
+        nextPreferences.themeColors = mergeThemeColorPreferences(nextPreferences.themeColors, {
+          [mode]: { [key]: sanitized },
+        });
+        updateStatsProfile(currentProfile.id, { preferences: nextPreferences });
+      }
+      const modeLabel = mode === "dark" ? "Dark" : "Light";
+      const colorLabel = key === "accent" ? "accent" : "background";
+      setLive(`${modeLabel} ${colorLabel} color updated.`);
+    },
+    [mergedThemeColors, currentProfile, updateStatsProfile, setLive],
+  );
+  const handleResetThemeColors = useCallback(
+    (mode: ThemeMode) => {
+      const defaults = DEFAULT_THEME_COLOR_PREFERENCES[mode];
+      if (themeModeColorsEqual(mergedThemeColors[mode], defaults)) {
+        return;
+      }
+      setFallbackThemeColors(prev => {
+        const next = mergeThemeColorPreferences(prev, { [mode]: defaults });
+        return themeColorPreferencesEqual(prev, next) ? prev : next;
+      });
+      if (currentProfile) {
+        const nextPreferences = cloneProfilePreferences(currentProfile.preferences);
+        nextPreferences.themeColors = mergeThemeColorPreferences(nextPreferences.themeColors, {
+          [mode]: defaults,
+        });
+        updateStatsProfile(currentProfile.id, { preferences: nextPreferences });
+      }
+      const modeLabel = mode === "dark" ? "Dark" : "Light";
+      setLive(`${modeLabel} colors reset to default.`);
+    },
+    [mergedThemeColors, currentProfile, updateStatsProfile, setLive],
   );
   useEffect(() => {
     if (!themeMenuOpen) return;
@@ -5003,7 +5246,12 @@ function RPSDoodleAppInner(){
 
   return (
     <>
-      <div className="app-theme" data-theme={resolvedTheme} data-theme-preference={themePreference}>
+      <div
+        className="app-theme"
+        data-theme={resolvedTheme}
+        data-theme-preference={themePreference}
+        style={themeVariables as React.CSSProperties}
+      >
         <div
           className={`relative flex min-h-screen flex-col select-none overflow-x-hidden overflow-y-auto ${isDarkTheme ? "text-slate-100" : ""}`}
           style={{ fontSize: `${textScale * 16}px` }}
@@ -5012,16 +5260,26 @@ function RPSDoodleAppInner(){
 
           {/* Parallax background */}
           <div className="absolute inset-0 -z-10">
-            <div className={`absolute inset-0 bg-gradient-to-b ${backgroundGradientClass}`} />
+            <div className="absolute inset-0 bg-gradient-to-b" style={backgroundGradientStyle} />
             <motion.div
               initial={{ y: -20, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               transition={{ duration: 0.6, ease: [0.22, 0.61, 0.36, 1] }}
-              className={`absolute -top-20 left-0 right-0 h-60 ${backgroundOrbOpacity}`}
+              className="absolute -top-20 left-0 right-0 h-60"
+              style={{ opacity: orbOpacity }}
             >
-              <div className={`absolute left-10 top-10 h-40 w-40 rounded-full ${orbPrimaryClass}`} />
-              <div className={`absolute right-16 top-8 h-24 w-24 rounded-full ${orbSecondaryClass}`} />
-              <div className={`absolute left-1/2 top-2 h-28 w-28 rounded-full ${orbTertiaryClass}`} />
+              <div
+                className="absolute left-10 top-10 h-40 w-40 rounded-full"
+                style={orbStyles.primary as React.CSSProperties}
+              />
+              <div
+                className="absolute right-16 top-8 h-24 w-24 rounded-full"
+                style={orbStyles.secondary as React.CSSProperties}
+              />
+              <div
+                className="absolute left-1/2 top-2 h-28 w-28 rounded-full"
+                style={orbStyles.tertiary as React.CSSProperties}
+              />
             </motion.div>
           </div>
 
@@ -6098,6 +6356,102 @@ function RPSDoodleAppInner(){
                         ))}
                       </select>
                       <p className="text-xs text-slate-500">Currently showing {resolvedThemeLabel.toLowerCase()} mode.</p>
+                    </div>
+                    <div className="space-y-3 rounded-lg border border-slate-200 bg-white/60 p-3 shadow-inner">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <span className="font-medium text-slate-800">{editingModeLabel} mode colors</span>
+                          <p className="text-xs text-slate-500">
+                            Adjust accent highlights and interface backgrounds for each theme.
+                          </p>
+                        </div>
+                        <div className="inline-flex overflow-hidden rounded-full border border-slate-200 bg-white shadow-sm">
+                          <button
+                            type="button"
+                            className={`px-3 py-1 text-xs font-semibold transition-colors ${
+                              themeColorEditingMode === "light"
+                                ? "bg-slate-200 text-slate-700 shadow-inner"
+                                : "text-slate-500 hover:bg-slate-100"
+                            }`}
+                            onClick={() => setThemeColorEditingMode("light")}
+                          >
+                            Light
+                          </button>
+                          <button
+                            type="button"
+                            className={`px-3 py-1 text-xs font-semibold transition-colors ${
+                              themeColorEditingMode === "dark"
+                                ? "bg-slate-200 text-slate-700 shadow-inner"
+                                : "text-slate-500 hover:bg-slate-100"
+                            }`}
+                            onClick={() => setThemeColorEditingMode("dark")}
+                          >
+                            Dark
+                          </button>
+                        </div>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="flex flex-col gap-2">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Accent</span>
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="color"
+                              value={themeColorEditingColors.accent}
+                              onChange={event =>
+                                handleThemeColorInputChange(
+                                  themeColorEditingMode,
+                                  "accent",
+                                  event.target.value,
+                                )
+                              }
+                              aria-label={`${editingModeLabel} accent color`}
+                              className="h-10 w-16 cursor-pointer rounded-md border border-slate-300 bg-transparent"
+                            />
+                            <span className="rounded-md border border-slate-200 bg-white px-2 py-1 font-mono text-[11px] uppercase tracking-wide text-slate-500">
+                              {themeColorEditingColors.accent}
+                            </span>
+                          </div>
+                          <span className="text-xs text-slate-500">
+                            Buttons, chips, and interactive highlights update instantly.
+                          </span>
+                        </label>
+                        <label className="flex flex-col gap-2">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Background</span>
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="color"
+                              value={themeColorEditingColors.background}
+                              onChange={event =>
+                                handleThemeColorInputChange(
+                                  themeColorEditingMode,
+                                  "background",
+                                  event.target.value,
+                                )
+                              }
+                              aria-label={`${editingModeLabel} background color`}
+                              className="h-10 w-16 cursor-pointer rounded-md border border-slate-300 bg-transparent"
+                            />
+                            <span className="rounded-md border border-slate-200 bg-white px-2 py-1 font-mono text-[11px] uppercase tracking-wide text-slate-500">
+                              {themeColorEditingColors.background}
+                            </span>
+                          </div>
+                          <span className="text-xs text-slate-500">
+                            Surface cards and gradients blend with this base tone.
+                          </span>
+                        </label>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleResetThemeColors(themeColorEditingMode)}
+                        disabled={isEditingModeDefault}
+                        className={`inline-flex items-center justify-center rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold transition-colors ${
+                          isEditingModeDefault
+                            ? "cursor-not-allowed bg-slate-100 text-slate-400"
+                            : "bg-white text-slate-600 hover:bg-slate-100"
+                        }`}
+                      >
+                        Reset {editingModeLabel.toLowerCase()} defaults
+                      </button>
                     </div>
                     <div className="flex items-center justify-between gap-3">
                       <div>
