@@ -23,6 +23,38 @@ button {
   font-family: inherit;
 }
 
+.app-accent-pill {
+  background-color: var(--app-accent-strong);
+  color: var(--app-on-accent);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.app-accent-pill:hover,
+.app-accent-pill:focus-visible {
+  background-color: var(--app-accent-hover);
+  color: var(--app-on-accent);
+}
+
+.app-accent-soft {
+  background-color: var(--app-accent-soft);
+  color: var(--app-accent-strong);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.app-accent-soft:hover,
+.app-accent-soft:focus-visible {
+  background-color: var(--app-accent-muted);
+  color: var(--app-accent-strong);
+}
+
+.app-accent-border {
+  border-color: var(--app-accent-muted) !important;
+}
+
+.app-accent-fill {
+  background-color: var(--app-accent-strong);
+}
+
 .settings-helper-clamp {
   display: -webkit-box;
   line-clamp: 2;
@@ -218,6 +250,12 @@ button {
 
 .app-theme[data-theme='dark'] .text-slate-300 {
   color: rgba(148, 163, 184, 0.6) !important;
+}
+
+.app-theme[data-theme='dark'] .hud-result-win,
+.app-theme[data-theme='dark'] .hud-result-lose,
+.app-theme[data-theme='dark'] .results-banner-defeat {
+  color: #ffffff !important;
 }
 
 .app-theme[data-theme='dark'] .text-white\/80 {

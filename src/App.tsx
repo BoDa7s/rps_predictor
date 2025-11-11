@@ -1022,9 +1022,9 @@ const CONFIDENCE_BADGE_INFO: Record<
   "low" | "medium" | "high",
   { label: string; face: string; className: string }
 > = {
-  low: { label: "Low", face: "😮‍💨", className: "bg-rose-100 text-rose-700" },
-  medium: { label: "Med", face: "😐", className: "bg-amber-100 text-amber-700" },
-  high: { label: "High", face: "🙂", className: "bg-emerald-100 text-emerald-700" },
+  low: { label: "Low", face: "😮‍💨", className: "bg-rose-500 text-white" },
+  medium: { label: "Med", face: "😐", className: "bg-[#A65613] text-white" },
+  high: { label: "High", face: "🙂", className: "bg-emerald-500 text-white" },
 };
 
 const OUTCOME_CARD_STYLES: Record<
@@ -2928,7 +2928,7 @@ function RPSDoodleAppInner(){
   const [predictorMode, setPredictorMode] = useState<boolean>(currentProfile?.predictorDefault ?? false);
   const [aiMode, setAiMode] = useState<AIMode>("normal");
   const [difficultyHint, setDifficultyHint] = useState<string>(DIFFICULTY_INFO["normal"].helper);
-  const TRAIN_ROUNDS = 10;
+  const TRAIN_ROUNDS = 5;
   const trainingCount = currentProfile?.trainingCount ?? 0;
   const isTrained = currentProfile?.trained ?? false;
   const previousTrainingCountRef = useRef(trainingCount);
@@ -6938,10 +6938,10 @@ function RPSDoodleAppInner(){
                             className={`inline-flex items-center justify-center rounded-full px-5 py-2 text-xs font-bold uppercase tracking-widest ring-2 ring-current shadow-lg ${
                               (phase === "resolve" || phase === "feedback") && outcome
                                 ? outcome === "win"
-                                  ? "bg-emerald-500 text-white"
+                                  ? "hud-result hud-result-win bg-emerald-500 text-white"
                                   : outcome === "lose"
-                                    ? "bg-rose-500 text-white"
-                                    : "bg-[#A65613] text-white"
+                                    ? "hud-result hud-result-lose bg-rose-500 text-white"
+                                    : "hud-result hud-result-tie bg-[#A65613] text-white"
                                 : "bg-slate-200 text-slate-600"
                             }`}
                           >
@@ -7170,7 +7170,12 @@ function RPSDoodleAppInner(){
               aria-modal="true"
               aria-labelledby="match-results-title"
             >
-              <div id="match-results-title" className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold text-white ${bannerColor()}`}>
+              <div
+                id="match-results-title"
+                className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold text-white results-banner ${bannerColor()} ${
+                  resultBanner === "Defeat" ? "results-banner-defeat" : ""
+                }`}
+              >
                 {resultBanner}
               </div>
               {showResultsScoreBadge && (
@@ -7323,7 +7328,13 @@ function RPSDoodleAppInner(){
                         ))}
                       </select>
                     </label>
-                    <button onClick={handleCreateProfile} className="px-2 py-1 rounded bg-sky-100 text-sky-700" data-dev-label="stats.profile.new">New profile</button>
+                    <button
+                      onClick={handleCreateProfile}
+                      className="px-2 py-1 rounded app-accent-soft"
+                      data-dev-label="stats.profile.new"
+                    >
+                      New profile
+                    </button>
                   </div>
                 </div>
                 <p className="text-xs text-slate-500">Profiles keep logs, training, and exports separate. Switch profiles to return to previous stats instantly.</p>
@@ -7337,7 +7348,9 @@ function RPSDoodleAppInner(){
                     data-dev-label={`stats.tab.${tab.key}`}
                     data-focus-first={tab.key === statsTabs[0].key ? true : undefined}
                     onClick={() => setStatsTab(tab.key)}
-                    className={"px-3 py-1.5 rounded-full text-sm " + (statsTab === tab.key ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200")}
+                    className={`px-3 py-1.5 rounded-full text-sm transition-colors ${
+                      statsTab === tab.key ? 'app-accent-pill' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
                   >
                     {tab.label}
                   </button>
@@ -7413,7 +7426,7 @@ function RPSDoodleAppInner(){
                             <svg viewBox="0 0 200 50" className="h-full w-full" aria-hidden="true">
                               <polyline
                                 fill="none"
-                                stroke="#0ea5e9"
+                                stroke="var(--app-accent-strong)"
                                 strokeWidth="3"
                                 strokeLinecap="round"
                                 points={confidenceSparkPoints}
@@ -7615,7 +7628,7 @@ function RPSDoodleAppInner(){
                       <button
                         type="button"
                         onClick={() => setRoundsViewMode(prev => (prev === "card" ? "table" : "card"))}
-                        className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+                        className="rounded-full border app-accent-border app-accent-soft px-3 py-1.5 text-sm font-semibold transition"
                       >
                         {isCardView ? "Table view (advanced)" : "Card view"}
                       </button>
@@ -7688,7 +7701,7 @@ function RPSDoodleAppInner(){
                                     {chips.map(chip => (
                                       <span
                                         key={chip}
-                                        className="rounded-full bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700"
+                                        className="rounded-full app-accent-soft px-2 py-1 text-xs font-medium"
                                       >
                                         {chip}
                                       </span>
@@ -7709,8 +7722,10 @@ function RPSDoodleAppInner(){
                                       >
                                         <div className="absolute inset-0 flex items-end justify-center rounded-t-lg bg-slate-100">
                                           <div
-                                            className="w-7 rounded-t-lg bg-sky-400"
-                                            style={{ height: `${Math.min(100, Math.max(4, Math.round(normalized[move])))}%` }}
+                                            className="w-7 rounded-t-lg app-accent-fill"
+                                            style={{
+                                              height: `${Math.min(100, Math.max(4, Math.round(normalized[move])))}%`,
+                                            }}
                                           />
                                         </div>
                                         <div className="relative flex flex-col items-center justify-end gap-1">
@@ -7994,7 +8009,7 @@ function RPSDoodleAppInner(){
                     return;
                   }
                   if (result.action === "create") {
-                    setToastMessage("New player starts a fresh training session (10 rounds).");
+                    setToastMessage(`New player starts a fresh training session (${TRAIN_ROUNDS} rounds).`);
                     setLive("New player created. Training required before challenge modes unlock.");
                   } else {
                     setLive("Player demographics updated.");

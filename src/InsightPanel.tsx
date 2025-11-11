@@ -386,7 +386,7 @@ function renderSparkline(values: number[], width: number, height: number, classN
   const points = buildSparklinePoints(values, width, height);
   return (
     <svg width={width} height={height} className={className} aria-hidden>
-      <polyline fill="none" stroke="#0ea5e9" strokeWidth={2} points={points} />
+      <polyline fill="none" stroke="var(--app-accent-strong)" strokeWidth={2} points={points} />
     </svg>
   );
 }
@@ -401,9 +401,13 @@ const InfoChip: React.FC<{ description: string; label?: string }> = ({ descripti
   </span>
 );
 
-const LegendSwatch: React.FC<{ colorClass: string; label: string }> = ({ colorClass, label }) => (
+const LegendSwatch: React.FC<{ colorClass?: string; color?: string; label: string }> = ({ colorClass, color, label }) => (
   <span className="inline-flex items-center gap-2 text-xs text-slate-600">
-    <span className={`h-2.5 w-2.5 rounded ${colorClass}`} aria-hidden />
+    <span
+      className={`h-2.5 w-2.5 rounded ${colorClass ?? ""}`.trim()}
+      style={color ? { backgroundColor: color } : undefined}
+      aria-hidden
+    />
     <span>{label}</span>
   </span>
 );
@@ -430,12 +434,12 @@ const BlendMeter: React.FC<{ snapshot: LiveInsightSnapshot | null }> = ({ snapsh
       <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-slate-200" aria-hidden>
           <div
-            className="absolute inset-y-0 left-0 bg-sky-600"
+            className="absolute inset-y-0 left-0 app-accent-fill"
             style={{ width: `${Math.min(100, Math.max(0, realtimeShare * 100))}%` }}
           />
         </div>
         <div className="flex items-center gap-4">
-          <LegendSwatch colorClass="bg-sky-600" label="Realtime" />
+          <LegendSwatch color="var(--app-accent-strong)" label="Realtime" />
           <LegendSwatch colorClass="bg-slate-500" label="History" />
         </div>
       </div>
@@ -536,11 +540,12 @@ const PredictionSourceCard: React.FC<PredictionSourceCardProps> = ({
   distribution,
   variant,
 }) => {
-  const variantStyles =
-    variant === "realtime"
-      ? "border-sky-200 bg-sky-50/80 text-sky-900"
-      : "border-slate-200 bg-white/80 text-slate-900";
-  const barColor = variant === "realtime" ? "bg-sky-500" : "bg-slate-500";
+  const isRealtime = variant === "realtime";
+  const variantStyles = isRealtime
+    ? "app-accent-border text-slate-900"
+    : "border-slate-200 bg-white/80 text-slate-900";
+  const cardStyle = isRealtime ? { backgroundColor: "var(--app-accent-soft)" } : undefined;
+  const barColor = isRealtime ? "app-accent-fill" : "bg-slate-500";
   const roundsLabel = rounds
     ? `${rounds} round${rounds === 1 ? "" : "s"}`
     : variant === "realtime"
@@ -548,7 +553,7 @@ const PredictionSourceCard: React.FC<PredictionSourceCardProps> = ({
     : "Stored history";
 
   return (
-    <div className={`rounded-xl border ${variantStyles} p-3`}>
+    <div className={`rounded-xl border ${variantStyles} p-3`} style={cardStyle}>
       <div className="flex items-start justify-between">
         <div>
           <div className="text-sm font-semibold text-slate-800">{title}</div>
@@ -662,11 +667,11 @@ const ExpertChip: React.FC<ExpertChipProps> = ({ expert, variant }) => {
     <span className="text-slate-400">No move yet</span>
   );
   const label = variant === "realtime" ? "Realtime" : "Previous";
-  const chipClass = variant === "realtime" ? "bg-sky-100 text-sky-800" : "bg-slate-100 text-slate-700";
+  const chipClass = variant === "realtime" ? "app-accent-soft" : "bg-slate-100 text-slate-700";
   const badgeClass =
     variant === "realtime"
-      ? "bg-sky-200/90 text-sky-800"
-      : "bg-slate-200 text-slate-600";
+      ? "app-accent-pill px-2 py-0.5 text-[10px]"
+      : "bg-slate-200 text-slate-600 px-2 py-0.5";
 
   return (
     <span
@@ -676,7 +681,7 @@ const ExpertChip: React.FC<ExpertChipProps> = ({ expert, variant }) => {
       <span>{expert.name}:</span>
       <span className="inline-flex items-center gap-1">{moveLabel}</span>
       <span className="text-[11px] font-normal text-slate-600">{formatPercent(expert.probability, 0)}</span>
-      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${badgeClass}`}>
+      <span className={`rounded-full font-semibold uppercase tracking-wide ${badgeClass}`}>
         {label}
       </span>
     </span>
@@ -1192,10 +1197,17 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
                           preserveAspectRatio="none"
                         >
                           <rect x={0} y={0} width={220} height={140} fill="none" stroke="transparent" />
-                          <line x1={0} y1={140} x2={220} y2={0} stroke="#cbd5f5" strokeWidth={1.5} />
+                          <line
+                            x1={0}
+                            y1={140}
+                            x2={220}
+                            y2={0}
+                            stroke="var(--app-accent-soft)"
+                            strokeWidth={1.5}
+                          />
                           <polyline
                             fill="none"
-                            stroke="#0284c7"
+                            stroke="var(--app-accent-strong)"
                             strokeWidth={2.5}
                             strokeLinejoin="round"
                             points={reliabilityPoints
@@ -1210,8 +1222,8 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
                       </div>
                       <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
                         <div className="flex items-center gap-3">
-                          <LegendSwatch colorClass="bg-[#cbd5f5]" label="Perfect line" />
-                          <LegendSwatch colorClass="bg-[#0284c7]" label="Confidence vs accuracy" />
+                          <LegendSwatch color="var(--app-accent-soft)" label="Perfect line" />
+                          <LegendSwatch color="var(--app-accent-strong)" label="Confidence vs accuracy" />
                         </div>
                         <span>Deciles show average confidence buckets.</span>
                       </div>
@@ -1266,7 +1278,7 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
                   <div
                     className="relative h-20 w-20 rounded-full"
                     style={{
-                      background: `conic-gradient(#0284c7 ${Math.max(0, (averageSharpness ?? 0) * 100)}%, rgba(2,132,199,0.15) ${
+                      background: `conic-gradient(var(--app-accent-strong) ${Math.max(0, (averageSharpness ?? 0) * 100)}%, var(--app-accent-soft) ${
                         Math.max(0, (averageSharpness ?? 0) * 100
                       )}%)`,
                     }}
