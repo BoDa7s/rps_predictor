@@ -3216,7 +3216,7 @@ function RPSDoodleAppInner(){
   const activeMatchMode: Mode = selectedMode ?? "practice";
   const matchModeBadgeTheme =
     activeMatchMode === "challenge"
-      ? "border-rose-200 bg-rose-100 text-rose-700"
+      ? "border-rose-500 bg-rose-600 text-white"
       : "border-sky-200 bg-sky-100 text-sky-700";
   const aiStatusPill = useMemo(() => {
     const offState = {
@@ -3229,7 +3229,7 @@ function RPSDoodleAppInner(){
     const difficultyLabel = `${DIFFICULTY_INFO[aiMode].label} Mode`;
     return {
       label: `AI ACTIVE (${difficultyLabel})`,
-      className: "border border-emerald-200 bg-emerald-50 text-emerald-700",
+      className: "border border-emerald-500 bg-emerald-600 text-white",
     };
   }, [aiMode, isTrained, needsTraining, predictorMode, trainingActive]);
 
@@ -5869,7 +5869,7 @@ function RPSDoodleAppInner(){
             )}
             {showTrainingCompleteBadge && (
               <span
-                className="px-2 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-700"
+                className="px-2 py-1 text-xs font-semibold rounded-full bg-emerald-600 text-white"
                 data-dev-label="hdr.trainingBadge"
               >
                 Training complete
@@ -6357,15 +6357,15 @@ function RPSDoodleAppInner(){
                       </select>
                       <p className="text-xs text-slate-500">Currently showing {resolvedThemeLabel.toLowerCase()} mode.</p>
                     </div>
-                    <div className="space-y-3 rounded-lg border border-slate-200 bg-white/60 p-3 shadow-inner">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="space-y-3 rounded-lg border border-slate-200 bg-white/95 p-3 shadow-inner">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
                         <div>
                           <span className="font-medium text-slate-800">{editingModeLabel} mode colors</span>
                           <p className="text-xs text-slate-500">
                             Adjust accent highlights and interface backgrounds for each theme.
                           </p>
                         </div>
-                        <div className="inline-flex overflow-hidden rounded-full border border-slate-200 bg-white shadow-sm">
+                        <div className="inline-flex overflow-hidden rounded-full border border-slate-200 bg-white shadow-sm self-start">
                           <button
                             type="button"
                             className={`px-3 py-1 text-xs font-semibold transition-colors ${
@@ -7347,22 +7347,43 @@ function RPSDoodleAppInner(){
                 {statsTab === "overview" && (
                   <div className="space-y-4">
                     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                      <div className="rounded-2xl bg-sky-50/80 p-4 shadow-sm">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Matches</div>
-                        <div className="mt-2 text-3xl font-bold text-slate-900">{totalMatches}</div>
-                        <p className="mt-1 text-xs text-slate-500">How many games you played.</p>
+                      <div
+                        className="rounded-2xl border p-4 shadow-sm"
+                        style={{ backgroundColor: "var(--app-accent-soft)", borderColor: "var(--app-accent-muted)", color: "var(--app-text-strong)" }}
+                      >
+                        <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--app-text-secondary)" }}>
+                          Matches
+                        </div>
+                        <div className="mt-2 text-3xl font-bold" style={{ color: "var(--app-text-strong)" }}>{totalMatches}</div>
+                        <p className="mt-1 text-xs" style={{ color: "var(--app-text-secondary)" }}>
+                          How many games you played.
+                        </p>
                       </div>
-                      <div className="rounded-2xl bg-sky-50/80 p-4 shadow-sm">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Rounds</div>
-                        <div className="mt-2 text-3xl font-bold text-slate-900">{totalRounds}</div>
-                        <p className="mt-1 text-xs text-slate-500">Total turns logged.</p>
+                      <div
+                        className="rounded-2xl border p-4 shadow-sm"
+                        style={{ backgroundColor: "var(--app-accent-soft)", borderColor: "var(--app-accent-muted)", color: "var(--app-text-strong)" }}
+                      >
+                        <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--app-text-secondary)" }}>
+                          Rounds
+                        </div>
+                        <div className="mt-2 text-3xl font-bold" style={{ color: "var(--app-text-strong)" }}>{totalRounds}</div>
+                        <p className="mt-1 text-xs" style={{ color: "var(--app-text-secondary)" }}>
+                          Total turns logged.
+                        </p>
                       </div>
-                      <div className="rounded-2xl bg-sky-50/80 p-4 shadow-sm">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Win rate</div>
-                        <div className="mt-2 text-3xl font-bold text-slate-900">
+                      <div
+                        className="rounded-2xl border p-4 shadow-sm"
+                        style={{ backgroundColor: "var(--app-accent-soft)", borderColor: "var(--app-accent-muted)", color: "var(--app-text-strong)" }}
+                      >
+                        <div className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--app-text-secondary)" }}>
+                          Win rate
+                        </div>
+                        <div className="mt-2 text-3xl font-bold" style={{ color: "var(--app-text-strong)" }}>
                           {totalMatches ? `${Math.round(overallWinRate * 100)}%` : "—"}
                         </div>
-                        <p className="mt-1 text-xs text-slate-500">Wins per match.</p>
+                        <p className="mt-1 text-xs" style={{ color: "var(--app-text-secondary)" }}>
+                          Wins per match.
+                        </p>
                       </div>
                       <div className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm">
                         <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Favorite move</div>

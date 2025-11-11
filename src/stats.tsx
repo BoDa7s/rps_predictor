@@ -155,8 +155,8 @@ export const DEFAULT_THEME_COLOR_PREFERENCES: ThemeColorPreferences = {
     background: "#F8FAFC",
   },
   dark: {
-    accent: "#FF7849",
-    background: "#070F27",
+    accent: "#A4796A",
+    background: "#1F1F1F",
   },
 } as const;
 
