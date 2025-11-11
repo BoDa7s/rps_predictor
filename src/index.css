@@ -55,6 +55,10 @@ button {
   background-color: var(--app-accent-strong);
 }
 
+.insight-chart-surface {
+  background-color: var(--app-accent-soft);
+}
+
 .settings-helper-clamp {
   display: -webkit-box;
   line-clamp: 2;

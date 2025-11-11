@@ -1188,7 +1188,7 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
                 <div className="mt-3 space-y-2">
                   {reliabilityPoints.length ? (
                     <>
-                      <div className="rounded-lg bg-slate-50 p-3">
+                      <div className="rounded-lg insight-chart-surface p-3">
                         <svg
                           className="h-36 w-full"
                           role="img"
@@ -1250,7 +1250,7 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
                 </div>
                 <div className="mt-3 space-y-2">
                   {recentBrier.length ? (
-                    <div className="rounded-lg bg-slate-50 p-3">
+                    <div className="rounded-lg insight-chart-surface p-3">
                       <div className="text-[11px] uppercase tracking-wide text-slate-500">Recent rounds</div>
                       {renderSparkline(recentBrier, 220, 60, "mt-2")}
                     </div>
@@ -1427,7 +1427,7 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
                 <div className="mt-3 space-y-2">
                   {derived.adaptationWindows.length ? (
                     derived.adaptationWindows.slice(-5).map((window, idx) => (
-                      <div key={`${window.start}-${idx}`} className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                      <div key={`${window.start}-${idx}`} className="rounded-lg insight-chart-surface px-3 py-2 text-xs text-slate-600">
                         <div className="flex items-center justify-between text-[11px] text-slate-500">
                           <span>Change #{derived.adaptationWindows.length - window.start}</span>
                           <span>{window.length} rounds</span>
@@ -1504,7 +1504,7 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
                         </React.Fragment>
                       ))}
                     </div>
-                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg insight-chart-surface px-3 py-2 text-[11px] text-slate-600">
                       <span>Rounds: {totalRounds}</span>
                       <span>Accuracy: {formatPercent(accuracy, 0)}</span>
                       <span>Mistake Rate: {formatPercent(mistakeRate, 0)}</span>
