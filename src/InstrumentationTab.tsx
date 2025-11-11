@@ -604,7 +604,7 @@ function formatTriggerLabel(trigger: SnapshotTrigger): string {
     case "match-ended":
       return "Match end";
     case "round-interval":
-      return "10 rounds";
+      return "5 rounds";
     case "time-interval":
       return "2 minutes";
     default:

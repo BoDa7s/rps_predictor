@@ -2354,7 +2354,7 @@ function ContextSummary({
             <div>
               <h3 style={{ margin: 0 }}>{profile.name}</h3>
               <p style={{ margin: 0, fontSize: "0.75rem", opacity: 0.7 }}>
-                Training {profile.trained ? "complete" : `${profile.trainingCount}/10`}
+                Training {profile.trained ? "complete" : `${profile.trainingCount}/5`}
               </p>
             </div>
             <CopyIdButton id={profile.id} />
