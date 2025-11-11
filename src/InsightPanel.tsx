@@ -76,6 +76,7 @@ type ConfidenceBand = {
 };
 
 const MAX_ENTRIES_FOR_TIMELINES = 32;
+const HIGH_CONFIDENCE_THRESHOLD = 0.7;
 
 function clampProbability(value: number | null | undefined): number {
   if (value == null || Number.isNaN(value)) return 0;
@@ -390,6 +391,23 @@ function renderSparkline(values: number[], width: number, height: number, classN
   );
 }
 
+const InfoChip: React.FC<{ description: string; label?: string }> = ({ description, label = "i" }) => (
+  <span
+    className="inline-flex h-5 min-w-[1.5rem] items-center justify-center rounded-full bg-slate-100 px-2 text-[10px] font-semibold uppercase tracking-wide text-slate-600"
+    title={description}
+    aria-label={description}
+  >
+    {label}
+  </span>
+);
+
+const LegendSwatch: React.FC<{ colorClass: string; label: string }> = ({ colorClass, label }) => (
+  <span className="inline-flex items-center gap-2 text-xs text-slate-600">
+    <span className={`h-2.5 w-2.5 rounded ${colorClass}`} aria-hidden />
+    <span>{label}</span>
+  </span>
+);
+
 const BlendMeter: React.FC<{ snapshot: LiveInsightSnapshot | null }> = ({ snapshot }) => {
   const realtimeWeightRaw = clampProbability(snapshot?.realtimeWeight ?? 0);
   const historyWeightRaw = clampProbability(snapshot?.historyWeight ?? 0);
@@ -399,24 +417,27 @@ const BlendMeter: React.FC<{ snapshot: LiveInsightSnapshot | null }> = ({ snapsh
 
   return (
     <div className="rounded-xl bg-slate-50/90 px-4 py-3 shadow-inner">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Blend meter</div>
-        <div className="text-sm font-medium text-slate-700">
-          Now {formatPercent(realtimeShare, 0)} / History {formatPercent(historyShare, 0)}
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-2">
+          <div className="text-sm font-semibold text-slate-800">Blend</div>
+          <InfoChip description="Mix between rules and learned behavior." />
+        </div>
+        <div className="text-sm font-semibold text-slate-900">
+          {formatPercent(realtimeShare, 0)} realtime / {formatPercent(historyShare, 0)} history
         </div>
       </div>
-      <div
-        className="mt-2 flex items-center gap-3 text-xs text-slate-600"
-        title="We trust what you're doing now more."
-      >
-        <span className="hidden sm:inline">Realtime</span>
+      <p className="mt-1 text-xs text-slate-500">Realtime mix uses what you just played; history leans on past rounds.</p>
+      <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-slate-200" aria-hidden>
           <div
-            className="absolute inset-y-0 left-0 bg-sky-500"
+            className="absolute inset-y-0 left-0 bg-sky-600"
             style={{ width: `${Math.min(100, Math.max(0, realtimeShare * 100))}%` }}
           />
         </div>
-        <span className="hidden sm:inline">History</span>
+        <div className="flex items-center gap-4">
+          <LegendSwatch colorClass="bg-sky-600" label="Realtime" />
+          <LegendSwatch colorClass="bg-slate-500" label="History" />
+        </div>
       </div>
     </div>
   );
@@ -724,7 +745,7 @@ const HistoryPeek: React.FC<HistoryPeekProps> = ({
               detail={topTransition ? formatPercent(topTransition.pct, 0) : undefined}
             />
             <HistoryStat
-              label="Average confidence band"
+              label="Avg. confidence this round"
               value={confidenceBand ? formatConfidenceBucket(confidenceBand.band) : "No band yet"}
               detail={confidenceBand ? formatPercent(confidenceBand.pct, 0) : undefined}
             />
@@ -738,9 +759,9 @@ const HistoryPeek: React.FC<HistoryPeekProps> = ({
 const HistoryStat: React.FC<{ label: string; value: React.ReactNode; detail?: React.ReactNode }> = ({ label, value, detail }) => (
   <div className="rounded-lg border border-slate-200/70 bg-slate-50/70 px-3 py-2">
     <dt className="text-[11px] uppercase tracking-wide text-slate-500">{label}</dt>
-    <dd className="mt-1 text-sm font-medium text-slate-800">
-      {value}
-      {detail ? <span className="ml-1 text-xs font-normal text-slate-500">{detail}</span> : null}
+    <dd className="mt-1 flex flex-wrap items-center gap-1 text-sm font-medium text-slate-800">
+      <span className="inline-flex items-center gap-1 whitespace-nowrap">{value}</span>
+      {detail ? <span className="text-xs font-normal text-slate-500">{detail}</span> : null}
     </dd>
   </div>
 );
@@ -761,7 +782,7 @@ function formatConfidenceBucket(bucket: string): string {
 }
 
 const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, historicalRounds, titleRef, onClose }) => {
-  const [threshold, setThreshold] = useState(0.7);
+  const [simplifiedMode, setSimplifiedMode] = useState(true);
   const [signalsOpen, setSignalsOpen] = useState(false);
   const [historyPeekOpen, setHistoryPeekOpen] = useState(false);
 
@@ -885,7 +906,7 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
         coveredCount: 0,
       };
     }
-    const filtered = entries.filter(entry => entry.maxProb >= threshold);
+    const filtered = entries.filter(entry => entry.maxProb >= HIGH_CONFIDENCE_THRESHOLD);
     const coverageRate = filtered.length / entries.length;
     const correctCount = filtered.filter(entry => entry.correct).length;
     const accuracy = filtered.length ? correctCount / filtered.length : null;
@@ -896,7 +917,7 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
       mistakeRate,
       coveredCount: filtered.length,
     };
-  }, [derived, threshold]);
+  }, [derived]);
 
   const averageBrier = useMemo(() => average(derived.brierValues), [derived.brierValues]);
   const averageSharpness = useMemo(() => average(derived.sharpnessValues), [derived.sharpnessValues]);
@@ -922,58 +943,162 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
     }, 0);
   }, [derived.bands]);
 
-  const decileRows = derived.bins.map((bin, index) => ({
-    label: `${index * 10}–${index === 9 ? 100 : (index + 1) * 10}%`,
-    avgConfidence: bin.total ? bin.avgConfidence : null,
-    accuracy: bin.total ? bin.accuracy : null,
-    rounds: bin.total,
-    gap: bin.total ? Math.abs(bin.accuracy - bin.avgConfidence) : null,
-  }));
+  const decileRows = derived.bins.map((bin, index) => {
+    const avgConfidence = bin.total ? bin.avgConfidence : null;
+    const accuracy = bin.total ? bin.accuracy : null;
+    const difference = avgConfidence != null && accuracy != null ? accuracy - avgConfidence : null;
+    const gap = difference != null ? Math.abs(difference) : null;
+    return {
+      label: `${index * 10}–${index === 9 ? 100 : (index + 1) * 10}%`,
+      avgConfidence,
+      accuracy,
+      rounds: bin.total,
+      difference,
+      gap,
+    };
+  });
+
+  const formatGapDifference = (value: number | null): string => {
+    if (value == null || Number.isNaN(value)) return "—";
+    const pct = (value * 100).toFixed(0);
+    const sign = value > 0 ? "+" : "";
+    return `${sign}${pct}%`;
+  };
+
+  const getGapBarColor = (value: number | null): string => {
+    if (value == null || Number.isNaN(value)) return "bg-slate-300";
+    const magnitude = Math.abs(value);
+    if (magnitude < 0.05) return "bg-emerald-500";
+    if (magnitude < 0.15) return "bg-amber-500";
+    return "bg-rose-500";
+  };
 
   const recentBrier = derived.brierValues.slice(-MAX_ENTRIES_FOR_TIMELINES);
   const recentVolatility = derived.maxProbSeries.slice(-MAX_ENTRIES_FOR_TIMELINES);
   const recentSurprise = derived.surpriseValues.slice(-MAX_ENTRIES_FOR_TIMELINES).map(item => item.value);
 
+  const realtimeWeight = clampProbability(snapshot?.realtimeWeight ?? 0);
+  const historyWeight = clampProbability(snapshot?.historyWeight ?? 0);
+  const totalBlendWeight = realtimeWeight + historyWeight;
+  const realtimeShare = totalBlendWeight > 0 ? realtimeWeight / totalBlendWeight : 0;
+  const historyShare = totalBlendWeight > 0 ? historyWeight / totalBlendWeight : 0;
+  const isLowConfidence = snapshot?.confidence != null && snapshot.confidence < 0.4;
+  const topPanelReason = snapshot?.reason ?? "Not enough rounds yet—play a few more.";
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
-        <div>
-          <h2
-            ref={titleRef}
-            tabIndex={-1}
-            className="text-lg font-semibold text-slate-900 focus:outline-none"
-          >
-            Live AI Insight panel
-          </h2>
-          <p className="text-xs text-slate-500">Right-rail analytics with real-time confidence tracking.</p>
+      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-6 py-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <h2
+              ref={titleRef}
+              tabIndex={-1}
+              className="text-lg font-semibold text-slate-900 focus:outline-none"
+            >
+              Live AI insight panel
+            </h2>
+            <InfoChip description="Quick view of the AI’s confidence and blend." />
+          </div>
+          <p className="text-xs text-slate-500">
+            {simplifiedMode
+              ? "Plain-language analytics on how the AI is feeling right now."
+              : "Detailed telemetry for power users watching the AI adapt."}
+          </p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600 transition hover:bg-slate-200"
-        >
-          Close ✕
-        </button>
+        <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-center">
+          <label className="flex items-center gap-3 text-sm text-slate-600">
+            <span className="font-semibold text-slate-700">Simplified mode</span>
+            <button
+              type="button"
+              onClick={() => setSimplifiedMode(prev => !prev)}
+              className={`relative flex h-6 w-11 items-center rounded-full transition ${
+                simplifiedMode ? "bg-sky-600" : "bg-slate-300"
+              }`}
+              aria-pressed={simplifiedMode}
+              aria-label="Toggle simplified analytics mode"
+            >
+              <span
+                className={`h-5 w-5 transform rounded-full bg-white shadow transition ${
+                  simplifiedMode ? "translate-x-5" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </label>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600 transition hover:bg-slate-200"
+          >
+            Close ✕
+          </button>
+        </div>
       </header>
       <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-8 pt-4">
         <div className="space-y-6">
           <section className="rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div className="space-y-2">
-                <h3 className="text-base font-semibold text-slate-800">Live AI Insight</h3>
-                <p className="text-xs text-slate-500">
-                  I’m using what you just did now plus what I learned before. I trust now more.
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+              <div className="flex-1 space-y-3">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-semibold text-slate-800">Right panel analytics</h3>
+                  <InfoChip description="Confidence, policy, and blend at a glance." />
+                </div>
+                <p className="text-sm text-slate-600">
+                  {simplifiedMode
+                    ? "Here’s how sure the AI feels about the next round and which strategy it leans on."
+                    : "Live view of the AI’s confidence, heuristic safety net, and realtime-versus-history blend."}
                 </p>
-                <p className="text-xs text-slate-500">{snapshot?.reason || "Not enough signal yet."}</p>
+                <div className="grid gap-1 text-xs text-slate-600">
+                  <div>
+                    <span className="font-semibold text-slate-700">Confidence:</span> How sure the AI is (0–100%).
+                  </div>
+                  <div>
+                    <span className="font-semibold text-slate-700">Heuristic policy:</span> Simple rules the AI uses before it learns you.
+                  </div>
+                  <div>
+                    <span className="font-semibold text-slate-700">Blend:</span> Mix between rules and learned behavior.
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500">{topPanelReason}</p>
               </div>
-              <div className="flex flex-col items-end gap-2 text-right text-sm text-slate-600">
-                <div className="font-semibold text-slate-900">{formatPercent(snapshot?.confidence ?? null, 0)} confidence</div>
-                <div>{snapshot?.policy === "mixer" ? "Mixer" : "Heuristic"} policy</div>
+              <div className="flex w-full max-w-xs flex-col gap-3 text-sm text-slate-600">
+                <div className="rounded-xl bg-slate-50 px-3 py-2 text-right shadow-inner">
+                  <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    <span>Confidence</span>
+                    {isLowConfidence && (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-700"
+                        title="Predictions are closer to guessing."
+                      >
+                        Low confidence
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1 text-2xl font-semibold text-slate-900">{formatPercent(snapshot?.confidence ?? null, 0)}</div>
+                </div>
+                <div className="rounded-xl bg-slate-50 px-3 py-2 text-right shadow-inner">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Heuristic policy</div>
+                  <div className="mt-1 text-lg font-semibold text-slate-900">
+                    {snapshot ? (snapshot.policy === "mixer" ? "Learning blend" : "Rules first") : "—"}
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    {snapshot
+                      ? snapshot.policy === "mixer"
+                        ? "Mixing learned play with heuristics."
+                        : "Relying on starter rules until it learns more."
+                      : "Will show once rounds are played."}
+                  </div>
+                </div>
+                <div className="rounded-xl bg-slate-50 px-3 py-2 text-right shadow-inner">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Blend</div>
+                  <div className="mt-1 text-lg font-semibold text-slate-900">
+                    {formatPercent(realtimeShare, 0)} realtime / {formatPercent(historyShare, 0)} history
+                  </div>
+                </div>
                 {snapshot?.conflict &&
                   snapshot.conflict.realtime &&
                   snapshot.conflict.history &&
                   snapshot.conflict.realtime !== snapshot.conflict.history && (
-                    <div className="flex items-center gap-1 rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">
+                    <div className="flex items-center justify-between rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
                       <span>Pattern shift</span>
                       <span>
                         {formatMove(snapshot.conflict.realtime)} ≠ {formatMove(snapshot.conflict.history)}
@@ -1017,75 +1142,110 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
           </section>
 
           <section className="space-y-4">
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Confidence diagnostics</h3>
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Confidence checks</h3>
             <div className="grid gap-4 xl:grid-cols-2">
               <div className="rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-800">Calibration (ECE)</div>
-                    <p className="text-xs text-slate-500">Lower is better. Perfect calibration sits on the diagonal.</p>
-                  </div>
-                  <div className="text-lg font-semibold text-slate-900">{formatNumber(derived.ece, 3)}</div>
-                </div>
-                <div className="mt-3">
-                  <svg width={220} height={140} className="w-full" role="img" aria-label="Reliability diagram">
-                    <line x1={0} y1={140} x2={220} y2={0} stroke="#cbd5f5" strokeWidth={1} />
-                    <polyline
-                      fill="none"
-                      stroke="#0ea5e9"
-                      strokeWidth={2}
-                      points={reliabilityPoints
-                        .map(point => {
-                          const x = point.x * 220;
-                          const y = 140 - point.y * 140;
-                          return `${x.toFixed(2)},${y.toFixed(2)}`;
-                        })
-                        .join(" ")}
-                    />
-                  </svg>
-                  <div className="mt-2 grid grid-cols-5 gap-1 text-[11px] text-slate-500">
-                    {derived.bins.map((bin, index) => (
-                      <div key={index} className="rounded bg-slate-100 px-1 py-0.5 text-center">
-                        {(bin.lower * 100).toFixed(0)}%
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-800">Brier score (multi-class)</div>
-                    <p className="text-xs text-slate-500">Overall forecast quality. Lower is better.</p>
-                  </div>
-                  <div className="text-lg font-semibold text-slate-900">{formatNumber(averageBrier, 3)}</div>
-                </div>
-                <div className="mt-3">
-                  {recentBrier.length ? (
-                    <div>
-                      <div className="text-[11px] uppercase tracking-wide text-slate-400">Recent rounds</div>
-                      {renderSparkline(recentBrier, 220, 60, "mt-1")}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <div className="text-sm font-semibold text-slate-800">Calibration (Are our confidences honest?)</div>
+                      <InfoChip description="Checks if confidence matches actual accuracy." />
                     </div>
+                    <p className="text-xs text-slate-500">Perfect line = confidence equals accuracy.</p>
+                    <p className="text-[11px] text-slate-500">ECE: Average gap between confidence and accuracy.</p>
+                  </div>
+                  <div className="text-right text-sm">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">ECE</div>
+                    <div className="text-lg font-semibold text-slate-900">{formatNumber(derived.ece, 3)}</div>
+                  </div>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {reliabilityPoints.length ? (
+                    <>
+                      <div className="rounded-lg bg-slate-50 p-3">
+                        <svg
+                          className="h-36 w-full"
+                          role="img"
+                          aria-label="Reliability diagram"
+                          viewBox="0 0 220 140"
+                          preserveAspectRatio="none"
+                        >
+                          <rect x={0} y={0} width={220} height={140} fill="none" stroke="transparent" />
+                          <line x1={0} y1={140} x2={220} y2={0} stroke="#cbd5f5" strokeWidth={1.5} />
+                          <polyline
+                            fill="none"
+                            stroke="#0284c7"
+                            strokeWidth={2.5}
+                            strokeLinejoin="round"
+                            points={reliabilityPoints
+                              .map(point => {
+                                const x = point.x * 220;
+                                const y = 140 - point.y * 140;
+                                return `${x.toFixed(2)},${y.toFixed(2)}`;
+                              })
+                              .join(" ")}
+                          />
+                        </svg>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+                        <div className="flex items-center gap-3">
+                          <LegendSwatch colorClass="bg-[#cbd5f5]" label="Perfect line" />
+                          <LegendSwatch colorClass="bg-[#0284c7]" label="Confidence vs accuracy" />
+                        </div>
+                        <span>Deciles show average confidence buckets.</span>
+                      </div>
+                    </>
                   ) : (
-                    <p className="text-xs text-slate-500">Not enough rounds to compute the trend.</p>
+                    <p className="text-xs text-slate-500">We need more rounds to plot this metric.</p>
                   )}
                 </div>
               </div>
 
               <div className="rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-800">Sharpness</div>
-                    <p className="text-xs text-slate-500">Measures how peaked the predictions are.</p>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <div className="text-sm font-semibold text-slate-800">Brier (multi-class)</div>
+                      <InfoChip description="Smaller is better; measures overall probabilistic error." />
+                    </div>
+                    <p className="text-xs text-slate-500">Smaller is better; measures overall probabilistic error.</p>
                   </div>
-                  <div className="text-lg font-semibold text-slate-900">{formatNumber(averageSharpness, 3)}</div>
+                  <div className="text-right text-sm">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Brier</div>
+                    <div className="text-lg font-semibold text-slate-900">{formatNumber(averageBrier, 3)}</div>
+                  </div>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {recentBrier.length ? (
+                    <div className="rounded-lg bg-slate-50 p-3">
+                      <div className="text-[11px] uppercase tracking-wide text-slate-500">Recent rounds</div>
+                      {renderSparkline(recentBrier, 220, 60, "mt-2")}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500">We need more rounds to plot this metric.</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <div className="text-sm font-semibold text-slate-800">Sharpness</div>
+                      <InfoChip description="How peaked the AI’s probabilities are." />
+                    </div>
+                    <p className="text-xs text-slate-500">Higher sharpness means the AI leans harder on one move.</p>
+                  </div>
+                  <div className="text-right text-sm">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sharpness</div>
+                    <div className="text-lg font-semibold text-slate-900">{formatPercent(averageSharpness, 0)}</div>
+                  </div>
                 </div>
                 <div className="mt-4 flex items-center gap-4">
                   <div
                     className="relative h-20 w-20 rounded-full"
                     style={{
-                      background: `conic-gradient(#0ea5e9 ${Math.max(0, (averageSharpness ?? 0) * 100)}%, rgba(14,165,233,0.15) ${
+                      background: `conic-gradient(#0284c7 ${Math.max(0, (averageSharpness ?? 0) * 100)}%, rgba(2,132,199,0.15) ${
                         Math.max(0, (averageSharpness ?? 0) * 100
                       )}%)`,
                     }}
@@ -1096,56 +1256,44 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
                     </div>
                   </div>
                   <div className="flex-1 text-xs text-slate-500">
-                    Sharpness ignores correctness—only how concentrated the probabilities are. The inner number shows the average.
+                    Sharpness ignores correctness—only how concentrated the probabilities are.
                   </div>
                 </div>
               </div>
 
               <div className="rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-800">High-confidence coverage</div>
-                    <p className="text-xs text-slate-500">How often and how accurate the AI is above the chosen threshold.</p>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <div className="text-sm font-semibold text-slate-800">High-confidence coverage</div>
+                      <InfoChip description="Shows how often confident predictions appear and how they perform." />
+                    </div>
+                    <p className="text-xs text-slate-500">High confidence = ≥ {formatPercent(HIGH_CONFIDENCE_THRESHOLD, 0)}</p>
+                    <p className="text-[11px] text-slate-500">Coverage, Accuracy, and Mistake Rate stay centered for easy scanning.</p>
                   </div>
-                  <div className="text-right text-xs text-slate-500">
-                    <div className="text-lg font-semibold text-slate-900">τ = {formatPercent(threshold, 0)}</div>
-                    <button
-                      type="button"
-                      className="mt-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600"
-                      onClick={() => setThreshold(prev => (prev >= 0.9 ? 0.7 : parseFloat((prev + 0.1).toFixed(1))))}
-                    >
-                      Adjust +0.1
-                    </button>
+                  <div className="flex items-center gap-2 text-sm text-slate-600">
+                    <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-sky-100 text-sm font-semibold text-sky-700">
+                      HC
+                    </span>
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{formatPercent(HIGH_CONFIDENCE_THRESHOLD, 0)}</span>
                   </div>
                 </div>
                 <div className="mt-3">
-                  <label className="flex items-center gap-3 text-xs text-slate-600">
-                    <span>Threshold</span>
-                    <input
-                      type="range"
-                      min={0.5}
-                      max={0.95}
-                      step={0.05}
-                      value={threshold}
-                      onChange={event => setThreshold(parseFloat(event.target.value))}
-                      className="flex-1 accent-sky-600"
-                    />
-                  </label>
-                  <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs text-slate-600">
-                    <div className="rounded-lg bg-sky-50 px-3 py-2">
-                      <div className="text-[11px] uppercase text-slate-500">Coverage</div>
-                      <div className="text-sm font-semibold text-slate-800">{formatPercent(coverage.coverageRate, 0)}</div>
+                  <div className="grid grid-cols-3 gap-2 text-xs text-slate-600">
+                    <div className="flex flex-col items-center rounded-lg bg-sky-50 px-3 py-2">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Coverage</div>
+                      <div className="mt-1 text-lg font-semibold text-slate-800">{formatPercent(coverage.coverageRate, 0)}</div>
                     </div>
-                    <div className="rounded-lg bg-emerald-50 px-3 py-2">
-                      <div className="text-[11px] uppercase text-slate-500">Accuracy@τ</div>
-                      <div className="text-sm font-semibold text-emerald-700">{formatPercent(coverage.accuracy, 0)}</div>
+                    <div className="flex flex-col items-center rounded-lg bg-emerald-50 px-3 py-2">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Accuracy</div>
+                      <div className="mt-1 text-lg font-semibold text-emerald-700">{formatPercent(coverage.accuracy, 0)}</div>
                     </div>
-                    <div className="rounded-lg bg-rose-50 px-3 py-2">
-                      <div className="text-[11px] uppercase text-slate-500">Mistake rate</div>
-                      <div className="text-sm font-semibold text-rose-600">{formatPercent(coverage.mistakeRate, 0)}</div>
+                    <div className="flex flex-col items-center rounded-lg bg-rose-50 px-3 py-2">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Mistake Rate</div>
+                      <div className="mt-1 text-lg font-semibold text-rose-600">{formatPercent(coverage.mistakeRate, 0)}</div>
                     </div>
                   </div>
-                  <p className="mt-2 text-[11px] text-slate-500">
+                  <p className="mt-2 text-center text-[11px] text-slate-500">
                     {coverage.coveredCount} rounds met the threshold out of {derived.entries.length} analysed.
                   </p>
                 </div>
@@ -1262,56 +1410,94 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
             </div>
           </section>
 
-          <section className="space-y-4">
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Confidence-stratified confusion</h3>
+          <section className="space-y-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-semibold text-slate-800">Confidence-stratified confusion</h3>
+                <InfoChip description="How predictions did at different confidence levels." />
+              </div>
+              <div className="text-[11px] text-slate-500">Rows = What you played · Columns = What AI predicted</div>
+            </div>
+            <div className="text-xs text-slate-500">How predictions did at different confidence levels.</div>
+            <div className="flex flex-wrap gap-3 text-[11px] text-slate-500">
+              <span className="font-semibold text-slate-600">Legend:</span>
+              <span>Cell number = count of rounds</span>
+              <span>Color intensity = more rounds</span>
+              <span>Bands: 0–40%, 40–70%, 70–100% confidence</span>
+            </div>
             <div className="grid gap-4 lg:grid-cols-3">
-              {derived.bands.map(band => (
-                <div key={band.label} className="rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm">
-                  <div className="text-sm font-semibold text-slate-800">{band.label}</div>
-                  <div className="mt-3 grid grid-cols-4 gap-1 text-center text-[11px] text-slate-500">
-                    <div className="flex items-center justify-center rounded bg-slate-100 px-1 py-0.5">Pred →</div>
-                    {MOVES.map(move => (
-                      <div key={move} className="rounded bg-slate-100 px-1 py-0.5">{formatMove(move)}</div>
-                    ))}
-                    {MOVES.map(predicted => (
-                      <React.Fragment key={predicted}>
-                        <div className="flex items-center justify-center rounded bg-slate-100 px-1 py-0.5">
-                          {formatMove(predicted)}
+              {derived.bands.map(band => {
+                const totalRounds = MOVES.reduce(
+                  (total, predicted) =>
+                    total + MOVES.reduce((sum, actual) => sum + band.matrix[predicted][actual], 0),
+                  0,
+                );
+                const correctRounds = MOVES.reduce((sum, move) => sum + band.matrix[move][move], 0);
+                const accuracy = totalRounds ? correctRounds / totalRounds : null;
+                const mistakeRate = accuracy == null ? null : 1 - accuracy;
+                return (
+                  <div key={band.label} className="rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm">
+                    <div className="flex items-center justify-between text-sm font-semibold text-slate-800">
+                      <span>{band.label}</span>
+                      <span>{totalRounds} rounds</span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-4 gap-1 text-center text-[11px] text-slate-600">
+                      <div className="flex items-center justify-center rounded bg-slate-100 px-1 py-0.5">You ↓</div>
+                      {MOVES.map(move => (
+                        <div key={move} className="rounded bg-slate-100 px-1 py-0.5 font-semibold text-slate-700">
+                          {formatMove(move)}
                         </div>
-                        {MOVES.map(actual => {
-                          const count = band.matrix[predicted][actual];
-                          const intensity = maxBandCount ? count / maxBandCount : 0;
-                          return (
-                            <div
-                              key={`${predicted}-${actual}`}
-                              className="rounded px-1 py-2 text-xs font-semibold text-slate-700"
-                              style={{
-                                backgroundColor: `rgba(14, 165, 233, ${intensity * 0.6})`,
-                              }}
-                            >
-                              {count}
-                            </div>
-                          );
-                        })}
-                      </React.Fragment>
-                    ))}
+                      ))}
+                      {MOVES.map(actual => (
+                        <React.Fragment key={actual}>
+                          <div className="flex items-center justify-center rounded bg-slate-100 px-1 py-0.5 font-semibold text-slate-700">
+                            {formatMove(actual)}
+                          </div>
+                          {MOVES.map(predicted => {
+                            const count = band.matrix[predicted][actual];
+                            const intensity = maxBandCount ? count / maxBandCount : 0;
+                            return (
+                              <div
+                                key={`${band.label}-${actual}-${predicted}`}
+                                className="rounded px-1 py-2 text-xs font-semibold text-slate-700"
+                                style={{
+                                  backgroundColor: `rgba(2, 132, 199, ${Math.min(0.65, intensity * 0.6)})`,
+                                }}
+                              >
+                                {count}
+                              </div>
+                            );
+                          })}
+                        </React.Fragment>
+                      ))}
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                      <span>Rounds: {totalRounds}</span>
+                      <span>Accuracy: {formatPercent(accuracy, 0)}</span>
+                      <span>Mistake Rate: {formatPercent(mistakeRate, 0)}</span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </section>
 
           <section className="space-y-3">
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Decile accuracy table</h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-slate-800">Decile accuracy table</h3>
+              <InfoChip description="Bar shows the size of the gap; right = over-confident, left = under-confident." />
+            </div>
+            <div className="text-xs text-slate-500">Decile (conf.) | Avg Conf | Accuracy | Rounds | Gap (Acc − Conf)</div>
+            <div className="text-[11px] text-slate-500">Bar shows the size of the gap; right = over-confident, left = under-confident.</div>
             <div className="overflow-x-auto">
               <table className="min-w-full text-left text-sm">
                 <thead className="text-xs uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th className="py-2 pr-3">Decile</th>
-                    <th className="py-2 pr-3">Avg confidence</th>
+                    <th className="py-2 pr-3">Decile (conf.)</th>
+                    <th className="py-2 pr-3">Avg Conf</th>
                     <th className="py-2 pr-3">Accuracy</th>
                     <th className="py-2 pr-3">Rounds</th>
-                    <th className="py-2">Gap |acc − conf|</th>
+                    <th className="py-2">Gap (Acc − Conf)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1322,14 +1508,27 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
                       <td className="py-2 pr-3">{formatPercent(row.accuracy, 0)}</td>
                       <td className="py-2 pr-3">{row.rounds}</td>
                       <td className="py-2">
-                        <div
-                          className="h-2 rounded-full bg-slate-200"
-                          aria-hidden
-                        >
-                          <div
-                            className="h-full rounded-full bg-amber-500"
-                            style={{ width: `${Math.min(1, row.gap ?? 0) * 100}%` }}
-                          />
+                        <div className="flex flex-col gap-1">
+                          <div className="relative h-3 w-full overflow-hidden rounded-full bg-slate-200" aria-hidden>
+                            <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-white/70" />
+                            {row.difference != null && !Number.isNaN(row.difference) && (
+                              <div
+                                className={`absolute top-0 h-full ${getGapBarColor(row.difference)}`}
+                                style={
+                                  row.difference >= 0
+                                    ? {
+                                        right: "50%",
+                                        width: `${Math.min(100, Math.abs(row.difference) * 100)}%`,
+                                      }
+                                    : {
+                                        left: "50%",
+                                        width: `${Math.min(100, Math.abs(row.difference) * 100)}%`,
+                                      }
+                                }
+                              />
+                            )}
+                          </div>
+                          <span className="text-[11px] text-slate-500">{formatGapDifference(row.difference)}</span>
                         </div>
                       </td>
                     </tr>
