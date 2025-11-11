@@ -6938,10 +6938,10 @@ function RPSDoodleAppInner(){
                             className={`inline-flex items-center justify-center rounded-full px-5 py-2 text-xs font-bold uppercase tracking-widest ring-2 ring-current shadow-lg ${
                               (phase === "resolve" || phase === "feedback") && outcome
                                 ? outcome === "win"
-                                  ? "hud-result hud-result-win bg-emerald-500 text-white"
+                                  ? "hud-result hud-result-win bg-emerald-500 text-[#ffffff]"
                                   : outcome === "lose"
-                                    ? "hud-result hud-result-lose bg-rose-500 text-white"
-                                    : "hud-result hud-result-tie bg-[#A65613] text-white"
+                                    ? "hud-result hud-result-lose bg-rose-500 text-[#ffffff]"
+                                    : "hud-result hud-result-tie bg-[#A65613] text-[#ffffff]"
                                 : "bg-slate-200 text-slate-600"
                             }`}
                           >
@@ -7172,7 +7172,7 @@ function RPSDoodleAppInner(){
             >
               <div
                 id="match-results-title"
-                className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold text-white results-banner ${bannerColor()} ${
+                className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold text-[#ffffff] results-banner ${bannerColor()} ${
                   resultBanner === "Defeat" ? "results-banner-defeat" : ""
                 }`}
               >
