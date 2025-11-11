@@ -11,6 +11,7 @@ import {
   StoredPredictorModelState,
   HedgeMixerSerializedState,
   SerializedExpertState,
+  ThemePreference,
 } from "./stats";
 import { PlayersProvider, usePlayers, Grade, PlayerProfile, CONSENT_TEXT_VERSION, GRADE_OPTIONS } from "./players";
 import { DEV_MODE_ENABLED } from "./devMode";
@@ -88,6 +89,7 @@ const LEGACY_WELCOME_SEEN_KEY = "rps_welcome_seen_v1";
 const WELCOME_PREF_KEY = "rps_welcome_pref_v1";
 const INSIGHT_PANEL_STATE_KEY = "rps_insight_panel_open_v1";
 const SCENE_STORAGE_KEY = "rps_last_scene_v1";
+const THEME_PREFERENCE_STORAGE_KEY = "rps_theme_pref_v1";
 type WelcomePreference = "show" | "skip";
 
 type RobotVariant = "idle" | "happy" | "meh" | "sad";
@@ -923,6 +925,30 @@ function clamp01(value: number | null | undefined): number {
   return value;
 }
 
+function useMediaQuery(query: string, fallback = false): boolean {
+  const getMatch = useCallback(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return fallback;
+    }
+    return window.matchMedia(query).matches;
+  }, [query, fallback]);
+
+  const [matches, setMatches] = useState<boolean>(() => getMatch());
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const mediaQuery = window.matchMedia(query);
+    const handleChange = (event: MediaQueryListEvent) => setMatches(event.matches);
+    setMatches(mediaQuery.matches);
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, [getMatch, query]);
+
+  return matches;
+}
+
 function expectedPlayerMoveFromAi(aiMove: Move | null | undefined): Move | null {
   if (!aiMove) return null;
   const mapping: Record<Move, Move> = {
@@ -1535,6 +1561,67 @@ function RPSDoodleAppInner(){
   const [statsOpen, setStatsOpen] = useState(false);
   const [leaderboardOpen, setLeaderboardOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const themeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const themeMenuRef = useRef<HTMLDivElement | null>(null);
+  const [fallbackThemePreference, setFallbackThemePreference] = useState<ThemePreference>(() => {
+    if (typeof window === "undefined") return "system";
+    try {
+      const stored = window.localStorage.getItem(THEME_PREFERENCE_STORAGE_KEY);
+      return stored === "dark" || stored === "light" || stored === "system" ? stored : "system";
+    } catch {
+      return "system";
+    }
+  });
+  const systemPrefersDark = useMediaQuery("(prefers-color-scheme: dark)");
+  const themePreference: ThemePreference = currentProfile?.preferences?.theme ?? fallbackThemePreference;
+  const resolvedTheme = themePreference === "system" ? (systemPrefersDark ? "dark" : "light") : themePreference;
+  const isDarkTheme = resolvedTheme === "dark";
+  const themeOptions = useMemo(
+    () => [
+      {
+        value: "dark" as ThemePreference,
+        label: "Dark",
+        icon: "⏾",
+        description: "Dim surfaces for low light spaces.",
+      },
+      {
+        value: "light" as ThemePreference,
+        label: "Light",
+        icon: "☼",
+        description: "Bright contrast for daylight hours.",
+      },
+      {
+        value: "system" as ThemePreference,
+        label: `System (${systemPrefersDark ? "Dark" : "Light"} now)`,
+        icon: "☾☼",
+        description: "Follow your device setting.",
+      },
+    ],
+    [systemPrefersDark],
+  );
+  const headerThemeIcon = themePreference === "system" ? "☾☼" : themePreference === "dark" ? "⏾" : "☼";
+  const headerThemeLabel =
+    themePreference === "system"
+      ? `Theme: System (${systemPrefersDark ? "Dark" : "Light"} now)`
+      : themePreference === "dark"
+        ? "Theme: Dark"
+        : "Theme: Light";
+  const resolvedThemeLabel =
+    themePreference === "system"
+      ? systemPrefersDark
+        ? "Dark"
+        : "Light"
+      : themePreference === "dark"
+        ? "Dark"
+        : "Light";
+  const backgroundGradientClass = isDarkTheme
+    ? "from-slate-950 via-slate-900 to-slate-950"
+    : "from-sky-100 to-white";
+  const backgroundOrbOpacity = isDarkTheme ? "opacity-30" : "opacity-60";
+  const orbPrimaryClass = isDarkTheme ? "bg-slate-800" : "bg-sky-200";
+  const orbSecondaryClass = isDarkTheme ? "bg-slate-700" : "bg-sky-300";
+  const orbTertiaryClass = isDarkTheme ? "bg-slate-700" : "bg-sky-200";
   const [statsTab, setStatsTab] = useState<"overview" | "rounds" | "insights">("overview");
   const [roundsViewMode, setRoundsViewMode] = useState<"card" | "table">(() => {
     if (typeof window === "undefined") return "card";
@@ -1578,6 +1665,19 @@ function RPSDoodleAppInner(){
       window.sessionStorage.setItem("rps_rounds_view_v1", roundsViewMode);
     }
   }, [roundsViewMode]);
+  useEffect(() => {
+    const profileTheme = currentProfile?.preferences?.theme;
+    if (!profileTheme) return;
+    setFallbackThemePreference(prev => (prev === profileTheme ? prev : profileTheme));
+  }, [currentProfile?.preferences?.theme]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(THEME_PREFERENCE_STORAGE_KEY, themePreference);
+    } catch {
+      /* noop */
+    }
+  }, [themePreference]);
   function resetSessionMixer() {
     sessionMixerRef.current = instantiateMixerFromState(null);
   }
@@ -1806,7 +1906,12 @@ function RPSDoodleAppInner(){
   const [helpCenterOpen, setHelpCenterOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const headerOverlayActive =
-    statsOpen || leaderboardOpen || settingsOpen || helpCenterOpen || aboutOpen;
+    statsOpen ||
+    leaderboardOpen ||
+    settingsOpen ||
+    helpCenterOpen ||
+    aboutOpen ||
+    themeMenuOpen;
   const previousHeaderOverlayActiveRef = useRef(headerOverlayActive);
   const [helpActiveQuestionId, setHelpActiveQuestionId] = useState<string | null>(
     AI_FAQ_QUESTIONS[0]?.id ?? null,
@@ -1816,6 +1921,82 @@ function RPSDoodleAppInner(){
   const [robotResultReaction, setRobotResultReaction] = useState<RobotReaction | null>(null);
   const reduceMotion = useReducedMotion();
   const [live, setLive] = useState<string>("");
+  const applyThemePreference = useCallback(
+    (value: ThemePreference) => {
+      if (value === themePreference) {
+        return;
+      }
+      if (currentProfile) {
+        const nextPreferences = {
+          ...(currentProfile.preferences ?? { theme: "system" as ThemePreference }),
+          theme: value,
+        };
+        updateStatsProfile(currentProfile.id, { preferences: nextPreferences });
+      }
+      setFallbackThemePreference(prev => (prev === value ? prev : value));
+      const label =
+        value === "system"
+          ? `System (${systemPrefersDark ? "Dark" : "Light"})`
+          : value === "dark"
+            ? "Dark"
+            : "Light";
+      setLive(`Theme set to ${label}.`);
+    },
+    [currentProfile, themePreference, updateStatsProfile, setLive, systemPrefersDark],
+  );
+  const handleThemeMenuSelect = useCallback(
+    (value: ThemePreference) => {
+      if (value !== themePreference) {
+        applyThemePreference(value);
+      }
+      setThemeMenuOpen(false);
+      requestAnimationFrame(() => themeButtonRef.current?.focus());
+    },
+    [applyThemePreference, themePreference],
+  );
+  const handleSettingsThemeChange = useCallback(
+    (value: ThemePreference) => {
+      applyThemePreference(value);
+    },
+    [applyThemePreference],
+  );
+  useEffect(() => {
+    if (!themeMenuOpen) return;
+    const handlePointer = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (themeMenuRef.current?.contains(target)) return;
+      if (themeButtonRef.current?.contains(target)) return;
+      setThemeMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setThemeMenuOpen(false);
+        requestAnimationFrame(() => themeButtonRef.current?.focus());
+      }
+    };
+    document.addEventListener("mousedown", handlePointer);
+    document.addEventListener("touchstart", handlePointer);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointer);
+      document.removeEventListener("touchstart", handlePointer);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [themeMenuOpen]);
+  useEffect(() => {
+    if (!themeMenuOpen) return;
+    if (statsOpen || leaderboardOpen || settingsOpen || helpCenterOpen || aboutOpen) {
+      setThemeMenuOpen(false);
+    }
+  }, [
+    themeMenuOpen,
+    statsOpen,
+    leaderboardOpen,
+    settingsOpen,
+    helpCenterOpen,
+    aboutOpen,
+  ]);
   const [insightPanelOpen, setInsightPanelOpen] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     try {
@@ -4815,18 +4996,28 @@ function RPSDoodleAppInner(){
   },[]);
 
   return (
-    <div className="relative flex min-h-screen flex-col select-none overflow-x-hidden overflow-y-auto" style={{ fontSize: `${textScale*16}px` }}>
-      <style>{style}</style>
+    <>
+      <div className="app-theme" data-theme={resolvedTheme} data-theme-preference={themePreference}>
+        <div
+          className={`relative flex min-h-screen flex-col select-none overflow-x-hidden overflow-y-auto ${isDarkTheme ? "text-slate-100" : ""}`}
+          style={{ fontSize: `${textScale * 16}px` }}
+        >
+          <style>{style}</style>
 
-      {/* Parallax background */}
-      <div className="absolute inset-0 -z-10">
-        <div className="absolute inset-0 bg-gradient-to-b from-sky-100 to-white"/>
-        <motion.div initial={{ y: -20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ duration: 0.6, ease: [0.22,0.61,0.36,1] }} className="absolute -top-20 left-0 right-0 h-60 opacity-60">
-          <div className="absolute left-10 top-10 w-40 h-40 rounded-full bg-sky-200"/>
-          <div className="absolute right-16 top-8 w-24 h-24 rounded-full bg-sky-300"/>
-          <div className="absolute left-1/2 top-2 w-28 h-28 rounded-full bg-sky-200"/>
-        </motion.div>
-      </div>
+          {/* Parallax background */}
+          <div className="absolute inset-0 -z-10">
+            <div className={`absolute inset-0 bg-gradient-to-b ${backgroundGradientClass}`} />
+            <motion.div
+              initial={{ y: -20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ duration: 0.6, ease: [0.22, 0.61, 0.36, 1] }}
+              className={`absolute -top-20 left-0 right-0 h-60 ${backgroundOrbOpacity}`}
+            >
+              <div className={`absolute left-10 top-10 h-40 w-40 rounded-full ${orbPrimaryClass}`} />
+              <div className={`absolute right-16 top-8 h-24 w-24 rounded-full ${orbSecondaryClass}`} />
+              <div className={`absolute left-1/2 top-2 h-28 w-28 rounded-full ${orbTertiaryClass}`} />
+            </motion.div>
+          </div>
 
       <LiveRegion message={live} />
 
@@ -5330,6 +5521,80 @@ function RPSDoodleAppInner(){
         >
           <motion.h1 layout className="text-2xl font-extrabold tracking-tight text-sky-700 drop-shadow-sm">RPS Lab</motion.h1>
           <div className="flex items-center gap-2">
+            <div className="relative">
+              <button
+                ref={themeButtonRef}
+                type="button"
+                className={`inline-flex items-center justify-center rounded-xl px-2.5 py-1.5 text-base shadow transition ${
+                  themeMenuOpen ? "bg-sky-600 text-white" : "bg-white/70 hover:bg-white text-sky-900"
+                }`}
+                aria-haspopup="menu"
+                aria-expanded={themeMenuOpen}
+                aria-label={headerThemeLabel}
+                title={headerThemeLabel}
+                onClick={() => {
+                  if (themeMenuOpen) {
+                    setThemeMenuOpen(false);
+                  } else {
+                    suspendInsightPanelForHeader();
+                    setThemeMenuOpen(true);
+                  }
+                }}
+                data-dev-label="hdr.theme"
+              >
+                <span aria-hidden>{headerThemeIcon}</span>
+                <span className="sr-only">{headerThemeLabel}</span>
+              </button>
+              <AnimatePresence>
+                {themeMenuOpen && (
+                  <motion.div
+                    ref={themeMenuRef}
+                    key="theme-menu"
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.16 }}
+                    className="absolute left-0 top-full z-[85] mt-2 w-52 rounded-xl bg-white/95 p-2 text-sm shadow-xl ring-1 ring-slate-200"
+                    role="menu"
+                    aria-label="Theme"
+                  >
+                    {themeOptions.map(option => {
+                      const isActive = option.value === themePreference;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => handleThemeMenuSelect(option.value)}
+                          className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition ${
+                            isActive
+                              ? "bg-sky-600 text-white shadow"
+                              : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                          }`}
+                          role="menuitemradio"
+                          aria-checked={isActive}
+                          data-dev-label={`hdr.theme.${option.value}`}
+                        >
+                          <span className="flex flex-col gap-0.5">
+                            <span className="flex items-center gap-2">
+                              <span aria-hidden className="text-base">
+                                {option.icon}
+                              </span>
+                              <span className="font-semibold">{option.label}</span>
+                            </span>
+                            <span className="text-xs text-slate-500">{option.description}</span>
+                          </span>
+                          {isActive && (
+                            <span aria-hidden className="text-xs font-semibold">
+                              ✓
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
             {trainingActive && (
               <span
                 className="px-2 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-700"
@@ -5805,6 +6070,29 @@ function RPSDoodleAppInner(){
                 <section className="space-y-3">
                   <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Accessibility &amp; Display</h2>
                   <div className="space-y-4 rounded-lg border border-slate-200/80 bg-white/80 p-3">
+                    <div className="space-y-2">
+                      <span className="font-medium text-slate-800">Theme</span>
+                      <p className="text-xs text-slate-500">
+                        Choose a light or dark experience, or follow your system setting.
+                      </p>
+                      <label htmlFor="settings-theme-select" className="sr-only">
+                        Select theme
+                      </label>
+                      <select
+                        id="settings-theme-select"
+                        value={themePreference}
+                        onChange={event => handleSettingsThemeChange(event.target.value as ThemePreference)}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-inner"
+                        data-dev-label="set.theme.select"
+                      >
+                        {themeOptions.map(option => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-slate-500">Currently showing {resolvedThemeLabel.toLowerCase()} mode.</p>
+                    </div>
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <span className="font-medium text-slate-800">Audio</span>
@@ -7444,6 +7732,8 @@ function RPSDoodleAppInner(){
           </AnimatePresence>
         </div>
       )}
+        </div>
+      </div>
       {DEV_MODE_ENABLED && (
         <>
           <div
@@ -7461,7 +7751,7 @@ function RPSDoodleAppInner(){
           />
         </>
       )}
-    </div>
+    </>
   );
 }
 

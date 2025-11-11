@@ -132,6 +132,26 @@ export interface MatchSummary {
   leaderboardType?: "Challenge" | "Practice Legacy";
 }
 
+export type ThemePreference = "system" | "light" | "dark";
+
+export interface ProfilePreferences {
+  theme?: ThemePreference;
+}
+
+const DEFAULT_PROFILE_PREFERENCES: ProfilePreferences = { theme: "system" } as const;
+
+function normalizePreferences(value: unknown): ProfilePreferences {
+  if (!value || typeof value !== "object") {
+    return { ...DEFAULT_PROFILE_PREFERENCES };
+  }
+  const input = value as { theme?: unknown };
+  const theme =
+    input.theme === "dark" || input.theme === "light" || input.theme === "system"
+      ? input.theme
+      : DEFAULT_PROFILE_PREFERENCES.theme;
+  return { theme };
+}
+
 export interface StatsProfile {
   id: string;
   playerId: string;
@@ -145,6 +165,7 @@ export interface StatsProfile {
   version: number;
   previousProfileId?: string | null;
   nextProfileId?: string | null;
+  preferences: ProfilePreferences;
 }
 
 type StatsProfileUpdate = Partial<
@@ -159,6 +180,7 @@ type StatsProfileUpdate = Partial<
     | "version"
     | "previousProfileId"
     | "nextProfileId"
+    | "preferences"
   >
 >;
 
@@ -352,6 +374,7 @@ function loadProfiles(): StatsProfile[] {
         seenPostTrainingCTA: item?.seenPostTrainingCTA !== undefined ? Boolean(item.seenPostTrainingCTA) : false,
         previousProfileId: typeof item?.previousProfileId === "string" ? item.previousProfileId : null,
         nextProfileId: typeof item?.nextProfileId === "string" ? item.nextProfileId : null,
+        preferences: normalizePreferences(item?.preferences),
       } satisfies StatsProfile;
     });
   } catch (err) {
@@ -472,6 +495,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         seenPostTrainingCTA: false,
         previousProfileId: null,
         nextProfileId: null,
+        preferences: { ...DEFAULT_PROFILE_PREFERENCES },
       };
       setProfiles(prev => prev.concat(defaultProfile));
       setProfilesDirty(true);
@@ -642,6 +666,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         seenPostTrainingCTA: false,
         previousProfileId: null,
         nextProfileId: null,
+        preferences: { ...DEFAULT_PROFILE_PREFERENCES },
       };
       setProfiles(prev => prev.concat(profile));
       setProfilesDirty(true);
@@ -696,6 +721,7 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       seenPostTrainingCTA: false,
       previousProfileId: source.id,
       nextProfileId: null,
+      preferences: { ...source.preferences },
     };
     setProfiles(prev => {
       const updated = prev.map(p => {

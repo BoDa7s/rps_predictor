@@ -29,3 +29,194 @@ button {
   overflow: hidden;
   overflow-wrap: anywhere;
 }
+
+.app-theme {
+  --app-bg: #f8fafc;
+  --app-text-strong: #0f172a;
+  --app-text-primary: #1e293b;
+  --app-text-secondary: #334155;
+  --app-text-muted: #475569;
+  --app-surface-strong: rgba(255, 255, 255, 0.95);
+  --app-surface-soft: rgba(255, 255, 255, 0.8);
+  --app-surface-hover: rgba(255, 255, 255, 1);
+  --app-border: rgba(148, 163, 184, 0.4);
+  --app-ring: rgba(148, 163, 184, 0.45);
+  --app-overlay: rgba(15, 23, 42, 0.6);
+  min-height: 100vh;
+  width: 100%;
+  color: var(--app-text-primary);
+  background-color: var(--app-bg);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.app-theme[data-theme='light'] {
+  color-scheme: light;
+}
+
+.app-theme[data-theme='dark'] {
+  --app-bg: #020617;
+  --app-text-strong: #f8fafc;
+  --app-text-primary: #e2e8f0;
+  --app-text-secondary: #cbd5f5;
+  --app-text-muted: #94a3b8;
+  --app-surface-strong: rgba(15, 23, 42, 0.92);
+  --app-surface-soft: rgba(15, 23, 42, 0.78);
+  --app-surface-hover: rgba(30, 41, 59, 0.9);
+  --app-border: rgba(71, 85, 105, 0.6);
+  --app-ring: rgba(71, 85, 105, 0.6);
+  --app-overlay: rgba(2, 6, 23, 0.72);
+  background-color: var(--app-bg);
+  color: var(--app-text-primary);
+  color-scheme: dark;
+}
+
+.app-theme[data-theme='dark'] .bg-white,
+.app-theme[data-theme='dark'] .bg-white\/95,
+.app-theme[data-theme='dark'] .bg-white\/90,
+.app-theme[data-theme='dark'] .bg-white\/85 {
+  background-color: var(--app-surface-strong) !important;
+  color: var(--app-text-primary) !important;
+}
+
+.app-theme[data-theme='dark'] .bg-white\/80,
+.app-theme[data-theme='dark'] .bg-white\/70 {
+  background-color: var(--app-surface-soft) !important;
+  color: var(--app-text-primary) !important;
+}
+
+.app-theme[data-theme='dark'] .bg-white\/50 {
+  background-color: rgba(15, 23, 42, 0.5) !important;
+}
+
+.app-theme[data-theme='dark'] .bg-white\/30 {
+  background-color: rgba(15, 23, 42, 0.3) !important;
+}
+
+.app-theme[data-theme='dark'] .hover\:bg-white:hover {
+  background-color: var(--app-surface-hover) !important;
+}
+
+.app-theme[data-theme='dark'] .bg-slate-50,
+.app-theme[data-theme='dark'] .bg-slate-50\/80 {
+  background-color: rgba(30, 41, 59, 0.68) !important;
+}
+
+.app-theme[data-theme='dark'] .bg-slate-100 {
+  background-color: rgba(30, 41, 59, 0.78) !important;
+}
+
+.app-theme[data-theme='dark'] .bg-slate-200 {
+  background-color: rgba(51, 65, 85, 0.72) !important;
+}
+
+.app-theme[data-theme='dark'] .bg-slate-300 {
+  background-color: rgba(71, 85, 105, 0.7) !important;
+}
+
+.app-theme[data-theme='dark'] .hover\:bg-slate-50:hover,
+.app-theme[data-theme='dark'] .hover\:bg-slate-100:hover,
+.app-theme[data-theme='dark'] .hover\:bg-slate-200:hover {
+  background-color: rgba(51, 65, 85, 0.75) !important;
+}
+
+.app-theme[data-theme='dark'] .bg-slate-900\/40,
+.app-theme[data-theme='dark'] .bg-slate-900\/45,
+.app-theme[data-theme='dark'] .bg-slate-900\/50 {
+  background-color: var(--app-overlay) !important;
+}
+
+.app-theme[data-theme='dark'] .bg-sky-50,
+.app-theme[data-theme='dark'] .bg-sky-50\/80,
+.app-theme[data-theme='dark'] .bg-sky-100 {
+  background-color: rgba(56, 189, 248, 0.18) !important;
+  color: var(--app-text-primary) !important;
+}
+
+.app-theme[data-theme='dark'] .bg-sky-200 {
+  background-color: rgba(56, 189, 248, 0.28) !important;
+}
+
+.app-theme[data-theme='dark'] .border-slate-100,
+.app-theme[data-theme='dark'] .border-slate-200,
+.app-theme[data-theme='dark'] .border-slate-200\/80,
+.app-theme[data-theme='dark'] .border-slate-300 {
+  border-color: var(--app-border) !important;
+}
+
+.app-theme[data-theme='dark'] .border-sky-200 {
+  border-color: rgba(56, 189, 248, 0.35) !important;
+}
+
+.app-theme[data-theme='dark'] .ring-slate-200,
+.app-theme[data-theme='dark'] .ring-slate-200\/70 {
+  --tw-ring-color: var(--app-ring) !important;
+}
+
+.app-theme[data-theme='dark'] .text-slate-900,
+.app-theme[data-theme='dark'] .text-slate-800 {
+  color: var(--app-text-strong) !important;
+}
+
+.app-theme[data-theme='dark'] .text-slate-700 {
+  color: var(--app-text-secondary) !important;
+}
+
+.app-theme[data-theme='dark'] .text-slate-600 {
+  color: var(--app-text-muted) !important;
+}
+
+.app-theme[data-theme='dark'] .text-slate-500 {
+  color: rgba(148, 163, 184, 0.85) !important;
+}
+
+.app-theme[data-theme='dark'] .text-slate-400 {
+  color: rgba(148, 163, 184, 0.7) !important;
+}
+
+.app-theme[data-theme='dark'] .text-slate-300 {
+  color: rgba(148, 163, 184, 0.6) !important;
+}
+
+.app-theme[data-theme='dark'] .text-slate-200\/80 {
+  color: rgba(226, 232, 240, 0.8) !important;
+}
+
+.app-theme[data-theme='dark'] .text-sky-900,
+.app-theme[data-theme='dark'] .text-sky-800,
+.app-theme[data-theme='dark'] .text-sky-700,
+.app-theme[data-theme='dark'] .text-sky-600,
+.app-theme[data-theme='dark'] .text-sky-500 {
+  color: #38bdf8 !important;
+}
+
+.app-theme[data-theme='dark'] .bg-sky-100:hover,
+.app-theme[data-theme='dark'] .hover\:bg-sky-100:hover,
+.app-theme[data-theme='dark'] .hover\:bg-sky-200:hover {
+  background-color: rgba(56, 189, 248, 0.28) !important;
+}
+
+.app-theme[data-theme='dark'] .bg-slate-900\/90,
+.app-theme[data-theme='dark'] .bg-slate-900\/80 {
+  background-color: rgba(2, 6, 23, 0.85) !important;
+}
+
+.app-theme[data-theme='dark'] .bg-gradient-to-br.from-sky-50 {
+  --tw-gradient-from: #0f172a !important;
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to, rgba(15, 23, 42, 0));
+}
+
+.app-theme[data-theme='dark'] .bg-gradient-to-br.via-white {
+  --tw-gradient-stops: var(--tw-gradient-from), #101b33, var(--tw-gradient-to, rgba(16, 27, 51, 0));
+}
+
+.app-theme[data-theme='dark'] .bg-gradient-to-br.to-sky-100 {
+  --tw-gradient-to: #111827 !important;
+}
+
+.app-theme[data-theme='dark'] .shadow,
+.app-theme[data-theme='dark'] .shadow-sm,
+.app-theme[data-theme='dark'] .shadow-lg,
+.app-theme[data-theme='dark'] .shadow-xl,
+.app-theme[data-theme='dark'] .shadow-2xl {
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.55);
+}
