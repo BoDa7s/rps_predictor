@@ -984,10 +984,126 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
   const historyShare = totalBlendWeight > 0 ? historyWeight / totalBlendWeight : 0;
   const isLowConfidence = snapshot?.confidence != null && snapshot.confidence < 0.4;
   const topPanelReason = snapshot?.reason ?? "Not enough rounds yet—play a few more.";
+  const nextMovePlanLabel = simplifiedMode ? "My next move plan was" : "Next move plan";
+
+  const rightPanelAnalyticsSection = (
+    <section className="rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm">
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+        <div className="flex-1 space-y-3">
+          <div className="flex items-center gap-2">
+            <h3 className="text-base font-semibold text-slate-800">Right panel analytics</h3>
+            <InfoChip description="Confidence, policy, and blend at a glance." />
+          </div>
+          <p className="text-sm text-slate-600">
+            {simplifiedMode
+              ? "Here’s how sure the AI feels about the next round and which strategy it leans on."
+              : "Live view of the AI’s confidence, heuristic safety net, and realtime-versus-history blend."}
+          </p>
+          <div className="grid gap-1 text-xs text-slate-600">
+            <div>
+              <span className="font-semibold text-slate-700">Confidence:</span> How sure the AI is (0–100%).
+            </div>
+            <div>
+              <span className="font-semibold text-slate-700">Heuristic policy:</span> Simple rules the AI uses before it learns you.
+            </div>
+            <div>
+              <span className="font-semibold text-slate-700">Blend:</span> Mix between rules and learned behavior.
+            </div>
+          </div>
+          <p className="text-xs text-slate-500">{topPanelReason}</p>
+        </div>
+        <div className="flex w-full max-w-xs flex-col gap-3 text-sm text-slate-600">
+          <div className="rounded-xl bg-slate-50 px-3 py-2 text-right shadow-inner">
+            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <span>Confidence</span>
+              {isLowConfidence && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-700"
+                  title="Predictions are closer to guessing."
+                >
+                  Low confidence
+                </span>
+              )}
+            </div>
+            <div className="mt-1 text-2xl font-semibold text-slate-900">{formatPercent(snapshot?.confidence ?? null, 0)}</div>
+          </div>
+          <div className="rounded-xl bg-slate-50 px-3 py-2 text-right shadow-inner">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Heuristic policy</div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">
+              {snapshot ? (snapshot.policy === "mixer" ? "Learning blend" : "Rules first") : "—"}
+            </div>
+            <div className="text-[11px] text-slate-500">
+              {snapshot
+                ? snapshot.policy === "mixer"
+                  ? "Mixing learned play with heuristics."
+                  : "Relying on starter rules until it learns more."
+                : "Will show once rounds are played."}
+            </div>
+          </div>
+          <div className="rounded-xl bg-slate-50 px-3 py-2 text-right shadow-inner">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Blend</div>
+            <div className="mt-1 text-lg font-semibold text-slate-900">
+              {formatPercent(realtimeShare, 0)} realtime / {formatPercent(historyShare, 0)} history
+            </div>
+          </div>
+          {snapshot?.conflict &&
+            snapshot.conflict.realtime &&
+            snapshot.conflict.history &&
+            snapshot.conflict.realtime !== snapshot.conflict.history && (
+              <div className="flex items-center justify-between rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
+                <span>Pattern shift</span>
+                <span>
+                  {formatMove(snapshot.conflict.realtime)} ≠ {formatMove(snapshot.conflict.history)}
+                </span>
+              </div>
+            )}
+        </div>
+      </div>
+    </section>
+  );
+
+  const blendAndPlanSection = (
+    <section className="rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm">
+      <BlendMeter snapshot={snapshot} />
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <div className="space-y-4">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{nextMovePlanLabel}</div>
+            <div className="mt-1 text-2xl font-semibold text-slate-900">
+              {formatMove(snapshot?.predictedMove ?? null)}
+            </div>
+            <p className="text-xs text-slate-500">
+              AI counters with {formatMove(snapshot?.counterMove ?? null)}.
+            </p>
+          </div>
+          <SessionTimeline rounds={timelineRounds} />
+        </div>
+        <PredictionSources snapshot={snapshot} realtimeRounds={timelineRounds.length} />
+      </div>
+      {!simplifiedMode && (
+        <>
+          <SignalsDrawer
+            snapshot={snapshot}
+            open={signalsOpen}
+            onToggle={() => setSignalsOpen(prev => !prev)}
+          />
+          <HistoryPeek
+            open={historyPeekOpen}
+            onToggle={() => setHistoryPeekOpen(prev => !prev)}
+            favoriteMove={historyFavoriteMove}
+            topTransition={historyTopTransition}
+            confidenceBand={historyConfidenceBand}
+            updatedAt={snapshot?.historyUpdatedAt ?? null}
+            rounds={snapshot?.historyRounds ?? historyOnlyRounds.length}
+          />
+        </>
+      )}
+    </section>
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-6 py-4">
+      <header className="relative flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-6 py-4 pr-20 sm:pr-24">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <h2
@@ -1024,122 +1140,27 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
               />
             </button>
           </label>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600 transition hover:bg-slate-200"
-          >
-            Close ✕
-          </button>
         </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-6 top-4 inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600 transition hover:bg-slate-200"
+        >
+          <span>Close</span>
+          <span aria-hidden>×</span>
+        </button>
       </header>
       <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-8 pt-4">
         <div className="space-y-6">
-          <section className="rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm">
-            <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-              <div className="flex-1 space-y-3">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-base font-semibold text-slate-800">Right panel analytics</h3>
-                  <InfoChip description="Confidence, policy, and blend at a glance." />
-                </div>
-                <p className="text-sm text-slate-600">
-                  {simplifiedMode
-                    ? "Here’s how sure the AI feels about the next round and which strategy it leans on."
-                    : "Live view of the AI’s confidence, heuristic safety net, and realtime-versus-history blend."}
-                </p>
-                <div className="grid gap-1 text-xs text-slate-600">
-                  <div>
-                    <span className="font-semibold text-slate-700">Confidence:</span> How sure the AI is (0–100%).
-                  </div>
-                  <div>
-                    <span className="font-semibold text-slate-700">Heuristic policy:</span> Simple rules the AI uses before it learns you.
-                  </div>
-                  <div>
-                    <span className="font-semibold text-slate-700">Blend:</span> Mix between rules and learned behavior.
-                  </div>
-                </div>
-                <p className="text-xs text-slate-500">{topPanelReason}</p>
-              </div>
-              <div className="flex w-full max-w-xs flex-col gap-3 text-sm text-slate-600">
-                <div className="rounded-xl bg-slate-50 px-3 py-2 text-right shadow-inner">
-                  <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    <span>Confidence</span>
-                    {isLowConfidence && (
-                      <span
-                        className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-700"
-                        title="Predictions are closer to guessing."
-                      >
-                        Low confidence
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-1 text-2xl font-semibold text-slate-900">{formatPercent(snapshot?.confidence ?? null, 0)}</div>
-                </div>
-                <div className="rounded-xl bg-slate-50 px-3 py-2 text-right shadow-inner">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Heuristic policy</div>
-                  <div className="mt-1 text-lg font-semibold text-slate-900">
-                    {snapshot ? (snapshot.policy === "mixer" ? "Learning blend" : "Rules first") : "—"}
-                  </div>
-                  <div className="text-[11px] text-slate-500">
-                    {snapshot
-                      ? snapshot.policy === "mixer"
-                        ? "Mixing learned play with heuristics."
-                        : "Relying on starter rules until it learns more."
-                      : "Will show once rounds are played."}
-                  </div>
-                </div>
-                <div className="rounded-xl bg-slate-50 px-3 py-2 text-right shadow-inner">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Blend</div>
-                  <div className="mt-1 text-lg font-semibold text-slate-900">
-                    {formatPercent(realtimeShare, 0)} realtime / {formatPercent(historyShare, 0)} history
-                  </div>
-                </div>
-                {snapshot?.conflict &&
-                  snapshot.conflict.realtime &&
-                  snapshot.conflict.history &&
-                  snapshot.conflict.realtime !== snapshot.conflict.history && (
-                    <div className="flex items-center justify-between rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
-                      <span>Pattern shift</span>
-                      <span>
-                        {formatMove(snapshot.conflict.realtime)} ≠ {formatMove(snapshot.conflict.history)}
-                      </span>
-                    </div>
-                  )}
-              </div>
-            </div>
-            <div className="mt-4 space-y-6">
-              <BlendMeter snapshot={snapshot} />
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="space-y-4">
-                  <div>
-                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Next move plan</div>
-                    <div className="mt-1 text-2xl font-semibold text-slate-900">
-                      {formatMove(snapshot?.predictedMove ?? null)}
-                    </div>
-                    <p className="text-xs text-slate-500">
-                      AI counters with {formatMove(snapshot?.counterMove ?? null)}.
-                    </p>
-                  </div>
-                  <SessionTimeline rounds={timelineRounds} />
-                </div>
-                <PredictionSources snapshot={snapshot} realtimeRounds={timelineRounds.length} />
-              </div>
-              <SignalsDrawer
-                snapshot={snapshot}
-                open={signalsOpen}
-                onToggle={() => setSignalsOpen(prev => !prev)}
-              />
-              <HistoryPeek
-                open={historyPeekOpen}
-                onToggle={() => setHistoryPeekOpen(prev => !prev)}
-                favoriteMove={historyFavoriteMove}
-                topTransition={historyTopTransition}
-                confidenceBand={historyConfidenceBand}
-                updatedAt={snapshot?.historyUpdatedAt ?? null}
-                rounds={snapshot?.historyRounds ?? historyOnlyRounds.length}
-              />
-            </div>
-          </section>
+          {simplifiedMode ? (
+            <>
+              {blendAndPlanSection}
+              {rightPanelAnalyticsSection}
+            </>
+          ) : (
+            <>
+              {rightPanelAnalyticsSection}
+              {blendAndPlanSection}
 
           <section className="space-y-4">
             <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Confidence checks</h3>
@@ -1537,6 +1558,8 @@ const InsightPanel: React.FC<InsightPanelProps> = ({ snapshot, liveRounds, histo
               </table>
             </div>
           </section>
+            </>
+          )}
         </div>
       </div>
     </div>
