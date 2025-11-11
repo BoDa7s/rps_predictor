@@ -1616,12 +1616,18 @@ function RPSDoodleAppInner(){
         ? "Dark"
         : "Light";
   const backgroundGradientClass = isDarkTheme
-    ? "from-slate-950 via-slate-900 to-slate-950"
+    ? "from-[#040b1f] via-[#0a1a3d] to-[#020714]"
     : "from-sky-100 to-white";
   const backgroundOrbOpacity = isDarkTheme ? "opacity-30" : "opacity-60";
-  const orbPrimaryClass = isDarkTheme ? "bg-slate-800" : "bg-sky-200";
-  const orbSecondaryClass = isDarkTheme ? "bg-slate-700" : "bg-sky-300";
-  const orbTertiaryClass = isDarkTheme ? "bg-slate-700" : "bg-sky-200";
+  const orbPrimaryClass = isDarkTheme
+    ? "bg-[rgba(20,39,82,0.9)] border border-[rgba(118,153,219,0.55)]"
+    : "bg-sky-200";
+  const orbSecondaryClass = isDarkTheme
+    ? "bg-[rgba(26,53,107,0.8)] border border-[rgba(96,134,205,0.45)]"
+    : "bg-sky-300";
+  const orbTertiaryClass = isDarkTheme
+    ? "bg-[rgba(17,37,79,0.75)] border border-[rgba(80,110,178,0.42)]"
+    : "bg-sky-200";
   const [statsTab, setStatsTab] = useState<"overview" | "rounds" | "insights">("overview");
   const [roundsViewMode, setRoundsViewMode] = useState<"card" | "table">(() => {
     if (typeof window === "undefined") return "card";
@@ -6419,10 +6425,10 @@ function RPSDoodleAppInner(){
                       key="fs"
                       className={`fullscreen ${
                         selectedMode === 'challenge'
-                          ? 'bg-red-700'
+                          ? 'bg-[radial-gradient(circle_at_top,_#ff7849,_#240c36)]'
                           : selectedMode === 'practice'
-                          ? 'bg-blue-700'
-                          : 'bg-gray-700'
+                            ? 'bg-[radial-gradient(circle_at_top,_#38c8ff,_#10204a)]'
+                            : 'bg-[radial-gradient(circle_at_top,_#94a3b8,_#131b36)]'
                       }`}
                       layoutId={`card-${selectedMode}`}
                       initial={{ borderRadius: 16 }}
