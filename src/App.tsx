@@ -11,6 +11,13 @@ import {
   StoredPredictorModelState,
   HedgeMixerSerializedState,
   SerializedExpertState,
+  ThemePreference,
+  ThemeMode,
+  ThemeModeColors,
+  ThemeColorPreferences,
+  DEFAULT_PROFILE_PREFERENCES,
+  DEFAULT_THEME_COLOR_PREFERENCES,
+  cloneProfilePreferences,
 } from "./stats";
 import { PlayersProvider, usePlayers, Grade, PlayerProfile, CONSENT_TEXT_VERSION, GRADE_OPTIONS } from "./players";
 import { DEV_MODE_ENABLED } from "./devMode";
@@ -25,6 +32,7 @@ import {
   normalizeMatchTimings,
   saveMatchTimings,
 } from "./matchTimings";
+import AboutModal from "./AboutModal";
 import LeaderboardModal from "./LeaderboardModal";
 import InsightPanel, { type LiveInsightSnapshot } from "./InsightPanel";
 import { computeMatchScore } from "./leaderboard";
@@ -48,6 +56,13 @@ import botSad48 from "./assets/mascot/bot-sad-48.svg";
 import botSad64 from "./assets/mascot/bot-sad-64.svg";
 import botSad96 from "./assets/mascot/bot-sad-96.svg";
 import HelpCenter, { type HelpQuestion } from "./HelpCenter";
+import {
+  darken,
+  getReadableTextColor,
+  lighten,
+  mixHexColors,
+  normalizeHexColor,
+} from "./colorUtils";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -72,7 +87,8 @@ function mulberry32(a:number){
 
 // Types
 const MOVES: Move[] = ["rock", "paper", "scissors"];
-const MODES: Mode[] = ["challenge","practice"];
+const MODES: Mode[] = ["challenge", "practice"];
+const VISIBLE_MODE_OPTIONS: Mode[] = MODES.filter(mode => mode !== "practice");
 
 const DIFFICULTY_INFO: Record<AIMode, { label: string; helper: string }> = {
   fair: { label: "Fair", helper: "Gentle counterplay tuned for learning." },
@@ -85,6 +101,9 @@ const BEST_OF_OPTIONS: BestOf[] = [3, 5, 7];
 const LEGACY_WELCOME_SEEN_KEY = "rps_welcome_seen_v1";
 const WELCOME_PREF_KEY = "rps_welcome_pref_v1";
 const INSIGHT_PANEL_STATE_KEY = "rps_insight_panel_open_v1";
+const SCENE_STORAGE_KEY = "rps_last_scene_v1";
+const THEME_PREFERENCE_STORAGE_KEY = "rps_theme_pref_v1";
+const THEME_COLOR_STORAGE_KEY = "rps_theme_colors_v1";
 type WelcomePreference = "show" | "skip";
 
 type RobotVariant = "idle" | "happy" | "meh" | "sad";
@@ -97,6 +116,8 @@ type ModernToast = {
   title: string;
   message: string;
 };
+
+type Scene = "WELCOME" | "BOOT" | "MODE" | "MATCH" | "RESULTS";
 
 const MODERN_TOAST_BASE_CLASSES =
   "pointer-events-auto flex w-[min(22rem,calc(100vw-2rem))] items-start gap-3 rounded-2xl px-4 py-3 text-sm text-slate-700 shadow-2xl";
@@ -123,6 +144,116 @@ const MODERN_TOAST_STYLES: Record<ModernToastVariant, {
     dismiss: "rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700 transition hover:bg-amber-200",
   },
 };
+
+type PartialThemeColorPreferences = Partial<Record<ThemeMode, Partial<ThemeModeColors>>>;
+
+function mergeThemeColorPreferences(
+  base: ThemeColorPreferences,
+  override?: PartialThemeColorPreferences | ThemeColorPreferences | null,
+): ThemeColorPreferences {
+  const result: ThemeColorPreferences = {
+    light: { ...base.light },
+    dark: { ...base.dark },
+  };
+  if (!override) {
+    return result;
+  }
+  (Object.keys(override) as ThemeMode[]).forEach(mode => {
+    if (!override[mode]) return;
+    const next = override[mode]!;
+    if (next.accent) {
+      result[mode].accent = normalizeHexColor(next.accent, result[mode].accent);
+    }
+    if (next.background) {
+      result[mode].background = normalizeHexColor(next.background, result[mode].background);
+    }
+  });
+  return result;
+}
+
+function parseStoredThemeColors(raw: string | null): ThemeColorPreferences | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as PartialThemeColorPreferences;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    return mergeThemeColorPreferences(DEFAULT_THEME_COLOR_PREFERENCES, parsed);
+  } catch {
+    return null;
+  }
+}
+
+function themeModeColorsEqual(a: ThemeModeColors, b: ThemeModeColors): boolean {
+  return a.accent === b.accent && a.background === b.background;
+}
+
+function themeColorPreferencesEqual(
+  a: ThemeColorPreferences,
+  b: ThemeColorPreferences,
+): boolean {
+  return themeModeColorsEqual(a.light, b.light) && themeModeColorsEqual(a.dark, b.dark);
+}
+
+function deriveThemeCssVariables(mode: ThemeMode, colors: ThemeModeColors): Record<string, string> {
+  const defaults = DEFAULT_THEME_COLOR_PREFERENCES[mode];
+  const accent = normalizeHexColor(colors.accent, defaults.accent);
+  const background = normalizeHexColor(colors.background, defaults.background);
+  const accentStrong = mode === "dark" ? lighten(accent, 0.25) : darken(accent, 0.2);
+  const accentHover = mode === "dark" ? lighten(accent, 0.15) : darken(accent, 0.12);
+  const accentActive = mode === "dark" ? lighten(accent, 0.22) : darken(accent, 0.2);
+  const accentSoft = mode === "dark" ? lighten(accent, 0.75) : lighten(accent, 0.7);
+  const accentMuted = mode === "dark" ? lighten(accent, 0.55) : lighten(accent, 0.5);
+  const onAccent = getReadableTextColor(accent);
+  const textStrong = mode === "dark" ? lighten(background, 0.85) : darken(background, 0.85);
+  const textPrimary = mode === "dark" ? lighten(background, 0.75) : darken(background, 0.75);
+  const textSecondary = mode === "dark" ? lighten(background, 0.6) : darken(background, 0.6);
+  const textMuted = mode === "dark" ? lighten(background, 0.45) : darken(background, 0.45);
+  const surfaceCard = mode === "dark" ? lighten(background, 0.18) : lighten(background, 0.93);
+  const surfaceInput = mode === "dark" ? lighten(background, 0.24) : lighten(background, 0.88);
+  const surfaceSubtle = mode === "dark" ? lighten(background, 0.14) : lighten(background, 0.82);
+  const surfaceHover = mode === "dark" ? lighten(background, 0.3) : lighten(background, 0.76);
+  const border = mode === "dark" ? lighten(background, 0.38) : darken(background, 0.2);
+  const borderStrong = mode === "dark" ? lighten(background, 0.52) : darken(background, 0.28);
+  const ring = mode === "dark" ? lighten(accent, 0.4) : darken(accent, 0.18);
+  const overlay = mode === "dark" ? "rgba(4, 10, 33, 0.74)" : "rgba(15, 23, 42, 0.4)";
+  const gradientStart = mode === "dark" ? lighten(background, 0.08) : lighten(background, 0.7);
+  const gradientMiddle = mode === "dark" ? lighten(background, 0.16) : lighten(background, 0.85);
+  const gradientEnd = mode === "dark" ? lighten(background, 0.25) : lighten(background, 0.95);
+  const orbPrimary = mixHexColors(accent, background, mode === "dark" ? 0.4 : 0.25);
+  const orbSecondary = mixHexColors(accent, background, mode === "dark" ? 0.55 : 0.35);
+  const orbTertiary = mixHexColors(accent, background, mode === "dark" ? 0.7 : 0.5);
+  const orbOpacity = mode === "dark" ? "0.3" : "0.55";
+  return {
+    "--app-bg": background,
+    "--app-accent": accent,
+    "--app-accent-strong": accentStrong,
+    "--app-accent-hover": accentHover,
+    "--app-accent-active": accentActive,
+    "--app-accent-soft": accentSoft,
+    "--app-accent-muted": accentMuted,
+    "--app-on-accent": onAccent,
+    "--app-text-strong": textStrong,
+    "--app-text-primary": textPrimary,
+    "--app-text-secondary": textSecondary,
+    "--app-text-muted": textMuted,
+    "--app-surface-card": surfaceCard,
+    "--app-surface-input": surfaceInput,
+    "--app-surface-subtle": surfaceSubtle,
+    "--app-surface-hover": surfaceHover,
+    "--app-border": border,
+    "--app-border-strong": borderStrong,
+    "--app-ring": ring,
+    "--app-overlay": overlay,
+    "--app-gradient-start": gradientStart,
+    "--app-gradient-middle": gradientMiddle,
+    "--app-gradient-end": gradientEnd,
+    "--app-orb-primary": orbPrimary,
+    "--app-orb-secondary": orbSecondary,
+    "--app-orb-tertiary": orbTertiary,
+    "--app-orb-opacity": orbOpacity,
+  };
+}
 
 const ROBOT_ASSETS: Record<RobotVariant, { 48: string; 64: string; 96: string }> = {
   idle: { 48: botIdle48, 64: botIdle64, 96: botIdle96 },
@@ -301,6 +432,19 @@ function getInitialWelcomePreference(): WelcomePreference {
     /* noop */
   }
   return "show";
+}
+
+function getInitialScene(): Scene {
+  if (typeof window === "undefined") return "BOOT";
+  try {
+    const stored = window.sessionStorage.getItem(SCENE_STORAGE_KEY);
+    if (stored === "WELCOME" || stored === "MODE" || stored === "MATCH" || stored === "RESULTS") {
+      return stored;
+    }
+  } catch {
+    /* noop */
+  }
+  return "BOOT";
 }
 
 // ---- Core game logic (pure) ----
@@ -878,9 +1022,9 @@ const CONFIDENCE_BADGE_INFO: Record<
   "low" | "medium" | "high",
   { label: string; face: string; className: string }
 > = {
-  low: { label: "Low", face: "😮‍💨", className: "bg-rose-100 text-rose-700" },
-  medium: { label: "Med", face: "😐", className: "bg-amber-100 text-amber-700" },
-  high: { label: "High", face: "🙂", className: "bg-emerald-100 text-emerald-700" },
+  low: { label: "Low", face: "😮‍💨", className: "bg-rose-500 text-white" },
+  medium: { label: "Med", face: "😐", className: "bg-[#A65613] text-white" },
+  high: { label: "High", face: "🙂", className: "bg-emerald-500 text-white" },
 };
 
 const OUTCOME_CARD_STYLES: Record<
@@ -903,6 +1047,30 @@ function clamp01(value: number | null | undefined): number {
   if (value < 0) return 0;
   if (value > 1) return 1;
   return value;
+}
+
+function useMediaQuery(query: string, fallback = false): boolean {
+  const getMatch = useCallback(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return fallback;
+    }
+    return window.matchMedia(query).matches;
+  }, [query, fallback]);
+
+  const [matches, setMatches] = useState<boolean>(() => getMatch());
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const mediaQuery = window.matchMedia(query);
+    const handleChange = (event: MediaQueryListEvent) => setMatches(event.matches);
+    setMatches(mediaQuery.matches);
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, [getMatch, query]);
+
+  return matches;
 }
 
 function expectedPlayerMoveFromAi(aiMove: Move | null | undefined): Move | null {
@@ -1504,15 +1672,147 @@ function RPSDoodleAppInner(){
     initialWelcomePreferenceRef.current = getInitialWelcomePreference();
   }
   const initialWelcomePreference = initialWelcomePreferenceRef.current;
-  const [welcomePreference, setWelcomePreference] = useState<WelcomePreference>(initialWelcomePreference);
+  const initialSceneRef = useRef<Scene | null>(null);
+  if (initialSceneRef.current === null) {
+    initialSceneRef.current = getInitialScene();
+  }
+  const initialScene = initialSceneRef.current;
   const [welcomeSeen, setWelcomeSeen] = useState<boolean>(initialWelcomePreference === "skip");
-  const [welcomeActive, setWelcomeActive] = useState(false);
+  const [welcomeActive, setWelcomeActive] = useState(initialScene === "WELCOME");
   const [welcomeStage, setWelcomeStage] = useState<"intro" | "create" | "restore">("intro");
   const [welcomeOrigin, setWelcomeOrigin] = useState<"launch" | "settings" | null>(null);
   const [welcomeSlide, setWelcomeSlide] = useState(0);
   const [statsOpen, setStatsOpen] = useState(false);
   const [leaderboardOpen, setLeaderboardOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [themeMenuOpen, setThemeMenuOpen] = useState(false);
+  const themeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const themeMenuRef = useRef<HTMLDivElement | null>(null);
+  const [fallbackThemePreference, setFallbackThemePreference] = useState<ThemePreference>(() => {
+    if (typeof window === "undefined") return "system";
+    try {
+      const stored = window.localStorage.getItem(THEME_PREFERENCE_STORAGE_KEY);
+      return stored === "dark" || stored === "light" || stored === "system" ? stored : "system";
+    } catch {
+      return "system";
+    }
+  });
+  const [fallbackThemeColors, setFallbackThemeColors] = useState<ThemeColorPreferences>(() => {
+    const defaults = cloneProfilePreferences(DEFAULT_PROFILE_PREFERENCES).themeColors;
+    if (typeof window === "undefined") return defaults;
+    try {
+      const stored = window.localStorage.getItem(THEME_COLOR_STORAGE_KEY);
+      const parsed = parseStoredThemeColors(stored);
+      return parsed ?? defaults;
+    } catch {
+      return defaults;
+    }
+  });
+  const systemPrefersDark = useMediaQuery("(prefers-color-scheme: dark)");
+  const themePreference: ThemePreference = currentProfile?.preferences.theme ?? fallbackThemePreference;
+  const resolvedTheme = themePreference === "system" ? (systemPrefersDark ? "dark" : "light") : themePreference;
+  const resolvedThemeMode: ThemeMode = resolvedTheme === "dark" ? "dark" : "light";
+  const isDarkTheme = resolvedThemeMode === "dark";
+  const themeOptions = useMemo(
+    () => [
+      {
+        value: "dark" as ThemePreference,
+        label: "Dark",
+        icon: "⏾",
+        description: "Dim surfaces for low light spaces.",
+      },
+      {
+        value: "light" as ThemePreference,
+        label: "Light",
+        icon: "☼",
+        description: "Bright contrast for daylight hours.",
+      },
+      {
+        value: "system" as ThemePreference,
+        label: `System (${systemPrefersDark ? "Dark" : "Light"} now)`,
+        icon: "☾☼",
+        description: "Follow your device setting.",
+      },
+    ],
+    [systemPrefersDark],
+  );
+  const headerThemeIcon = themePreference === "system" ? "☾☼" : themePreference === "dark" ? "⏾" : "☼";
+  const headerThemeLabel =
+    themePreference === "system"
+      ? `Theme: System (${systemPrefersDark ? "Dark" : "Light"} now)`
+      : themePreference === "dark"
+        ? "Theme: Dark"
+        : "Theme: Light";
+  const resolvedThemeLabel =
+    themePreference === "system"
+      ? systemPrefersDark
+        ? "Dark"
+        : "Light"
+      : themePreference === "dark"
+        ? "Dark"
+        : "Light";
+  const profileThemeColors = currentProfile?.preferences.themeColors;
+  const mergedThemeColors = useMemo(() => {
+    const withFallback = mergeThemeColorPreferences(
+      DEFAULT_THEME_COLOR_PREFERENCES,
+      fallbackThemeColors,
+    );
+    return profileThemeColors
+      ? mergeThemeColorPreferences(withFallback, profileThemeColors)
+      : withFallback;
+  }, [fallbackThemeColors, profileThemeColors]);
+  const activeThemeColors = mergedThemeColors[resolvedThemeMode];
+  const themeVariables = useMemo(
+    () => deriveThemeCssVariables(resolvedThemeMode, activeThemeColors),
+    [resolvedThemeMode, activeThemeColors.accent, activeThemeColors.background],
+  );
+  const backgroundGradientStyle = useMemo(
+    () => ({
+      backgroundImage: `linear-gradient(180deg, ${themeVariables["--app-gradient-start"]} 0%, ${themeVariables["--app-gradient-middle"]} 50%, ${themeVariables["--app-gradient-end"]} 100%)`,
+    }),
+    [themeVariables],
+  );
+  const orbStyles = useMemo(
+    () => ({
+      primary: {
+        backgroundColor: themeVariables["--app-orb-primary"],
+        borderColor: themeVariables["--app-border-strong"],
+        borderWidth: 1,
+        borderStyle: "solid" as const,
+      },
+      secondary: {
+        backgroundColor: themeVariables["--app-orb-secondary"],
+        borderColor: themeVariables["--app-border"],
+        borderWidth: 1,
+        borderStyle: "solid" as const,
+      },
+      tertiary: {
+        backgroundColor: themeVariables["--app-orb-tertiary"],
+        borderColor: themeVariables["--app-border"],
+        borderWidth: 1,
+        borderStyle: "solid" as const,
+      },
+    }),
+    [themeVariables],
+  );
+  const orbOpacity = useMemo(() => {
+    const raw = themeVariables["--app-orb-opacity"];
+    const parsed = raw ? parseFloat(raw) : null;
+    if (parsed !== null && !Number.isNaN(parsed)) {
+      return Math.max(0, Math.min(1, parsed));
+    }
+    return isDarkTheme ? 0.3 : 0.55;
+  }, [isDarkTheme, themeVariables]);
+  const [themeColorEditingMode, setThemeColorEditingMode] = useState<ThemeMode>(resolvedThemeMode);
+  useEffect(() => {
+    setThemeColorEditingMode(resolvedThemeMode);
+  }, [resolvedThemeMode]);
+  const themeColorEditingColors = mergedThemeColors[themeColorEditingMode];
+  const isEditingModeDefault = themeModeColorsEqual(
+    mergedThemeColors[themeColorEditingMode],
+    DEFAULT_THEME_COLOR_PREFERENCES[themeColorEditingMode],
+  );
+  const editingModeLabel = themeColorEditingMode === "dark" ? "Dark" : "Light";
   const [statsTab, setStatsTab] = useState<"overview" | "rounds" | "insights">("overview");
   const [roundsViewMode, setRoundsViewMode] = useState<"card" | "table">(() => {
     if (typeof window === "undefined") return "card";
@@ -1556,6 +1856,33 @@ function RPSDoodleAppInner(){
       window.sessionStorage.setItem("rps_rounds_view_v1", roundsViewMode);
     }
   }, [roundsViewMode]);
+  useEffect(() => {
+    const profileTheme = currentProfile?.preferences.theme;
+    if (!profileTheme) return;
+    setFallbackThemePreference(prev => (prev === profileTheme ? prev : profileTheme));
+  }, [currentProfile?.preferences.theme]);
+  useEffect(() => {
+    const profileColors = currentProfile?.preferences.themeColors;
+    if (!profileColors) return;
+    const cloned = cloneProfilePreferences(currentProfile.preferences).themeColors;
+    setFallbackThemeColors(prev => (themeColorPreferencesEqual(prev, cloned) ? prev : cloned));
+  }, [currentProfile?.preferences, currentProfile?.preferences.themeColors]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(THEME_PREFERENCE_STORAGE_KEY, themePreference);
+    } catch {
+      /* noop */
+    }
+  }, [themePreference]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(THEME_COLOR_STORAGE_KEY, JSON.stringify(fallbackThemeColors));
+    } catch {
+      /* noop */
+    }
+  }, [fallbackThemeColors]);
   function resetSessionMixer() {
     sessionMixerRef.current = instantiateMixerFromState(null);
   }
@@ -1727,10 +2054,9 @@ function RPSDoodleAppInner(){
   const isPlayerModalOpen = playerModalMode !== "hidden";
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [restoreSelectedPlayerId, setRestoreSelectedPlayerId] = useState<string | null>(null);
-  type Scene = "WELCOME"|"BOOT"|"MODE"|"MATCH"|"RESULTS";
-  const [scene, setScene] = useState<Scene>("BOOT");
+  const [scene, setScene] = useState<Scene>(initialScene);
   const [bootNext, setBootNext] = useState<"WELCOME" | "AUTO">(
-    initialWelcomePreference === "show" ? "WELCOME" : "AUTO"
+    initialScene === "BOOT" ? (initialWelcomePreference === "show" ? "WELCOME" : "AUTO") : "AUTO"
   );
   const [bootProgress, setBootProgress] = useState(0);
   const [bootReady, setBootReady] = useState(false);
@@ -1740,6 +2066,18 @@ function RPSDoodleAppInner(){
   const [pendingWelcomeExit, setPendingWelcomeExit] = useState<
     null | { reason: "setup" | "restore" | "dismiss" }
   >(null);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      if (scene === "BOOT") {
+        window.sessionStorage.removeItem(SCENE_STORAGE_KEY);
+      } else {
+        window.sessionStorage.setItem(SCENE_STORAGE_KEY, scene);
+      }
+    } catch {
+      /* noop */
+    }
+  }, [scene]);
   useEffect(() => {
     if (welcomeActive || restoreDialogOpen) return;
     if (scene === "BOOT") return;
@@ -1760,15 +2098,25 @@ function RPSDoodleAppInner(){
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastReaderOpen, setToastReaderOpen] = useState(false);
   const [toastConfirm, setToastConfirm] = useState<
-    { confirmLabel: string; cancelLabel?: string; onConfirm: () => void } | null
+    { confirmLabel: string; cancelLabel?: string; onConfirm: () => void; context?: "logout" } | null
   >(null);
+  const [logoutAutoExport, setLogoutAutoExport] = useState(false);
+  const logoutAutoExportRef = useRef(false);
   const [helpToast, setHelpToast] = useState<{ title: string; message: string } | null>(null);
   const [modernToast, setModernToast] = useState<ModernToast | null>(null);
   const modernToastTimeoutRef = useRef<number | null>(null);
   const [helpGuideOpen, setHelpGuideOpen] = useState(false);
   const helpButtonRef = useRef<HTMLButtonElement | null>(null);
+  const aboutButtonRef = useRef<HTMLButtonElement | null>(null);
   const [helpCenterOpen, setHelpCenterOpen] = useState(false);
-  const headerOverlayActive = statsOpen || leaderboardOpen || settingsOpen || helpCenterOpen;
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const headerOverlayActive =
+    statsOpen ||
+    leaderboardOpen ||
+    settingsOpen ||
+    helpCenterOpen ||
+    aboutOpen ||
+    themeMenuOpen;
   const previousHeaderOverlayActiveRef = useRef(headerOverlayActive);
   const [helpActiveQuestionId, setHelpActiveQuestionId] = useState<string | null>(
     AI_FAQ_QUESTIONS[0]?.id ?? null,
@@ -1778,6 +2126,126 @@ function RPSDoodleAppInner(){
   const [robotResultReaction, setRobotResultReaction] = useState<RobotReaction | null>(null);
   const reduceMotion = useReducedMotion();
   const [live, setLive] = useState<string>("");
+  const applyThemePreference = useCallback(
+    (value: ThemePreference) => {
+      if (value === themePreference) {
+        return;
+      }
+      if (currentProfile) {
+        const nextPreferences = cloneProfilePreferences(currentProfile.preferences);
+        nextPreferences.theme = value;
+        updateStatsProfile(currentProfile.id, { preferences: nextPreferences });
+      }
+      setFallbackThemePreference(prev => (prev === value ? prev : value));
+      const label =
+        value === "system"
+          ? `System (${systemPrefersDark ? "Dark" : "Light"})`
+          : value === "dark"
+            ? "Dark"
+            : "Light";
+      setLive(`Theme set to ${label}.`);
+    },
+    [currentProfile, themePreference, updateStatsProfile, setLive, systemPrefersDark],
+  );
+  const handleThemeMenuSelect = useCallback(
+    (value: ThemePreference) => {
+      if (value !== themePreference) {
+        applyThemePreference(value);
+      }
+      setThemeMenuOpen(false);
+      requestAnimationFrame(() => themeButtonRef.current?.focus());
+    },
+    [applyThemePreference, themePreference],
+  );
+  const handleSettingsThemeChange = useCallback(
+    (value: ThemePreference) => {
+      applyThemePreference(value);
+    },
+    [applyThemePreference],
+  );
+  const handleThemeColorInputChange = useCallback(
+    (mode: ThemeMode, key: keyof ThemeModeColors, value: string) => {
+      const currentValue = mergedThemeColors[mode][key];
+      const sanitized = normalizeHexColor(value, currentValue);
+      if (sanitized === currentValue) {
+        return;
+      }
+      setFallbackThemeColors(prev => {
+        const next = mergeThemeColorPreferences(prev, { [mode]: { [key]: sanitized } });
+        return themeColorPreferencesEqual(prev, next) ? prev : next;
+      });
+      if (currentProfile) {
+        const nextPreferences = cloneProfilePreferences(currentProfile.preferences);
+        nextPreferences.themeColors = mergeThemeColorPreferences(nextPreferences.themeColors, {
+          [mode]: { [key]: sanitized },
+        });
+        updateStatsProfile(currentProfile.id, { preferences: nextPreferences });
+      }
+      const modeLabel = mode === "dark" ? "Dark" : "Light";
+      const colorLabel = key === "accent" ? "accent" : "background";
+      setLive(`${modeLabel} ${colorLabel} color updated.`);
+    },
+    [mergedThemeColors, currentProfile, updateStatsProfile, setLive],
+  );
+  const handleResetThemeColors = useCallback(
+    (mode: ThemeMode) => {
+      const defaults = DEFAULT_THEME_COLOR_PREFERENCES[mode];
+      if (themeModeColorsEqual(mergedThemeColors[mode], defaults)) {
+        return;
+      }
+      setFallbackThemeColors(prev => {
+        const next = mergeThemeColorPreferences(prev, { [mode]: defaults });
+        return themeColorPreferencesEqual(prev, next) ? prev : next;
+      });
+      if (currentProfile) {
+        const nextPreferences = cloneProfilePreferences(currentProfile.preferences);
+        nextPreferences.themeColors = mergeThemeColorPreferences(nextPreferences.themeColors, {
+          [mode]: defaults,
+        });
+        updateStatsProfile(currentProfile.id, { preferences: nextPreferences });
+      }
+      const modeLabel = mode === "dark" ? "Dark" : "Light";
+      setLive(`${modeLabel} colors reset to default.`);
+    },
+    [mergedThemeColors, currentProfile, updateStatsProfile, setLive],
+  );
+  useEffect(() => {
+    if (!themeMenuOpen) return;
+    const handlePointer = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (themeMenuRef.current?.contains(target)) return;
+      if (themeButtonRef.current?.contains(target)) return;
+      setThemeMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setThemeMenuOpen(false);
+        requestAnimationFrame(() => themeButtonRef.current?.focus());
+      }
+    };
+    document.addEventListener("mousedown", handlePointer);
+    document.addEventListener("touchstart", handlePointer);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointer);
+      document.removeEventListener("touchstart", handlePointer);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [themeMenuOpen]);
+  useEffect(() => {
+    if (!themeMenuOpen) return;
+    if (statsOpen || leaderboardOpen || settingsOpen || helpCenterOpen || aboutOpen) {
+      setThemeMenuOpen(false);
+    }
+  }, [
+    themeMenuOpen,
+    statsOpen,
+    leaderboardOpen,
+    settingsOpen,
+    helpCenterOpen,
+    aboutOpen,
+  ]);
   const [insightPanelOpen, setInsightPanelOpen] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     try {
@@ -2059,6 +2527,22 @@ function RPSDoodleAppInner(){
     openInsightPanel(null, { focus: false, persistPreference: false });
   }, [insightPanelOpen, insightPreferred, openInsightPanel, scene]);
 
+  const handleCloseAbout = useCallback(() => {
+    setAboutOpen(false);
+    setLive("About closed.");
+    if (typeof window !== "undefined") {
+      requestAnimationFrame(() => {
+        aboutButtonRef.current?.focus();
+      });
+    }
+  }, [setLive]);
+
+  const handleOpenAbout = useCallback(() => {
+    suspendInsightPanelForHeader();
+    setAboutOpen(true);
+    setLive("About opened. Press Escape to close.");
+  }, [setLive, suspendInsightPanelForHeader]);
+
   useEffect(() => {
     const wasActive = previousHeaderOverlayActiveRef.current;
     if (headerOverlayActive && !wasActive) {
@@ -2195,9 +2679,10 @@ function RPSDoodleAppInner(){
   useEffect(() => {
     if (!toastMessage) return;
     if (toastReaderOpen) return;
+    if (toastConfirm?.context === "logout") return;
     const id = window.setTimeout(() => setToastMessage(null), 4000);
     return () => window.clearTimeout(id);
-  }, [toastMessage, toastReaderOpen]);
+  }, [toastMessage, toastReaderOpen, toastConfirm]);
   useEffect(() => {
     if (!modernToast) return;
     if (modernToastTimeoutRef.current !== null) {
@@ -2223,6 +2708,14 @@ function RPSDoodleAppInner(){
     if (toastMessage) return;
     setToastConfirm(null);
   }, [toastMessage]);
+  useEffect(() => {
+    logoutAutoExportRef.current = logoutAutoExport;
+  }, [logoutAutoExport]);
+  useEffect(() => {
+    if (!toastConfirm || toastConfirm.context !== "logout") {
+      setLogoutAutoExport(false);
+    }
+  }, [toastConfirm]);
   useEffect(() => {
     if (!toastReaderOpen) return;
     requestAnimationFrame(() => toastReaderCloseRef.current?.focus());
@@ -2266,19 +2759,6 @@ function RPSDoodleAppInner(){
       focusTarget?.focus();
     });
   }, [insightPanelOpen]);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(WELCOME_PREF_KEY, welcomePreference);
-      if (welcomePreference === "skip") {
-        window.localStorage.setItem(LEGACY_WELCOME_SEEN_KEY, "true");
-      } else {
-        window.localStorage.removeItem(LEGACY_WELCOME_SEEN_KEY);
-      }
-    } catch {
-      /* noop */
-    }
-  }, [welcomePreference]);
   useEffect(() => {
     if (welcomeActive) {
       setWelcomeSlide(0);
@@ -2448,7 +2928,7 @@ function RPSDoodleAppInner(){
   const [predictorMode, setPredictorMode] = useState<boolean>(currentProfile?.predictorDefault ?? false);
   const [aiMode, setAiMode] = useState<AIMode>("normal");
   const [difficultyHint, setDifficultyHint] = useState<string>(DIFFICULTY_INFO["normal"].helper);
-  const TRAIN_ROUNDS = 10;
+  const TRAIN_ROUNDS = 5;
   const trainingCount = currentProfile?.trainingCount ?? 0;
   const isTrained = currentProfile?.trained ?? false;
   const previousTrainingCountRef = useRef(trainingCount);
@@ -2736,8 +3216,22 @@ function RPSDoodleAppInner(){
   const activeMatchMode: Mode = selectedMode ?? "practice";
   const matchModeBadgeTheme =
     activeMatchMode === "challenge"
-      ? "border-rose-200 bg-rose-100 text-rose-700"
+      ? "border-rose-500 bg-rose-600 text-white"
       : "border-sky-200 bg-sky-100 text-sky-700";
+  const aiStatusPill = useMemo(() => {
+    const offState = {
+      label: "AI OFF (Random)",
+      className: "border border-slate-200 bg-white/80 text-slate-600",
+    };
+    if (trainingActive || needsTraining || !isTrained || !predictorMode) {
+      return offState;
+    }
+    const difficultyLabel = `${DIFFICULTY_INFO[aiMode].label} Mode`;
+    return {
+      label: `AI ACTIVE (${difficultyLabel})`,
+      className: "border border-emerald-500 bg-emerald-600 text-white",
+    };
+  }, [aiMode, isTrained, needsTraining, predictorMode, trainingActive]);
 
   const handlePredictorToggle = useCallback(
     (checked: boolean) => {
@@ -2841,6 +3335,14 @@ function RPSDoodleAppInner(){
       if (options.resetPlayer) {
         setCurrentPlayer(null);
       }
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(WELCOME_PREF_KEY, "show");
+          window.localStorage.removeItem(LEGACY_WELCOME_SEEN_KEY);
+        } catch {
+          /* noop */
+        }
+      }
       setWelcomeSeen(false);
       setWelcomeSlide(0);
       setWelcomeStage("intro");
@@ -2912,6 +3414,16 @@ function RPSDoodleAppInner(){
     ],
   );
 
+  const persistWelcomeSeen = useCallback(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(WELCOME_PREF_KEY, "skip");
+      window.localStorage.setItem(LEGACY_WELCOME_SEEN_KEY, "true");
+    } catch {
+      /* noop */
+    }
+  }, []);
+
   const finishWelcomeFlow = useCallback(
     (reason: "setup" | "restore" | "dismiss") => {
       setWelcomeActive(false);
@@ -2919,6 +3431,7 @@ function RPSDoodleAppInner(){
       setWelcomeStage("intro");
       setBootNext("AUTO");
       setWelcomeSeen(true);
+      persistWelcomeSeen();
       setWelcomeOrigin(null);
       welcomeToastShownRef.current = false;
       welcomeFinalToastShownRef.current = false;
@@ -2932,6 +3445,7 @@ function RPSDoodleAppInner(){
       setWelcomeSeen,
       setWelcomeSlide,
       setWelcomeStage,
+      persistWelcomeSeen,
     ],
   );
 
@@ -3771,21 +4285,6 @@ function RPSDoodleAppInner(){
     selectProfile(id);
   }, [selectProfile]);
 
-  const handleWelcomeReplayToggle = useCallback(
-    (value: boolean) => {
-      const nextPreference: WelcomePreference = value ? "show" : "skip";
-      setWelcomePreference(nextPreference);
-      if (nextPreference === "show") {
-        setToastMessage("The welcome intro will show next time you open RPS AI Lab.");
-        setLive("Welcome intro scheduled to replay on the next launch.");
-      } else {
-        setToastMessage("The welcome intro will stay hidden on launch.");
-        setLive("Welcome intro replay disabled.");
-      }
-    },
-    [setLive, setToastMessage, setWelcomePreference],
-  );
-
   const handleOpenSettings = useCallback(() => {
     setSettingsOpen(true);
     setLive(
@@ -3824,14 +4323,36 @@ function RPSDoodleAppInner(){
     [setLive]
   );
 
+  const performCsvExport = useCallback(() => {
+    if (!currentPlayer || !currentProfile || !hasExportData) return;
+    const data = exportRoundsCsv();
+    const blob = new Blob([data], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const profileSegment = sanitizeForFile(currentProfile.name || "profile") || "profile";
+    a.download = `rps-${profileSegment}-rounds.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    const label = currentProfile.name ? ` for ${currentProfile.name}` : "";
+    setToastMessage(`CSV export ready${label}. Check your downloads.`);
+    setLive(`Rounds exported as CSV${label}. Download starting.`);
+  }, [currentPlayer, currentProfile, exportRoundsCsv, hasExportData, sanitizeForFile, setLive, setToastMessage]);
+
   const handleLogOut = useCallback(() => {
+    setLogoutAutoExport(false);
+    logoutAutoExportRef.current = false;
     setToastMessage("Confirm log out? This will log you out into the welcome screen after the boot sequence.");
     setToastConfirm({
       confirmLabel: "Log out now",
       cancelLabel: "Cancel",
+      context: "logout",
       onConfirm: () => {
         setToastConfirm(null);
         setToastMessage(null);
+        if (logoutAutoExportRef.current && canExportData) {
+          performCsvExport();
+        }
         handleCloseSettings(false);
         openWelcome({
           announce: "Logging out. Boot sequence starting for the welcome intro.",
@@ -3842,7 +4363,16 @@ function RPSDoodleAppInner(){
       },
     });
     setLive("Log out requested. Confirm via toast to log out and reboot.");
-  }, [handleCloseSettings, openWelcome, setLive, setToastConfirm, setToastMessage]);
+  }, [
+    canExportData,
+    handleCloseSettings,
+    logoutAutoExportRef,
+    openWelcome,
+    performCsvExport,
+    setLive,
+    setToastConfirm,
+    setToastMessage,
+  ]);
 
   const handleCreateProfile = useCallback(() => {
     if (settingsOpen) {
@@ -3872,22 +4402,6 @@ function RPSDoodleAppInner(){
     setToastMessage(message);
     setLive(`New statistics profile created: ${created.name}. Training starts now (${TRAIN_ROUNDS} rounds). Previous results remain available in Statistics.`);
   }, [createStatsProfile, setToastMessage, setLive, TRAIN_ROUNDS]);
-
-  const performCsvExport = useCallback(() => {
-    if (!currentPlayer || !currentProfile || !hasExportData) return;
-    const data = exportRoundsCsv();
-    const blob = new Blob([data], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    const profileSegment = sanitizeForFile(currentProfile.name || "profile") || "profile";
-    a.download = `rps-${profileSegment}-rounds.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    const label = currentProfile.name ? ` for ${currentProfile.name}` : "";
-    setToastMessage(`CSV export ready${label}. Check your downloads.`);
-    setLive(`Rounds exported as CSV${label}. Download starting.`);
-  }, [currentPlayer, currentProfile, exportRoundsCsv, hasExportData, sanitizeForFile, setLive, setToastMessage]);
 
   const closeExportDialog = useCallback(
     (announce?: string) => {
@@ -4403,6 +4917,12 @@ function RPSDoodleAppInner(){
 
   useEffect(() => {
     if (previousTrainingCountRef.current < TRAIN_ROUNDS && trainingCount >= TRAIN_ROUNDS) {
+      if (currentProfile && !currentProfile.predictorDefault) {
+        updateStatsProfile(currentProfile.id, { predictorDefault: true });
+      }
+      if (!predictorMode) {
+        setPredictorMode(true);
+      }
       if (currentProfile && !currentProfile.seenPostTrainingCTA && !postTrainingCtaAcknowledged) {
         setPostTrainingCtaOpen(true);
         setHelpGuideOpen(false);
@@ -4416,7 +4936,14 @@ function RPSDoodleAppInner(){
       setPostTrainingCtaOpen(false);
     }
     previousTrainingCountRef.current = trainingCount;
-  }, [currentProfile, postTrainingCtaAcknowledged, scene, trainingCount]);
+  }, [
+    currentProfile,
+    postTrainingCtaAcknowledged,
+    predictorMode,
+    scene,
+    trainingCount,
+    updateStatsProfile,
+  ]);
 
   useEffect(() => {
     if (!currentProfile) {
@@ -4718,18 +5245,43 @@ function RPSDoodleAppInner(){
   },[]);
 
   return (
-    <div className="relative flex min-h-screen flex-col select-none overflow-x-hidden overflow-y-auto" style={{ fontSize: `${textScale*16}px` }}>
-      <style>{style}</style>
+    <>
+      <div
+        className="app-theme"
+        data-theme={resolvedTheme}
+        data-theme-preference={themePreference}
+        style={themeVariables as React.CSSProperties}
+      >
+        <div
+          className={`relative flex min-h-screen flex-col select-none overflow-x-hidden overflow-y-auto ${isDarkTheme ? "text-slate-100" : ""}`}
+          style={{ fontSize: `${textScale * 16}px` }}
+        >
+          <style>{style}</style>
 
-      {/* Parallax background */}
-      <div className="absolute inset-0 -z-10">
-        <div className="absolute inset-0 bg-gradient-to-b from-sky-100 to-white"/>
-        <motion.div initial={{ y: -20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ duration: 0.6, ease: [0.22,0.61,0.36,1] }} className="absolute -top-20 left-0 right-0 h-60 opacity-60">
-          <div className="absolute left-10 top-10 w-40 h-40 rounded-full bg-sky-200"/>
-          <div className="absolute right-16 top-8 w-24 h-24 rounded-full bg-sky-300"/>
-          <div className="absolute left-1/2 top-2 w-28 h-28 rounded-full bg-sky-200"/>
-        </motion.div>
-      </div>
+          {/* Parallax background */}
+          <div className="absolute inset-0 -z-10">
+            <div className="absolute inset-0 bg-gradient-to-b" style={backgroundGradientStyle} />
+            <motion.div
+              initial={{ y: -20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ duration: 0.6, ease: [0.22, 0.61, 0.36, 1] }}
+              className="absolute -top-20 left-0 right-0 h-60"
+              style={{ opacity: orbOpacity }}
+            >
+              <div
+                className="absolute left-10 top-10 h-40 w-40 rounded-full"
+                style={orbStyles.primary as React.CSSProperties}
+              />
+              <div
+                className="absolute right-16 top-8 h-24 w-24 rounded-full"
+                style={orbStyles.secondary as React.CSSProperties}
+              />
+              <div
+                className="absolute left-1/2 top-2 h-28 w-28 rounded-full"
+                style={orbStyles.tertiary as React.CSSProperties}
+              />
+            </motion.div>
+          </div>
 
       <LiveRegion message={live} />
 
@@ -4766,15 +5318,47 @@ function RPSDoodleAppInner(){
       })()}
 
       {toastMessage && toastConfirm ? (
-        <div className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/50 px-4">
+        <div
+          className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/50 px-4"
+          onClick={() => {
+            setToastConfirm(null);
+            setToastMessage(null);
+          }}
+        >
           <div
             role="dialog"
             aria-modal="true"
             className="w-full max-w-sm rounded-2xl bg-white p-6 text-slate-800 shadow-2xl"
+            onClick={event => event.stopPropagation()}
           >
             <div className="space-y-4">
               <div className="text-base font-semibold text-slate-900">Confirm action</div>
               <p className="text-sm text-slate-600">{toastMessage}</p>
+              {toastConfirm.context === "logout" && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-sm text-slate-600">
+                  <label className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      className="mt-1 h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500"
+                      checked={logoutAutoExport}
+                      onChange={event => setLogoutAutoExport(event.target.checked)}
+                      disabled={!canExportData}
+                      data-dev-label="logout.autoExport"
+                    />
+                    <span className="leading-snug">
+                      Auto-export my match data before logging out.
+                      {!canExportData && (
+                        <>
+                          <br />
+                          <span className="text-xs text-slate-500">
+                            No exportable data yet — play a match to enable this option.
+                          </span>
+                        </>
+                      )}
+                    </span>
+                  </label>
+                </div>
+              )}
               <div className="flex justify-end gap-3">
                 <button
                   type="button"
@@ -5162,7 +5746,6 @@ function RPSDoodleAppInner(){
                     </p>
                     <p className="text-xs text-slate-500">
                       Grade {selectedRestorePlayer.grade}
-                      {selectedRestorePlayer.age ? ` • Age ${selectedRestorePlayer.age}` : ""}
                       {selectedRestorePlayer.needsReview ? " • Needs review" : ""}
                     </p>
                   </div>
@@ -5202,6 +5785,80 @@ function RPSDoodleAppInner(){
         >
           <motion.h1 layout className="text-2xl font-extrabold tracking-tight text-sky-700 drop-shadow-sm">RPS Lab</motion.h1>
           <div className="flex items-center gap-2">
+            <div className="relative">
+              <button
+                ref={themeButtonRef}
+                type="button"
+                className={`inline-flex items-center justify-center rounded-xl px-2.5 py-1.5 text-base shadow transition ${
+                  themeMenuOpen ? "bg-sky-600 text-white" : "bg-white/70 hover:bg-white text-sky-900"
+                }`}
+                aria-haspopup="menu"
+                aria-expanded={themeMenuOpen}
+                aria-label={headerThemeLabel}
+                title={headerThemeLabel}
+                onClick={() => {
+                  if (themeMenuOpen) {
+                    setThemeMenuOpen(false);
+                  } else {
+                    suspendInsightPanelForHeader();
+                    setThemeMenuOpen(true);
+                  }
+                }}
+                data-dev-label="hdr.theme"
+              >
+                <span aria-hidden>{headerThemeIcon}</span>
+                <span className="sr-only">{headerThemeLabel}</span>
+              </button>
+              <AnimatePresence>
+                {themeMenuOpen && (
+                  <motion.div
+                    ref={themeMenuRef}
+                    key="theme-menu"
+                    initial={{ opacity: 0, y: -4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.16 }}
+                    className="absolute left-0 top-full z-[85] mt-2 w-52 rounded-xl bg-white/95 p-2 text-sm shadow-xl ring-1 ring-slate-200"
+                    role="menu"
+                    aria-label="Theme"
+                  >
+                    {themeOptions.map(option => {
+                      const isActive = option.value === themePreference;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => handleThemeMenuSelect(option.value)}
+                          className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left transition ${
+                            isActive
+                              ? "bg-sky-600 text-white shadow"
+                              : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                          }`}
+                          role="menuitemradio"
+                          aria-checked={isActive}
+                          data-dev-label={`hdr.theme.${option.value}`}
+                        >
+                          <span className="flex flex-col gap-0.5">
+                            <span className="flex items-center gap-2">
+                              <span aria-hidden className="text-base">
+                                {option.icon}
+                              </span>
+                              <span className="font-semibold">{option.label}</span>
+                            </span>
+                            <span className="text-xs text-slate-500">{option.description}</span>
+                          </span>
+                          {isActive && (
+                            <span aria-hidden className="text-xs font-semibold">
+                              ✓
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
             {trainingActive && (
               <span
                 className="px-2 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-700"
@@ -5212,7 +5869,7 @@ function RPSDoodleAppInner(){
             )}
             {showTrainingCompleteBadge && (
               <span
-                className="px-2 py-1 text-xs font-semibold rounded-full bg-emerald-100 text-emerald-700"
+                className="px-2 py-1 text-xs font-semibold rounded-full bg-emerald-600 text-white"
                 data-dev-label="hdr.trainingBadge"
               >
                 Training complete
@@ -5228,11 +5885,12 @@ function RPSDoodleAppInner(){
                 setStatsOpen(true);
               }}
               disabled={postTrainingLockActive}
-              className={`px-3 py-1.5 rounded-xl shadow text-sm ${
+              className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl shadow text-sm ${
                 postTrainingLockActive ? "bg-white/50 text-slate-400 cursor-not-allowed" : "bg-white/70 hover:bg-white text-sky-900"
               }`}
               data-dev-label="hdr.stats"
             >
+              <span aria-hidden className="text-base leading-none">📊</span>
               Statistics
             </button>
             <button
@@ -5254,7 +5912,8 @@ function RPSDoodleAppInner(){
               title={!hasConsented ? "Select a player to continue." : postTrainingLockActive ? "Choose a mode or dismiss the banner first." : undefined}
               data-dev-label="hdr.leaderboard"
             >
-              Leaderboard
+              <span aria-hidden className="text-base leading-none">🏆</span>
+              <span>Leaderboard</span>
               {showLeaderboardHeaderBadge && (
                 <span
                   className="inline-flex items-center gap-1 rounded-full bg-slate-900/90 px-2 py-0.5 text-[0.6rem] font-semibold uppercase tracking-[0.22em] text-white shadow"
@@ -5324,6 +5983,26 @@ function RPSDoodleAppInner(){
             >
               <span aria-hidden className="text-base leading-none">ℹ️</span>
               Help
+            </button>
+            <button
+              ref={aboutButtonRef}
+              type="button"
+              onClick={() => {
+                if (aboutOpen) {
+                  handleCloseAbout();
+                } else {
+                  handleOpenAbout();
+                }
+              }}
+              className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl shadow text-sm transition ${
+                aboutOpen ? "bg-sky-600 text-white" : "bg-white/70 hover:bg-white text-sky-900"
+              }`}
+              aria-haspopup="dialog"
+              aria-expanded={aboutOpen}
+              data-dev-label="hdr.about"
+            >
+              <span aria-hidden className="text-base leading-none">📘</span>
+              About
             </button>
             <button
               ref={settingsButtonRef}
@@ -5418,7 +6097,7 @@ function RPSDoodleAppInner(){
                         </button>
                       </div>
                       {demographicsNeedReview && (
-                        <p className="text-xs text-amber-600">Update grade and age from Edit demographics.</p>
+                        <p className="text-xs text-amber-600">Update grade from Edit demographics.</p>
                       )}
                     </div>
                     <div className="space-y-2">
@@ -5655,6 +6334,125 @@ function RPSDoodleAppInner(){
                 <section className="space-y-3">
                   <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Accessibility &amp; Display</h2>
                   <div className="space-y-4 rounded-lg border border-slate-200/80 bg-white/80 p-3">
+                    <div className="space-y-2">
+                      <span className="font-medium text-slate-800">Theme</span>
+                      <p className="text-xs text-slate-500">
+                        Choose a light or dark experience, or follow your system setting.
+                      </p>
+                      <label htmlFor="settings-theme-select" className="sr-only">
+                        Select theme
+                      </label>
+                      <select
+                        id="settings-theme-select"
+                        value={themePreference}
+                        onChange={event => handleSettingsThemeChange(event.target.value as ThemePreference)}
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 shadow-inner"
+                        data-dev-label="set.theme.select"
+                      >
+                        {themeOptions.map(option => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-slate-500">Currently showing {resolvedThemeLabel.toLowerCase()} mode.</p>
+                    </div>
+                    <div className="space-y-3 rounded-lg border border-slate-200 bg-white/95 p-3 shadow-inner">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
+                        <div>
+                          <span className="font-medium text-slate-800">{editingModeLabel} mode colors</span>
+                          <p className="text-xs text-slate-500">
+                            Adjust accent highlights and interface backgrounds for each theme.
+                          </p>
+                        </div>
+                        <div className="inline-flex overflow-hidden rounded-full border border-slate-200 bg-white shadow-sm self-start">
+                          <button
+                            type="button"
+                            className={`px-3 py-1 text-xs font-semibold transition-colors ${
+                              themeColorEditingMode === "light"
+                                ? "bg-slate-200 text-slate-700 shadow-inner"
+                                : "text-slate-500 hover:bg-slate-100"
+                            }`}
+                            onClick={() => setThemeColorEditingMode("light")}
+                          >
+                            Light
+                          </button>
+                          <button
+                            type="button"
+                            className={`px-3 py-1 text-xs font-semibold transition-colors ${
+                              themeColorEditingMode === "dark"
+                                ? "bg-slate-200 text-slate-700 shadow-inner"
+                                : "text-slate-500 hover:bg-slate-100"
+                            }`}
+                            onClick={() => setThemeColorEditingMode("dark")}
+                          >
+                            Dark
+                          </button>
+                        </div>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="flex flex-col gap-2">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Accent</span>
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="color"
+                              value={themeColorEditingColors.accent}
+                              onChange={event =>
+                                handleThemeColorInputChange(
+                                  themeColorEditingMode,
+                                  "accent",
+                                  event.target.value,
+                                )
+                              }
+                              aria-label={`${editingModeLabel} accent color`}
+                              className="h-10 w-16 cursor-pointer rounded-md border border-slate-300 bg-transparent"
+                            />
+                            <span className="rounded-md border border-slate-200 bg-white px-2 py-1 font-mono text-[11px] uppercase tracking-wide text-slate-500">
+                              {themeColorEditingColors.accent}
+                            </span>
+                          </div>
+                          <span className="text-xs text-slate-500">
+                            Buttons, chips, and interactive highlights update instantly.
+                          </span>
+                        </label>
+                        <label className="flex flex-col gap-2">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Background</span>
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="color"
+                              value={themeColorEditingColors.background}
+                              onChange={event =>
+                                handleThemeColorInputChange(
+                                  themeColorEditingMode,
+                                  "background",
+                                  event.target.value,
+                                )
+                              }
+                              aria-label={`${editingModeLabel} background color`}
+                              className="h-10 w-16 cursor-pointer rounded-md border border-slate-300 bg-transparent"
+                            />
+                            <span className="rounded-md border border-slate-200 bg-white px-2 py-1 font-mono text-[11px] uppercase tracking-wide text-slate-500">
+                              {themeColorEditingColors.background}
+                            </span>
+                          </div>
+                          <span className="text-xs text-slate-500">
+                            Surface cards and gradients blend with this base tone.
+                          </span>
+                        </label>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleResetThemeColors(themeColorEditingMode)}
+                        disabled={isEditingModeDefault}
+                        className={`inline-flex items-center justify-center rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold transition-colors ${
+                          isEditingModeDefault
+                            ? "cursor-not-allowed bg-slate-100 text-slate-400"
+                            : "bg-white text-slate-600 hover:bg-slate-100"
+                        }`}
+                      >
+                        Reset {editingModeLabel.toLowerCase()} defaults
+                      </button>
+                    </div>
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <span className="font-medium text-slate-800">Audio</span>
@@ -5683,18 +6481,6 @@ function RPSDoodleAppInner(){
                         <span>Default</span>
                         <span>Larger</span>
                       </div>
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-semibold text-slate-800">Show welcome again</div>
-                        <p className="text-xs text-slate-500">Replay the intro on the next launch.</p>
-                      </div>
-                      <OnOffToggle
-                        value={welcomePreference === "show"}
-                        onChange={handleWelcomeReplayToggle}
-                        onLabel="set.welcomeAgain.on"
-                        offLabel="set.welcomeAgain.off"
-                      />
                     </div>
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -5951,7 +6737,7 @@ function RPSDoodleAppInner(){
               <>
                 <motion.div layout className="text-4xl font-black text-sky-700">Choose Your Mode</motion.div>
                 <div className="mode-grid">
-                  {MODES.map(m => {
+                  {VISIBLE_MODE_OPTIONS.map(m => {
                     const isChallenge = m === "challenge";
                     const disabledBase = (isChallenge && needsTraining) || !hasConsented;
                     const challengeNeedsPredictor =
@@ -5993,10 +6779,10 @@ function RPSDoodleAppInner(){
                       key="fs"
                       className={`fullscreen ${
                         selectedMode === 'challenge'
-                          ? 'bg-red-700'
+                          ? 'bg-[radial-gradient(circle_at_top,_#ff7849,_#240c36)]'
                           : selectedMode === 'practice'
-                          ? 'bg-blue-700'
-                          : 'bg-gray-700'
+                            ? 'bg-[radial-gradient(circle_at_top,_#38c8ff,_#10204a)]'
+                            : 'bg-[radial-gradient(circle_at_top,_#94a3b8,_#131b36)]'
                       }`}
                       layoutId={`card-${selectedMode}`}
                       initial={{ borderRadius: 16 }}
@@ -6065,21 +6851,14 @@ function RPSDoodleAppInner(){
                           : `${modeLabel(activeMatchMode)} Mode`}
                       </span>
                     </div>
-                    {(needsTraining || trainingActive) ? (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between text-sm text-slate-700">
-                          <span>Training the AI on your moves…</span>
-                          <span>{trainingDisplayCount} / {TRAIN_ROUNDS}</span>
-                        </div>
-                        <div className="h-2 bg-slate-200 rounded">
-                          <div className="h-full bg-sky-500 rounded" style={{ width: `${Math.min(100, trainingProgress * 100)}%` }} />
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex w-full flex-col items-center gap-4">
+                    <div className="absolute right-4 top-3 flex items-center gap-2">
+                      <span className={`rounded-full px-3 py-1 text-xs font-semibold ${aiStatusPill.className}`}>
+                        {aiStatusPill.label}
+                      </span>
+                      {!needsTraining && !trainingActive && (
                         <button
                           type="button"
-                          className={`absolute right-4 top-3 rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-700 shadow focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                          className={`rounded-full bg-sky-100 px-3 py-1 text-xs font-semibold text-sky-700 shadow focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
                             hudInsightDisabled ? "cursor-not-allowed opacity-60" : "hover:bg-sky-200"
                           }`}
                           onClick={event => {
@@ -6109,6 +6888,20 @@ function RPSDoodleAppInner(){
                             <span className="sr-only">Enable AI to view insights</span>
                           )}
                         </button>
+                      )}
+                    </div>
+                    {(needsTraining || trainingActive) ? (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-sm text-slate-700">
+                          <span>Training the AI on your moves…</span>
+                          <span>{trainingDisplayCount} / {TRAIN_ROUNDS}</span>
+                        </div>
+                        <div className="h-2 bg-slate-200 rounded">
+                          <div className="h-full bg-sky-500 rounded" style={{ width: `${Math.min(100, trainingProgress * 100)}%` }} />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex w-full flex-col items-center gap-4">
                         <div className="flex w-full flex-col items-center gap-3 text-center">
                           <div className="flex flex-wrap items-center justify-center gap-2 text-sm text-slate-700">
                             <div>Round <strong>{round}</strong> • Best of {bestOf}</div>
@@ -6145,10 +6938,10 @@ function RPSDoodleAppInner(){
                             className={`inline-flex items-center justify-center rounded-full px-5 py-2 text-xs font-bold uppercase tracking-widest ring-2 ring-current shadow-lg ${
                               (phase === "resolve" || phase === "feedback") && outcome
                                 ? outcome === "win"
-                                  ? "bg-emerald-100 text-emerald-700"
+                                  ? "hud-result hud-result-win bg-emerald-500 text-[#ffffff]"
                                   : outcome === "lose"
-                                    ? "bg-rose-100 text-rose-700"
-                                    : "bg-amber-100 text-amber-700"
+                                    ? "hud-result hud-result-lose bg-rose-500 text-[#ffffff]"
+                                    : "hud-result hud-result-tie bg-[#A65613] text-[#ffffff]"
                                 : "bg-slate-200 text-slate-600"
                             }`}
                           >
@@ -6377,7 +7170,12 @@ function RPSDoodleAppInner(){
               aria-modal="true"
               aria-labelledby="match-results-title"
             >
-              <div id="match-results-title" className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold text-white ${bannerColor()}`}>
+              <div
+                id="match-results-title"
+                className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold text-[#ffffff] results-banner ${bannerColor()} ${
+                  resultBanner === "Defeat" ? "results-banner-defeat" : ""
+                }`}
+              >
                 {resultBanner}
               </div>
               {showResultsScoreBadge && (
@@ -6425,7 +7223,7 @@ function RPSDoodleAppInner(){
                 </button>
                 <button
                   type="button"
-                  className="rounded-full bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-red-700 
+                  className="rounded-full bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-red-700
                             focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
                   onClick={() => goToMode()}
                 >
@@ -6441,6 +7239,44 @@ function RPSDoodleAppInner(){
                   View Leaderboard
                 </button>
               </div>
+              <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                <label className="flex flex-col gap-1">
+                  <span className="font-semibold text-slate-800">Change Best Of</span>
+                  <select
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-inner"
+                    value={bestOf}
+                    onChange={event => setBestOf(Number(event.target.value) as BestOf)}
+                    data-dev-label="results.bestOf"
+                  >
+                    {BEST_OF_OPTIONS.map(option => (
+                      <option key={option} value={option}>
+                        Best of {option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="flex flex-col gap-1">
+                  <span className="font-semibold text-slate-800">AI Difficulty</span>
+                  <select
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 shadow-inner disabled:cursor-not-allowed disabled:bg-slate-100"
+                    value={aiMode}
+                    onChange={event => setAiMode(event.target.value as AIMode)}
+                    disabled={difficultyDisabled}
+                    data-dev-label="results.difficulty"
+                  >
+                    {DIFFICULTY_SEQUENCE.map(level => (
+                      <option key={level} value={level}>
+                        {DIFFICULTY_INFO[level].label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className={`text-xs ${difficultyDisabled ? "text-amber-600" : "text-slate-500"}`}>
+                    {difficultyDisabled
+                      ? "Enable the AI predictor to adjust difficulty."
+                      : DIFFICULTY_INFO[aiMode].helper}
+                  </p>
+                </div>
+              </div>
               <div className="pointer-events-none absolute -top-10 right-6">
                 <Confetti />
               </div>
@@ -6454,6 +7290,10 @@ function RPSDoodleAppInner(){
 
       {/* Calibration modal */}
       {/* Calibration modal removed */}
+
+      <AnimatePresence>
+        {aboutOpen && <AboutModal open={aboutOpen} onClose={handleCloseAbout} />}
+      </AnimatePresence>
 
       <AnimatePresence>
         {leaderboardOpen && (
@@ -6488,7 +7328,13 @@ function RPSDoodleAppInner(){
                         ))}
                       </select>
                     </label>
-                    <button onClick={handleCreateProfile} className="px-2 py-1 rounded bg-sky-100 text-sky-700" data-dev-label="stats.profile.new">New profile</button>
+                    <button
+                      onClick={handleCreateProfile}
+                      className="px-2 py-1 rounded app-accent-soft"
+                      data-dev-label="stats.profile.new"
+                    >
+                      New profile
+                    </button>
                   </div>
                 </div>
                 <p className="text-xs text-slate-500">Profiles keep logs, training, and exports separate. Switch profiles to return to previous stats instantly.</p>
@@ -6502,7 +7348,9 @@ function RPSDoodleAppInner(){
                     data-dev-label={`stats.tab.${tab.key}`}
                     data-focus-first={tab.key === statsTabs[0].key ? true : undefined}
                     onClick={() => setStatsTab(tab.key)}
-                    className={"px-3 py-1.5 rounded-full text-sm " + (statsTab === tab.key ? "bg-sky-600 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200")}
+                    className={`px-3 py-1.5 rounded-full text-sm transition-colors ${
+                      statsTab === tab.key ? 'app-accent-pill' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    }`}
                   >
                     {tab.label}
                   </button>
@@ -6512,22 +7360,43 @@ function RPSDoodleAppInner(){
                 {statsTab === "overview" && (
                   <div className="space-y-4">
                     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                      <div className="rounded-2xl bg-sky-50/80 p-4 shadow-sm">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Matches</div>
-                        <div className="mt-2 text-3xl font-bold text-slate-900">{totalMatches}</div>
-                        <p className="mt-1 text-xs text-slate-500">How many games you played.</p>
+                      <div
+                        className="rounded-2xl border p-4 shadow-sm"
+                        style={{ backgroundColor: "var(--app-accent)", borderColor: "var(--app-accent-strong)", color: "#000000" }}
+                      >
+                        <div className="text-xs font-semibold uppercase tracking-wide text-black">
+                          Matches
+                        </div>
+                        <div className="mt-2 text-3xl font-bold text-black">{totalMatches}</div>
+                        <p className="mt-1 text-xs text-black">
+                          How many games you played.
+                        </p>
                       </div>
-                      <div className="rounded-2xl bg-sky-50/80 p-4 shadow-sm">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Rounds</div>
-                        <div className="mt-2 text-3xl font-bold text-slate-900">{totalRounds}</div>
-                        <p className="mt-1 text-xs text-slate-500">Total turns logged.</p>
+                      <div
+                        className="rounded-2xl border p-4 shadow-sm"
+                        style={{ backgroundColor: "var(--app-accent)", borderColor: "var(--app-accent-strong)", color: "#000000" }}
+                      >
+                        <div className="text-xs font-semibold uppercase tracking-wide text-black">
+                          Rounds
+                        </div>
+                        <div className="mt-2 text-3xl font-bold text-black">{totalRounds}</div>
+                        <p className="mt-1 text-xs text-black">
+                          Total turns logged.
+                        </p>
                       </div>
-                      <div className="rounded-2xl bg-sky-50/80 p-4 shadow-sm">
-                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Win rate</div>
-                        <div className="mt-2 text-3xl font-bold text-slate-900">
+                      <div
+                        className="rounded-2xl border p-4 shadow-sm"
+                        style={{ backgroundColor: "var(--app-accent)", borderColor: "var(--app-accent-strong)", color: "#000000" }}
+                      >
+                        <div className="text-xs font-semibold uppercase tracking-wide text-black">
+                          Win rate
+                        </div>
+                        <div className="mt-2 text-3xl font-bold text-black">
                           {totalMatches ? `${Math.round(overallWinRate * 100)}%` : "—"}
                         </div>
-                        <p className="mt-1 text-xs text-slate-500">Wins per match.</p>
+                        <p className="mt-1 text-xs text-black">
+                          Wins per match.
+                        </p>
                       </div>
                       <div className="rounded-2xl border border-sky-100 bg-white p-4 shadow-sm">
                         <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Favorite move</div>
@@ -6557,7 +7426,7 @@ function RPSDoodleAppInner(){
                             <svg viewBox="0 0 200 50" className="h-full w-full" aria-hidden="true">
                               <polyline
                                 fill="none"
-                                stroke="#0ea5e9"
+                                stroke="var(--app-accent-strong)"
                                 strokeWidth="3"
                                 strokeLinecap="round"
                                 points={confidenceSparkPoints}
@@ -6759,7 +7628,7 @@ function RPSDoodleAppInner(){
                       <button
                         type="button"
                         onClick={() => setRoundsViewMode(prev => (prev === "card" ? "table" : "card"))}
-                        className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+                        className="rounded-full border app-accent-border app-accent-soft px-3 py-1.5 text-sm font-semibold transition"
                       >
                         {isCardView ? "Table view (advanced)" : "Card view"}
                       </button>
@@ -6832,7 +7701,7 @@ function RPSDoodleAppInner(){
                                     {chips.map(chip => (
                                       <span
                                         key={chip}
-                                        className="rounded-full bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700"
+                                        className="rounded-full app-accent-soft px-2 py-1 text-xs font-medium"
                                       >
                                         {chip}
                                       </span>
@@ -6853,8 +7722,10 @@ function RPSDoodleAppInner(){
                                       >
                                         <div className="absolute inset-0 flex items-end justify-center rounded-t-lg bg-slate-100">
                                           <div
-                                            className="w-7 rounded-t-lg bg-sky-400"
-                                            style={{ height: `${Math.min(100, Math.max(4, Math.round(normalized[move])))}%` }}
+                                            className="w-7 rounded-t-lg app-accent-fill"
+                                            style={{
+                                              height: `${Math.min(100, Math.max(4, Math.round(normalized[move])))}%`,
+                                            }}
                                           />
                                         </div>
                                         <div className="relative flex flex-col items-center justify-end gap-1">
@@ -7138,7 +8009,7 @@ function RPSDoodleAppInner(){
                     return;
                   }
                   if (result.action === "create") {
-                    setToastMessage("New player starts a fresh training session (10 rounds).");
+                    setToastMessage(`New player starts a fresh training session (${TRAIN_ROUNDS} rounds).`);
                     setLive("New player created. Training required before challenge modes unlock.");
                   } else {
                     setLive("Player demographics updated.");
@@ -7257,6 +8128,8 @@ function RPSDoodleAppInner(){
           </AnimatePresence>
         </div>
       )}
+        </div>
+      </div>
       {DEV_MODE_ENABLED && (
         <>
           <div
@@ -7274,7 +8147,7 @@ function RPSDoodleAppInner(){
           />
         </>
       )}
-    </div>
+    </>
   );
 }
 
@@ -7288,8 +8161,6 @@ interface PlayerSetupFormProps {
   origin?: "welcome" | "settings" | null;
   onBack?: () => void;
 }
-
-const AGE_OPTIONS = Array.from({ length: 96 }, (_, index) => 5 + index);
 
 function extractNameParts(fullName: string){
   const trimmed = fullName.trim();
@@ -7314,7 +8185,6 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
   const [firstName, setFirstName] = useState("");
   const [lastInitial, setLastInitial] = useState("");
   const [grade, setGrade] = useState<Grade | "">(player?.grade ?? "");
-  const [age, setAge] = useState<string>(player?.age != null ? String(player.age) : "");
   const [school, setSchool] = useState(player?.school ?? "");
   const [priorExperience, setPriorExperience] = useState(player?.priorExperience ?? "");
 
@@ -7323,12 +8193,11 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
     setFirstName(parts.firstName);
     setLastInitial(parts.lastInitial);
     setGrade(player?.grade ?? "");
-    setAge(player?.age != null ? String(player.age) : "");
     setSchool(player?.school ?? "");
     setPriorExperience(player?.priorExperience ?? "");
   }, [player, mode]);
 
-  const saveDisabled = !firstName.trim() || !lastInitial.trim() || !grade || !age;
+  const saveDisabled = !firstName.trim() || !lastInitial.trim() || !grade;
   const title = mode === "edit" ? "Edit player demographics" : "Create new player";
   const showReviewNotice = mode === "edit" && player?.needsReview;
   const showBackButton = origin === "welcome" && mode === "create";
@@ -7344,9 +8213,7 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
     event.preventDefault();
     const trimmedFirst = firstName.trim();
     const trimmedLast = lastInitial.trim();
-    if (!trimmedFirst || !trimmedLast || !grade || !age) return;
-    const parsedAge = Number.parseInt(age, 10);
-    if (!Number.isFinite(parsedAge)) return;
+    if (!trimmedFirst || !trimmedLast || !grade) return;
     const schoolValue = school.trim();
     const priorValue = priorExperience.trim();
     const formattedLastInitial = formatLastInitial(trimmedLast);
@@ -7359,7 +8226,6 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
     const payload = {
       playerName: combinedName,
       grade: grade as Grade,
-      age: parsedAge,
       school: schoolValue ? schoolValue : undefined,
       priorExperience: priorValue ? priorValue : undefined,
       consent,
@@ -7394,7 +8260,7 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
         <div className="space-y-3 pb-5">
           {showReviewNotice && (
             <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-              Please confirm the player name, grade, and age to continue.
+              Please confirm the player name and grade to continue.
             </div>
           )}
           {mode === "create" && (
@@ -7437,24 +8303,6 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
                 Select grade
               </option>
               {GRADE_OPTIONS.map(option => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            Age
-            <select
-              value={age}
-              onChange={e => setAge(e.target.value)}
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
-              required
-            >
-              <option value="" disabled>
-                Select age
-              </option>
-              {AGE_OPTIONS.map(option => (
                 <option key={option} value={option}>
                   {option}
                 </option>
