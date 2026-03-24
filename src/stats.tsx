@@ -350,6 +350,40 @@ function getLineageIndex(baseName: string): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
+export function getOrderedStatsProfilesForPlayer(profiles: StatsProfile[], playerId: string): StatsProfile[] {
+  const filtered = profiles.filter(profile => profile.playerId === playerId);
+  const normalized = filtered.map(profile => {
+    const baseName = normalizeBaseName(profile.baseName ?? profile.name);
+    const rawVersion = profile.version;
+    const version =
+      typeof rawVersion === "number" && Number.isFinite(rawVersion) ? Math.max(1, Math.floor(rawVersion)) : 1;
+    return {
+      ...profile,
+      baseName,
+      version,
+      name: makeProfileDisplayName(baseName, version),
+    } satisfies StatsProfile;
+  });
+
+  normalized.sort((a, b) => {
+    const indexDiff = getLineageIndex(a.baseName) - getLineageIndex(b.baseName);
+    if (indexDiff !== 0) return indexDiff;
+    const versionDiff = (b.version ?? 1) - (a.version ?? 1);
+    if (versionDiff !== 0) return versionDiff;
+    if (getLineageIndex(a.baseName) === Number.MAX_SAFE_INTEGER) {
+      const baseCompare = a.baseName.localeCompare(b.baseName);
+      if (baseCompare !== 0) return baseCompare;
+    }
+    return (a.createdAt || "").localeCompare(b.createdAt || "");
+  });
+
+  return normalized;
+}
+
+export function getActiveStatsProfileForPlayer(profiles: StatsProfile[], playerId: string): StatsProfile | null {
+  return getOrderedStatsProfilesForPlayer(profiles, playerId)[0] ?? null;
+}
+
 function loadFromStorage<T>(key: string): T[] {
   if (typeof window === "undefined") return [];
   try {

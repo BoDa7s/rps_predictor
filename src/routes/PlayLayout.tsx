@@ -2,7 +2,6 @@ import React from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import botHappy96 from "../assets/mascot/bot-happy-96.svg";
 import { playNavItems } from "../playNavigation";
-import PlayProviders from "./PlayProviders";
 import { usePlayTheme } from "./PlayThemeProvider";
 
 const playPageMeta: Record<string, { title: string; description: string }> = {
@@ -120,10 +119,4 @@ function PlayLayoutShell() {
   );
 }
 
-export default function PlayLayout() {
-  return (
-    <PlayProviders>
-      <PlayLayoutShell />
-    </PlayProviders>
-  );
-}
+export default PlayLayoutShell;

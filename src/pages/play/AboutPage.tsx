@@ -2,6 +2,7 @@ import React, { useMemo } from "react";
 import PlaySectionLayout, { type PlaySection } from "../../components/play/PlaySectionLayout";
 
 const sectionCardClass = "play-shell-card rounded-2xl p-5";
+const sectionBodyClass = "text-sm leading-7 text-[color:var(--app-text-secondary)]";
 
 const aboutSections = {
   whatItIs: {
@@ -40,12 +41,12 @@ export default function AboutPage() {
         content: (
           <div className="grid gap-4 lg:grid-cols-[1.15fr,0.85fr]">
             <article className={sectionCardClass}>
-              <p className="text-sm leading-7 text-slate-300">{aboutSections.whatItIs.body}</p>
+              <p className={sectionBodyClass}>{aboutSections.whatItIs.body}</p>
             </article>
-            <article className="rounded-2xl border border-cyan-300/20 bg-cyan-400/10 p-5 text-cyan-50">
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-cyan-100/75">Version</p>
-              <div className="mt-3 text-4xl font-semibold tracking-[-0.05em]">v5.3</div>
-              <p className="mt-3 text-sm leading-7 text-cyan-50/80">
+            <article className="play-shell-accent-card rounded-2xl p-5">
+              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[color:var(--app-accent-strong)]">Version</p>
+              <div className="mt-3 text-4xl font-semibold tracking-[-0.05em] text-[color:var(--app-text-strong)]">v5.3</div>
+              <p className="mt-3 text-sm leading-7 text-[color:var(--app-text-primary)]">
                 Launch build focused on accessible gameplay, explainable AI feedback, and routed tools for stats,
                 settings, help, and leaderboard review.
               </p>
@@ -61,11 +62,11 @@ export default function AboutPage() {
         content: (
           <div className="grid gap-4 lg:grid-cols-2">
             <article className={sectionCardClass}>
-              <p className="text-sm leading-7 text-slate-300">{aboutSections.whyWeBuiltIt.body}</p>
+              <p className={sectionBodyClass}>{aboutSections.whyWeBuiltIt.body}</p>
             </article>
             <article className={sectionCardClass}>
-              <h3 className="text-lg font-semibold text-white">Alignment</h3>
-              <p className="mt-3 text-sm leading-7 text-slate-300">
+              <h3 className="text-lg font-semibold text-[color:var(--app-text-strong)]">Alignment</h3>
+              <p className={`mt-3 ${sectionBodyClass}`}>
                 Inspired by the AI4K12 Five Big Ideas, especially Learning, Representation and Reasoning, and
                 Societal Impact through transparency and fairness.
               </p>
@@ -81,17 +82,20 @@ export default function AboutPage() {
         content: (
           <div className="grid gap-4 lg:grid-cols-[1fr,0.9fr]">
             <article className={sectionCardClass}>
-              <ul className="space-y-3 text-sm leading-7 text-slate-300">
+              <ul className={`space-y-3 ${sectionBodyClass}`}>
                 {aboutSections.howItWorks.map(item => (
-                  <li key={item} className="rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-4">
+                  <li
+                    key={item}
+                    className="rounded-2xl border border-[color:var(--app-border)] bg-[color:var(--app-surface-subtle)] px-4 py-4"
+                  >
                     {item}
                   </li>
                 ))}
               </ul>
             </article>
             <article className={sectionCardClass}>
-              <h3 className="text-lg font-semibold text-white">Built with</h3>
-              <p className="mt-3 text-sm leading-7 text-slate-300">
+              <h3 className="text-lg font-semibold text-[color:var(--app-text-strong)]">Built with</h3>
+              <p className={`mt-3 ${sectionBodyClass}`}>
                 React, TypeScript, Vite, and Framer Motion with accessibility-first design.
               </p>
             </article>
@@ -107,7 +111,7 @@ export default function AboutPage() {
           <div className="grid gap-3">
             {aboutSections.team.map(item => (
               <article key={item} className={sectionCardClass}>
-                <p className="text-sm leading-7 text-slate-300">{item}</p>
+                <p className={sectionBodyClass}>{item}</p>
               </article>
             ))}
           </div>
@@ -122,7 +126,7 @@ export default function AboutPage() {
           <div className="grid gap-3">
             {aboutSections.privacy.map(item => (
               <article key={item} className={sectionCardClass}>
-                <p className="text-sm leading-7 text-slate-300">{item}</p>
+                <p className={sectionBodyClass}>{item}</p>
               </article>
             ))}
           </div>
@@ -139,10 +143,10 @@ export default function AboutPage() {
               href="https://github.com/BoDa7s/rps_predictor"
               target="_blank"
               rel="noreferrer"
-              className={`${sectionCardClass} transition hover:border-cyan-300/40 hover:bg-white/[0.06]`}
+              className={`${sectionCardClass} transition hover:border-[color:var(--app-border-strong)] hover:bg-[color:var(--app-surface-hover)]`}
             >
-              <div className="text-lg font-semibold text-white">GitHub repository</div>
-              <p className="mt-3 text-sm leading-7 text-slate-300">
+              <div className="text-lg font-semibold text-[color:var(--app-text-strong)]">GitHub repository</div>
+              <p className={`mt-3 ${sectionBodyClass}`}>
                 Source code, build configuration, routed play shell, and gameplay implementation.
               </p>
             </a>
@@ -150,10 +154,10 @@ export default function AboutPage() {
               href="https://github.com/BoDa7s/rps_predictor/issues"
               target="_blank"
               rel="noreferrer"
-              className={`${sectionCardClass} transition hover:border-cyan-300/40 hover:bg-white/[0.06]`}
+              className={`${sectionCardClass} transition hover:border-[color:var(--app-border-strong)] hover:bg-[color:var(--app-surface-hover)]`}
             >
-              <div className="text-lg font-semibold text-white">Issue tracker and feedback</div>
-              <p className="mt-3 text-sm leading-7 text-slate-300">
+              <div className="text-lg font-semibold text-[color:var(--app-text-strong)]">Issue tracker and feedback</div>
+              <p className={`mt-3 ${sectionBodyClass}`}>
                 Report bugs, suggest improvements, or send product and classroom feedback.
               </p>
             </a>

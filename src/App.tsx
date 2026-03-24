@@ -19,7 +19,7 @@ import {
   DEFAULT_THEME_COLOR_PREFERENCES,
   cloneProfilePreferences,
 } from "./stats";
-import { usePlayers, Grade, PlayerProfile, CONSENT_TEXT_VERSION, GRADE_OPTIONS } from "./players";
+import { usePlayers } from "./players";
 import { DEV_MODE_ENABLED } from "./devMode";
 import { DeveloperConsole } from "./DeveloperConsole";
 import { devInstrumentation } from "./devInstrumentation";
@@ -65,6 +65,12 @@ import {
 } from "./colorUtils";
 import { type PlaySurface } from "./playNavigation";
 import { type HelpQuestion } from "./playFaq";
+import PlayerSetupForm from "./components/play/PlayerSetupForm";
+import {
+  persistWelcomePreference,
+  TRAINING_ROUNDS_REQUIRED,
+  type PlayLaunchIntent,
+} from "./playEntry";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -437,16 +443,7 @@ function getInitialWelcomePreference(): WelcomePreference {
 }
 
 function getInitialScene(): Scene {
-  if (typeof window === "undefined") return "BOOT";
-  try {
-    const stored = window.sessionStorage.getItem(SCENE_STORAGE_KEY);
-    if (stored === "WELCOME" || stored === "MODE" || stored === "MATCH" || stored === "RESULTS") {
-      return stored;
-    }
-  } catch {
-    /* noop */
-  }
-  return "BOOT";
+  return "MODE";
 }
 
 // ---- Core game logic (pure) ----
@@ -1651,9 +1648,10 @@ function OnOffToggle({
 // Main component
 interface RPSDoodleAppProps {
   embeddedInPlayLayout?: boolean;
+  launchIntent?: PlayLaunchIntent | null;
 }
 
-function RPSDoodleAppInner({ embeddedInPlayLayout = false }: RPSDoodleAppProps){
+function RPSDoodleAppInner({ embeddedInPlayLayout = false, launchIntent = null }: RPSDoodleAppProps){
   const navigate = useNavigate();
   const {
     rounds: profileRounds,
@@ -2134,6 +2132,13 @@ function RPSDoodleAppInner({ embeddedInPlayLayout = false }: RPSDoodleAppProps){
     },
     [navigate],
   );
+  useEffect(() => {
+    if (scene === "WELCOME") {
+      navigate("/play/welcome", { replace: true });
+    } else if (scene === "BOOT") {
+      navigate("/play/boot", { replace: true });
+    }
+  }, [navigate, scene]);
   const [robotHovered, setRobotHovered] = useState(false);
   const [robotFocused, setRobotFocused] = useState(false);
   const [robotResultReaction, setRobotResultReaction] = useState<RobotReaction | null>(null);
@@ -2941,7 +2946,7 @@ function RPSDoodleAppInner({ embeddedInPlayLayout = false }: RPSDoodleAppProps){
   const [predictorMode, setPredictorMode] = useState<boolean>(currentProfile?.predictorDefault ?? false);
   const [aiMode, setAiMode] = useState<AIMode>("normal");
   const [difficultyHint, setDifficultyHint] = useState<string>(DIFFICULTY_INFO["normal"].helper);
-  const TRAIN_ROUNDS = 5;
+  const TRAIN_ROUNDS = TRAINING_ROUNDS_REQUIRED;
   const trainingCount = currentProfile?.trainingCount ?? 0;
   const isTrained = currentProfile?.trained ?? false;
   const previousTrainingCountRef = useRef(trainingCount);
@@ -2975,6 +2980,7 @@ function RPSDoodleAppInner({ embeddedInPlayLayout = false }: RPSDoodleAppProps){
   const trainingProgress = Math.min(trainingDisplayCount / TRAIN_ROUNDS, 1);
   const showTrainingCompleteBadge = !needsTraining && trainingCount >= TRAIN_ROUNDS;
   const postTrainingLockActive = postTrainingCtaOpen;
+  const launchIntentHandledRef = useRef<PlayLaunchIntent | null>(null);
 
   const acknowledgePostTrainingCta = useCallback(() => {
     if (!postTrainingCtaOpen) return false;
@@ -3668,6 +3674,35 @@ function RPSDoodleAppInner({ embeddedInPlayLayout = false }: RPSDoodleAppProps){
     if (!needsTraining && !trainingActive) return;
     if (aiMode !== "fair") setAiMode("fair");
   }, [needsTraining, trainingActive, aiMode]);
+
+  useEffect(() => {
+    if (!launchIntent) {
+      launchIntentHandledRef.current = null;
+      return;
+    }
+    if (launchIntentHandledRef.current === launchIntent) {
+      return;
+    }
+    if (launchIntent !== "training") {
+      launchIntentHandledRef.current = launchIntent;
+      return;
+    }
+    if (!hasConsented || !currentProfile) {
+      return;
+    }
+
+    launchIntentHandledRef.current = launchIntent;
+
+    if (needsTraining) {
+      if (!trainingActive) {
+        setTrainingActive(true);
+      }
+      startMatch("practice", { silent: true });
+      setLive("Training ready. Starting your warm-up rounds now.");
+    }
+
+    navigate("/play", { replace: true });
+  }, [launchIntent, hasConsented, currentProfile, navigate, needsTraining, trainingActive]);
 
   useEffect(() => {
     if (needsTraining || trainingActive) {
@@ -4367,12 +4402,10 @@ function RPSDoodleAppInner({ embeddedInPlayLayout = false }: RPSDoodleAppProps){
           performCsvExport();
         }
         handleCloseSettings(false);
-        openWelcome({
-          announce: "Logging out. Boot sequence starting for the welcome intro.",
-          resetPlayer: true,
-          bootFirst: true,
-          origin: "launch",
-        });
+        setCurrentPlayer(null);
+        persistWelcomePreference("show");
+        navigate("/play/boot", { replace: true });
+        setLive("Logging out. Boot sequence starting for the welcome intro.");
       },
     });
     setLive("Log out requested. Confirm via toast to log out and reboot.");
@@ -4380,8 +4413,9 @@ function RPSDoodleAppInner({ embeddedInPlayLayout = false }: RPSDoodleAppProps){
     canExportData,
     handleCloseSettings,
     logoutAutoExportRef,
-    openWelcome,
+    navigate,
     performCsvExport,
+    setCurrentPlayer,
     setLive,
     setToastConfirm,
     setToastMessage,
@@ -4816,6 +4850,16 @@ function RPSDoodleAppInner({ embeddedInPlayLayout = false }: RPSDoodleAppProps){
     setSelectedMode('practice');
     resetMatch();
     setTrainingActive(true);
+  }
+
+  function openTrainingFromHome() {
+    if (!hasConsented || !currentProfile || !needsTraining) return;
+    if (postTrainingCtaOpen) {
+      acknowledgePostTrainingCta();
+    }
+    setTrainingActive(true);
+    startMatch("practice");
+    setLive(`Training resumed. Round ${Math.min(trainingCount + 1, TRAIN_ROUNDS)} of ${TRAIN_ROUNDS}.`);
   }
 
   function onSelect(m: Move){
@@ -6510,98 +6554,8 @@ function RPSDoodleAppInner({ embeddedInPlayLayout = false }: RPSDoodleAppProps){
       </AnimatePresence>
 
       <AnimatePresence mode="wait">
-        {scene === "WELCOME" && (
-          <motion.main
-            key="welcome"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.3, ease: [0.22, 0.61, 0.36, 1] }}
-            className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-sky-100 px-6 py-12 text-slate-800"
-          >
-            <div className="mx-auto flex w-[min(560px,100%)] max-w-full flex-col gap-8 rounded-3xl bg-white/90 p-8 shadow-2xl ring-1 ring-slate-200">
-              <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-400">
-                <span>Intro</span>
-                <span>
-                  {welcomeSlide + 1} / {welcomeSlideCount}
-                </span>
-              </div>
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200" role="progressbar" aria-valuemin={1} aria-valuemax={welcomeSlideCount} aria-valuenow={welcomeSlide + 1}>
-                <motion.div
-                  className="h-full rounded-full bg-sky-500"
-                  initial={false}
-                  animate={{ width: `${welcomeProgress}%` }}
-                  transition={{ duration: 0.25 }}
-                />
-              </div>
-              <AnimatePresence mode="wait">
-                <motion.div
-                  key={welcomeSlide}
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -12 }}
-                  transition={{ duration: 0.25, ease: [0.22, 0.61, 0.36, 1] }}
-                  className="space-y-4"
-                >
-                  <h2 className="text-3xl font-bold text-slate-900">{welcomeSlides[welcomeSlide]?.title}</h2>
-                  <p className="text-base leading-relaxed text-slate-700">{welcomeSlides[welcomeSlide]?.body}</p>
-                </motion.div>
-              </AnimatePresence>
-              {isWelcomeLastSlide ? (
-                <div className="space-y-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <button
-                      type="button"
-                      onClick={handleWelcomePrevious}
-                      className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100"
-                    >
-                      Back
-                    </button>
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <button
-                        type="button"
-                        className="rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-700"
-                        onClick={() => handleWelcomeAction("setup")}
-                      >
-                        Get started
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        onClick={() => handleWelcomeAction("restore")}
-                        disabled={!hasLocalProfiles}
-                      >
-                        Already played? Load my data
-                      </button>
-                    </div>
-                  </div>
-                  {!hasLocalProfiles && (
-                    <p className="text-xs text-slate-500">No saved profiles detected on this device.</p>
-                  )}
-                </div>
-              ) : (
-                <div className="flex items-center justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={handleWelcomePrevious}
-                    disabled={welcomeSlide === 0}
-                    className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    Back
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleWelcomeNext}
-                    className="rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-sky-700"
-                  >
-                    Next
-                  </button>
-                </div>
-              )}
-            </div>
-          </motion.main>
-        )}
-        {scene === "BOOT" && (
+        {/* Startup onboarding now lives on routed pages under /play/welcome and /play/boot. */}
+        {false && scene === "BOOT" && (
           <motion.div
             key="boot"
             initial={{ opacity: 0 }}
@@ -6741,6 +6695,39 @@ function RPSDoodleAppInner({ embeddedInPlayLayout = false }: RPSDoodleAppProps){
               <>
                 <motion.div layout className="text-4xl font-black text-sky-700">Choose Your Mode</motion.div>
                 <div className="mode-grid">
+                  {needsTraining && (
+                    <motion.button
+                      type="button"
+                      className="mode-card practice play-shell-card relative overflow-hidden rounded-2xl px-5 py-6 text-left"
+                      data-dev-label="mode.training.card"
+                      whileTap={{ scale: 0.98 }}
+                      whileHover={{ y: -4 }}
+                      onClick={openTrainingFromHome}
+                      aria-label="Continue training"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <div className="text-lg font-bold text-[color:var(--app-text-strong)]">Continue Training</div>
+                          <div className="mt-1 text-sm text-[color:var(--app-text-secondary)]">
+                            Resume your warm-up rounds so the AI can finish learning your move patterns before Challenge unlocks.
+                          </div>
+                        </div>
+                        <span className="inline-flex items-center rounded-full border border-[color:var(--app-border-strong)] bg-[color:var(--app-surface-input)] px-3 py-1 text-xs font-semibold uppercase tracking-wide text-[color:var(--app-accent-strong)]">
+                          {trainingCount}/{TRAIN_ROUNDS}
+                        </span>
+                      </div>
+                      <div className="mt-4 h-2 overflow-hidden rounded-full bg-[color:var(--app-surface-subtle)]">
+                        <div
+                          className="h-full rounded-full bg-[color:var(--app-accent)] transition-[width] duration-300"
+                          style={{ width: `${Math.min(100, (trainingCount / TRAIN_ROUNDS) * 100)}%` }}
+                        />
+                      </div>
+                      <div className="mt-4 inline-flex items-center rounded-full bg-[color:var(--app-accent)] px-4 py-2 text-sm font-semibold text-[color:var(--app-on-accent)] shadow">
+                        {trainingCount > 0 ? "Resume training" : "Start training"}
+                      </div>
+                      <span className="ink-pop" />
+                    </motion.button>
+                  )}
                   {VISIBLE_MODE_OPTIONS.map(m => {
                     const isChallenge = m === "challenge";
                     const disabledBase = (isChallenge && needsTraining) || !hasConsented;
@@ -7994,25 +7981,14 @@ function RPSDoodleAppInner({ embeddedInPlayLayout = false }: RPSDoodleAppProps){
                   const origin = playerModalOrigin;
                   setPlayerModalMode("hidden");
                   setPlayerModalOrigin(null);
-                  if (origin === "welcome") {
-                    finishWelcomeFlow("setup");
-                  } else if (origin === "settings" && result.action === "create") {
+                  if (origin === "settings" && result.action === "create") {
                     setForceTrainingPrompt(true);
-                    openWelcome({
-                      bootFirst: true,
-                      origin: "settings",
-                      announce: "New player saved. Booting into training setup.",
-                    });
-                    setBootNext("AUTO");
-                    setWelcomeOrigin(null);
-                    setWelcomeSeen(true);
-                    setToastMessage("New player saved. Booting up to start training.");
-                    setLive("New player saved. Boot sequence initiated to start training.");
-                    return;
-                  }
-                  if (result.action === "create") {
-                    setToastMessage(`New player starts a fresh training session (${TRAIN_ROUNDS} rounds).`);
-                    setLive("New player created. Training required before challenge modes unlock.");
+                    setScene("MODE");
+                    setToastMessage("New player saved. Return to Play to begin training.");
+                    setLive("New player saved. Training is ready from the play workspace.");
+                  } else if (result.action === "create") {
+                    setToastMessage("New player created.");
+                    setLive("New player created.");
                   } else {
                     setLive("Player demographics updated.");
                   }
@@ -8020,7 +7996,6 @@ function RPSDoodleAppInner({ embeddedInPlayLayout = false }: RPSDoodleAppProps){
                 createPlayer={createPlayer}
                 updatePlayer={updatePlayer}
                 origin={playerModalOrigin}
-                onBack={playerModalOrigin === "welcome" ? handlePlayerModalClose : undefined}
               />
             </motion.div>
           </motion.div>
@@ -8150,229 +8125,6 @@ function RPSDoodleAppInner({ embeddedInPlayLayout = false }: RPSDoodleAppProps){
         </>
       )}
     </>
-  );
-}
-
-interface PlayerSetupFormProps {
-  mode: "create" | "edit";
-  player: PlayerProfile | null;
-  onClose: () => void;
-  onSaved: (result: { action: "create" | "update"; player: PlayerProfile }) => void;
-  createPlayer: (input: Omit<PlayerProfile, "id">) => PlayerProfile;
-  updatePlayer: (id: string, patch: Partial<Omit<PlayerProfile, "id">>) => void;
-  origin?: "welcome" | "settings" | null;
-  onBack?: () => void;
-}
-
-function extractNameParts(fullName: string){
-  const trimmed = fullName.trim();
-  if (!trimmed) return { firstName: "", lastInitial: "" };
-  const segments = trimmed.split(/\s+/);
-  if (segments.length === 1) {
-    return { firstName: segments[0], lastInitial: "" };
-  }
-  const lastSegment = segments[segments.length - 1].replace(/[^A-Za-z]/g, "");
-  const first = segments.slice(0, -1).join(" ");
-  const initial = lastSegment ? lastSegment[0].toUpperCase() : "";
-  return { firstName: first, lastInitial: initial };
-}
-
-function formatLastInitial(value: string){
-  const match = value.trim().match(/[A-Za-z]/);
-  const upper = match ? match[0].toUpperCase() : "";
-  return upper ? `${upper}.` : "";
-}
-
-function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updatePlayer, origin, onBack }: PlayerSetupFormProps){
-  const [firstName, setFirstName] = useState("");
-  const [lastInitial, setLastInitial] = useState("");
-  const [grade, setGrade] = useState<Grade | "">(player?.grade ?? "");
-  const [school, setSchool] = useState(player?.school ?? "");
-  const [priorExperience, setPriorExperience] = useState(player?.priorExperience ?? "");
-
-  useEffect(() => {
-    const parts = extractNameParts(player?.playerName ?? "");
-    setFirstName(parts.firstName);
-    setLastInitial(parts.lastInitial);
-    setGrade(player?.grade ?? "");
-    setSchool(player?.school ?? "");
-    setPriorExperience(player?.priorExperience ?? "");
-  }, [player, mode]);
-
-  const saveDisabled = !firstName.trim() || !lastInitial.trim() || !grade;
-  const title = mode === "edit" ? "Edit player demographics" : "Create new player";
-  const showReviewNotice = mode === "edit" && player?.needsReview;
-  const showBackButton = origin === "welcome" && mode === "create";
-  const handleBackClick = () => {
-    if (onBack) {
-      onBack();
-    } else {
-      onClose();
-    }
-  };
-
-  const handleSubmit = (event: React.FormEvent) => {
-    event.preventDefault();
-    const trimmedFirst = firstName.trim();
-    const trimmedLast = lastInitial.trim();
-    if (!trimmedFirst || !trimmedLast || !grade) return;
-    const schoolValue = school.trim();
-    const priorValue = priorExperience.trim();
-    const formattedLastInitial = formatLastInitial(trimmedLast);
-    const combinedName = formattedLastInitial ? `${trimmedFirst} ${formattedLastInitial}` : trimmedFirst;
-    const consent = {
-      agreed: true,
-      timestamp: new Date().toISOString(),
-      consentTextVersion: CONSENT_TEXT_VERSION,
-    };
-    const payload = {
-      playerName: combinedName,
-      grade: grade as Grade,
-      school: schoolValue ? schoolValue : undefined,
-      priorExperience: priorValue ? priorValue : undefined,
-      consent,
-      needsReview: false,
-    } satisfies Omit<PlayerProfile, "id">;
-    if (mode === "edit" && player) {
-      updatePlayer(player.id, payload);
-      onSaved({ action: "update", player: { ...player, ...payload } });
-    } else {
-      const created = createPlayer(payload);
-      onSaved({ action: "create", player: created });
-    }
-  };
-
-  return (
-    <form
-      onSubmit={handleSubmit}
-      className="flex flex-1 min-h-0 flex-col"
-      aria-label="Player setup form"
-    >
-      <div className="flex items-center justify-between px-5 pt-5">
-        <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
-        <button
-          type="button"
-          onClick={showBackButton ? handleBackClick : onClose}
-          className="text-sm text-slate-500 hover:text-slate-700"
-        >
-          {showBackButton ? "Back" : "Close"}
-        </button>
-      </div>
-      <div className="mt-4 flex-1 min-h-0 overflow-y-auto px-5">
-        <div className="space-y-3 pb-5">
-          {showReviewNotice && (
-            <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-              Please confirm the player name and grade to continue.
-            </div>
-          )}
-          {mode === "create" && (
-            <div className="rounded border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-700">
-              A new player will begin a fresh training session after saving.
-            </div>
-          )}
-          <label className="text-sm font-medium text-slate-700">
-            First name
-            <input
-              type="text"
-              value={firstName}
-              onChange={e => setFirstName(e.target.value)}
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
-              placeholder="e.g. Alex"
-              required
-            />
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            Last name initial
-            <input
-              type="text"
-              value={lastInitial}
-              onChange={e => setLastInitial(e.target.value)}
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
-              placeholder="e.g. W"
-              maxLength={3}
-              required
-            />
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            Grade
-            <select
-              value={grade}
-              onChange={e => setGrade(e.target.value as Grade | "")}
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
-              required
-            >
-              <option value="" disabled>
-                Select grade
-              </option>
-              {GRADE_OPTIONS.map(option => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            School (optional)
-            <input
-              type="text"
-              value={school}
-              onChange={e => setSchool(e.target.value)}
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
-              placeholder="e.g. Roosevelt Elementary"
-            />
-          </label>
-          <label className="text-sm font-medium text-slate-700">
-            Prior experience (optional)
-            <textarea
-              value={priorExperience}
-              onChange={e => setPriorExperience(e.target.value)}
-              rows={3}
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 shadow-inner"
-              placeholder="Tell us, have you played Rock-Paper-Scissors before, or do you know some AI basics?"
-            />
-          </label>
-        </div>
-      </div>
-      <div className="border-t border-slate-200 bg-white px-5 py-4">
-        <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-          {showBackButton ? (
-            <>
-              <button
-                type="button"
-                onClick={handleBackClick}
-                className="px-3 py-1.5 rounded bg-slate-100 text-slate-700 hover:bg-slate-200"
-              >
-                Back
-              </button>
-              <button
-                type="submit"
-                disabled={saveDisabled}
-                className={`px-3 py-1.5 rounded text-white ${saveDisabled ? 'bg-slate-300 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-700 shadow'}`}
-              >
-                Save profile
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-3 py-1.5 rounded bg-slate-100 text-slate-700 hover:bg-slate-200"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={saveDisabled}
-                className={`px-3 py-1.5 rounded text-white ${saveDisabled ? 'bg-slate-300 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-700 shadow'}`}
-              >
-                Save profile
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    </form>
   );
 }
 
