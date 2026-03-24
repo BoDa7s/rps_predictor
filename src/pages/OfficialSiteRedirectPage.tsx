@@ -63,7 +63,7 @@ export default function OfficialSiteRedirectPage({
                     Continue to Official Site
                   </a>
                   <p className="text-sm text-slate-400">
-                    Redirecting in about {(officialSiteRedirectConfig.delayMs / 1000).toFixed(1)} seconds.
+                    Redirecting in about {(officialSiteRedirectConfig.delayMs / 1000)} seconds.
                   </p>
                 </div>
               </div>

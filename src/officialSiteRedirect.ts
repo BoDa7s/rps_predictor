@@ -55,5 +55,5 @@ export const officialSiteRedirectConfig = {
   previewHostnameSuffix: PREVIEW_HOSTNAME_SUFFIX,
   redirectTestParam: REDIRECT_TEST_PARAM,
   officialOrigin: OFFICIAL_ORIGIN,
-  delayMs: 1900,
+  delayMs: 5000, // 5 seconds
 };
