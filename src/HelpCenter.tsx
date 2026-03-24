@@ -1,18 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-
-export type HelpQuestion = {
-  id: string;
-  question: string;
-  answer: string;
-};
+import { type HelpQuestion } from "./playFaq";
 
 interface HelpCenterProps {
-  open: boolean;
+  open?: boolean;
   onClose: () => void;
   questions: HelpQuestion[];
   activeQuestionId: string | null;
   onChangeActiveQuestion: (id: string | null) => void;
+  mode?: "modal" | "page";
 }
 
 function useMediaQuery(query: string): boolean {
@@ -43,12 +39,14 @@ const overlayTransition = { duration: 0.2, ease: [0.22, 0.61, 0.36, 1] } as cons
 const accordionTransition = { duration: 0.22, ease: [0.4, 0, 0.2, 1] } as const;
 
 export const HelpCenter: React.FC<HelpCenterProps> = ({
-  open,
+  open = true,
   onClose,
   questions,
   activeQuestionId,
   onChangeActiveQuestion,
+  mode = "modal",
 }) => {
+  const isPageMode = mode === "page";
   const isMobile = useMediaQuery("(max-width: 767px)");
   const modalId = "help-center-modal";
 
@@ -59,9 +57,14 @@ export const HelpCenter: React.FC<HelpCenterProps> = ({
     >();
 
     questions.forEach(question => {
-      const parts = question.question.split("·");
+      const separator = question.question.includes(" - ")
+        ? " - "
+        : question.question.includes("·")
+          ? "·"
+          : "Â·";
+      const parts = question.question.split(separator);
       const category = parts.length > 1 ? parts[0].trim() : "General";
-      const label = parts.length > 1 ? parts.slice(1).join("·").trim() : question.question.trim();
+      const label = parts.length > 1 ? parts.slice(1).join(separator).trim() : question.question.trim();
 
       const existing = groups.get(category);
       const entry = { id: question.id, question: label, answer: question.answer };
@@ -76,7 +79,7 @@ export const HelpCenter: React.FC<HelpCenterProps> = ({
   }, [questions]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || isPageMode) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -85,7 +88,7 @@ export const HelpCenter: React.FC<HelpCenterProps> = ({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, onClose]);
+  }, [isPageMode, onClose, open]);
 
   const handleOverlayClick = useCallback(() => {
     onClose();
@@ -93,42 +96,60 @@ export const HelpCenter: React.FC<HelpCenterProps> = ({
 
   const card = (
     <div className="flex h-full flex-col">
-      <div className="flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
+      <div
+        className={`flex items-start justify-between gap-3 ${
+          isPageMode ? "border-b border-white/10 pb-4" : "border-b border-slate-200 pb-3"
+        }`}
+      >
         <div>
-          <h2 id="help-center-title" className="text-lg font-semibold text-slate-900">
-            Help &amp; Questions
+          <h2 id="help-center-title" className={isPageMode ? "text-lg font-semibold text-white" : "text-lg font-semibold text-slate-900"}>
+            Help and Questions
           </h2>
-          <p className="text-sm text-slate-500">Tap a question to see the answer.</p>
+          <p className={isPageMode ? "text-sm text-slate-400" : "text-sm text-slate-500"}>
+            Tap a question to see the answer.
+          </p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-sm font-semibold text-slate-500 transition hover:bg-slate-100"
-          aria-label="Close help"
-        >
-          ×
-        </button>
+        {!isPageMode && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-sm font-semibold text-slate-500 transition hover:bg-slate-100"
+            aria-label="Close help"
+          >
+            x
+          </button>
+        )}
       </div>
       <div className="mt-4 flex-1 space-y-6 overflow-y-auto pr-1">
         {groupedQuestions.map(group => (
           <section key={group.category} className="space-y-3">
-            <h3 className="text-lg font-bold uppercase tracking-wide text-slate-900">
+            <h3 className={isPageMode ? "text-lg font-bold uppercase tracking-wide text-white" : "text-lg font-bold uppercase tracking-wide text-slate-900"}>
               {group.category}
             </h3>
             <div className="space-y-2">
               {group.entries.map(question => {
                 const isActive = activeQuestionId === question.id;
-                const containerClass = `rounded-xl border bg-white shadow-sm transition-colors ${
-                  isActive ? "border-sky-200 bg-sky-50/80" : "border-slate-200"
+                const containerClass = `rounded-xl border shadow-sm transition-colors ${
+                  isPageMode
+                    ? isActive
+                      ? "border-cyan-300/40 bg-cyan-400/10"
+                      : "border-white/10 bg-white/[0.04]"
+                    : isActive
+                      ? "border-sky-200 bg-sky-50/80"
+                      : "border-slate-200 bg-white"
                 }`;
                 return (
                   <div key={question.id} className={containerClass}>
                     <button
                       type="button"
                       className={`flex w-full items-center justify-between gap-3 rounded-xl px-4 py-3 text-left text-sm font-semibold transition ${
-                        isActive
-                          ? "text-sky-700"
-                          : "text-slate-800 hover:bg-slate-50"
+                        isPageMode
+                          ? isActive
+                            ? "text-cyan-100"
+                            : "text-slate-100 hover:bg-white/[0.04]"
+                          : isActive
+                            ? "text-sky-700"
+                            : "text-slate-800 hover:bg-slate-50"
                       } focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400`}
                       aria-expanded={isActive}
                       aria-controls={`${question.id}-content`}
@@ -137,8 +158,10 @@ export const HelpCenter: React.FC<HelpCenterProps> = ({
                       <span>{question.question}</span>
                       <span
                         aria-hidden
-                        className={`flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-slate-500 transition-transform duration-200 ${
-                          isActive ? "rotate-90 bg-sky-100 text-sky-600" : ""
+                        className={`flex h-6 w-6 items-center justify-center rounded-full transition-transform duration-200 ${
+                          isPageMode
+                            ? `bg-white/10 text-slate-300 ${isActive ? "rotate-90 bg-cyan-400/20 text-cyan-100" : ""}`
+                            : `bg-slate-100 text-slate-500 ${isActive ? "rotate-90 bg-sky-100 text-sky-600" : ""}`
                         }`}
                       >
                         <svg
@@ -162,7 +185,7 @@ export const HelpCenter: React.FC<HelpCenterProps> = ({
                           transition={accordionTransition}
                           className="overflow-hidden"
                         >
-                          <div className="px-4 pb-4 text-sm leading-relaxed text-slate-600">
+                          <div className={`px-4 pb-4 text-sm leading-relaxed ${isPageMode ? "text-slate-300" : "text-slate-600"}`}>
                             {question.answer}
                           </div>
                         </motion.div>
@@ -177,6 +200,14 @@ export const HelpCenter: React.FC<HelpCenterProps> = ({
       </div>
     </div>
   );
+
+  if (isPageMode && open) {
+    return (
+      <section className="overflow-hidden rounded-[2rem] border border-white/10 bg-slate-900/85 p-6 shadow-2xl sm:p-8">
+        {card}
+      </section>
+    );
+  }
 
   return (
     <AnimatePresence>

@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence, type Transition, useReducedMotion } from "framer-motion";
+import { useNavigate } from "react-router-dom";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
 import {
-  StatsProvider,
   useStats,
   RoundLog,
   MixerTrace,
@@ -19,7 +19,7 @@ import {
   DEFAULT_THEME_COLOR_PREFERENCES,
   cloneProfilePreferences,
 } from "./stats";
-import { PlayersProvider, usePlayers, Grade, PlayerProfile, CONSENT_TEXT_VERSION, GRADE_OPTIONS } from "./players";
+import { usePlayers, Grade, PlayerProfile, CONSENT_TEXT_VERSION, GRADE_OPTIONS } from "./players";
 import { DEV_MODE_ENABLED } from "./devMode";
 import { DeveloperConsole } from "./DeveloperConsole";
 import { devInstrumentation } from "./devInstrumentation";
@@ -55,7 +55,7 @@ import botMeh96 from "./assets/mascot/bot-meh-96.svg";
 import botSad48 from "./assets/mascot/bot-sad-48.svg";
 import botSad64 from "./assets/mascot/bot-sad-64.svg";
 import botSad96 from "./assets/mascot/bot-sad-96.svg";
-import HelpCenter, { type HelpQuestion } from "./HelpCenter";
+import HelpCenter from "./HelpCenter";
 import {
   darken,
   getReadableTextColor,
@@ -63,6 +63,8 @@ import {
   mixHexColors,
   normalizeHexColor,
 } from "./colorUtils";
+import { type PlaySurface } from "./playNavigation";
+import { type HelpQuestion } from "./playFaq";
 
 // ---------------------------------------------
 // Rock-Paper-Scissors Google Doodle-style demo
@@ -1647,7 +1649,12 @@ function OnOffToggle({
 }
 
 // Main component
-function RPSDoodleAppInner(){
+interface RPSDoodleAppProps {
+  embeddedInPlayLayout?: boolean;
+}
+
+function RPSDoodleAppInner({ embeddedInPlayLayout = false }: RPSDoodleAppProps){
+  const navigate = useNavigate();
   const {
     rounds: profileRounds,
     matches: profileMatches,
@@ -2120,6 +2127,12 @@ function RPSDoodleAppInner(){
   const previousHeaderOverlayActiveRef = useRef(headerOverlayActive);
   const [helpActiveQuestionId, setHelpActiveQuestionId] = useState<string | null>(
     AI_FAQ_QUESTIONS[0]?.id ?? null,
+  );
+  const navigateToPlayPage = useCallback(
+    (page: PlaySurface) => {
+      navigate(page === "game" ? "/play" : `/play/${page}`);
+    },
+    [navigate],
   );
   const [robotHovered, setRobotHovered] = useState(false);
   const [robotFocused, setRobotFocused] = useState(false);
@@ -5778,7 +5791,7 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
 
       {/* Header / Settings */}
-      {showMainUi && !hideUiDuringModeTransition && (
+      {showMainUi && !hideUiDuringModeTransition && !embeddedInPlayLayout && (
         <motion.div
           layout
           className="absolute top-0 left-0 right-0 z-[75] flex items-center justify-between p-3"
@@ -5882,7 +5895,7 @@ function RPSDoodleAppInner(){
                   return;
                 }
                 suspendInsightPanelForHeader();
-                setStatsOpen(true);
+                navigateToPlayPage("stats");
               }}
               disabled={postTrainingLockActive}
               className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl shadow text-sm ${
@@ -5900,7 +5913,7 @@ function RPSDoodleAppInner(){
                   return;
                 }
                 suspendInsightPanelForHeader();
-                setLeaderboardOpen(true);
+                navigateToPlayPage("leaderboard");
               }}
               className={
                 "inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm shadow " +
@@ -5964,14 +5977,8 @@ function RPSDoodleAppInner(){
               ref={helpButtonRef}
               type="button"
               onClick={() => {
-                if (!helpCenterOpen) {
-                  suspendInsightPanelForHeader();
-                }
-                setHelpCenterOpen(prev => {
-                  const next = !prev;
-                  setLive(next ? "Help opened. Press Escape to close." : "Help closed.");
-                  return next;
-                });
+                suspendInsightPanelForHeader();
+                navigateToPlayPage("help");
               }}
               className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl shadow text-sm transition ${
                 helpCenterOpen ? "bg-sky-600 text-white" : "bg-white/70 hover:bg-white text-sky-900"
@@ -5988,11 +5995,8 @@ function RPSDoodleAppInner(){
               ref={aboutButtonRef}
               type="button"
               onClick={() => {
-                if (aboutOpen) {
-                  handleCloseAbout();
-                } else {
-                  handleOpenAbout();
-                }
+                suspendInsightPanelForHeader();
+                navigateToPlayPage("about");
               }}
               className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-xl shadow text-sm transition ${
                 aboutOpen ? "bg-sky-600 text-white" : "bg-white/70 hover:bg-white text-sky-900"
@@ -6009,7 +6013,7 @@ function RPSDoodleAppInner(){
               type="button"
               onClick={() => {
                 suspendInsightPanelForHeader();
-                handleOpenSettings();
+                navigateToPlayPage("settings");
               }}
               className={`px-3 py-1.5 rounded-xl shadow text-sm transition ${
                 settingsOpen ? "bg-sky-600 text-white" : "bg-white/70 hover:bg-white text-sky-900"
@@ -6036,12 +6040,12 @@ function RPSDoodleAppInner(){
             <motion.aside
               ref={settingsPanelRef}
               initial={{ x: 32, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
+              animate={{ x: 0, y: 0, opacity: 1 }}
               exit={{ x: 32, opacity: 0 }}
               transition={{ duration: 0.2, ease: [0.22, 0.61, 0.36, 1] }}
               className="relative ml-auto flex h-full w-full max-w-[460px] flex-col gap-5 overflow-y-auto rounded-l-3xl bg-white/95 p-6 shadow-2xl"
               role="dialog"
-              aria-modal="true"
+              aria-modal={true}
               aria-labelledby="settings-drawer-title"
               onClick={e => e.stopPropagation()}
               tabIndex={-1}
@@ -7233,7 +7237,7 @@ function RPSDoodleAppInner(){
                   type="button"
                   className="rounded-full bg-slate-900/90 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-900"
                   onClick={() => {
-                    setLeaderboardOpen(true);
+                    navigateToPlayPage("leaderboard");
                   }}
                 >
                   View Leaderboard
@@ -7296,15 +7300,13 @@ function RPSDoodleAppInner(){
       </AnimatePresence>
 
       <AnimatePresence>
-        {leaderboardOpen && (
-          <LeaderboardModal open={leaderboardOpen} onClose={() => setLeaderboardOpen(false)} />
-        )}
+        {leaderboardOpen && <LeaderboardModal open={leaderboardOpen} onClose={() => setLeaderboardOpen(false)} />}
       </AnimatePresence>
 
       <AnimatePresence>
         {statsOpen && (
           <motion.div className="fixed inset-0 z-[80] grid place-items-center bg-black/40" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setStatsOpen(false)}>
-            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} transition={{ duration: 0.2 }} className="flex w-[min(95vw,900px)] max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" ref={statsModalRef}>
+            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, y: 0, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} transition={{ duration: 0.2 }} className="flex w-[min(95vw,900px)] max-h-[90vh] flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={e => e.stopPropagation()} role="dialog" aria-modal={true} ref={statsModalRef}>
               <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
                 <h2 className="text-lg font-semibold text-slate-800">Statistics</h2>
                 <button onClick={() => setStatsOpen(false)} className="text-slate-500 hover:text-slate-700 text-sm" data-dev-label="stats.close">Close ✕</button>
@@ -8374,12 +8376,6 @@ function PlayerSetupForm({ mode, player, onClose, onSaved, createPlayer, updateP
   );
 }
 
-export default function RPSDoodleApp(){
-  return (
-    <PlayersProvider>
-      <StatsProvider>
-        <RPSDoodleAppInner />
-      </StatsProvider>
-    </PlayersProvider>
-  );
+export default function RPSDoodleApp(props: RPSDoodleAppProps){
+  return <RPSDoodleAppInner {...props} />;
 }

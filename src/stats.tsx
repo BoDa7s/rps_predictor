@@ -151,6 +151,17 @@ export interface ProfilePreferences {
 
 export const DEFAULT_THEME_COLOR_PREFERENCES: ThemeColorPreferences = {
   light: {
+    accent: "#2563EB",
+    background: "#F6F8FC",
+  },
+  dark: {
+    accent: "#60A5FA",
+    background: "#0B1220",
+  },
+} as const;
+
+export const LEGACY_DEFAULT_THEME_COLOR_PREFERENCES: ThemeColorPreferences = {
+  light: {
     accent: "#0EA5E9",
     background: "#F8FAFC",
   },
@@ -195,6 +206,25 @@ function normalizeThemeModeColors(value: unknown, fallback: ThemeModeColors): Th
   };
 }
 
+function themeModeColorsEqual(a: ThemeModeColors, b: ThemeModeColors): boolean {
+  return a.accent === b.accent && a.background === b.background;
+}
+
+export function migrateLegacyThemeColorPreferences(themeColors: ThemeColorPreferences): ThemeColorPreferences {
+  const migrated: ThemeColorPreferences = {
+    light: cloneThemeModeColors(themeColors.light),
+    dark: cloneThemeModeColors(themeColors.dark),
+  };
+
+  (Object.keys(migrated) as ThemeMode[]).forEach(mode => {
+    if (themeModeColorsEqual(migrated[mode], LEGACY_DEFAULT_THEME_COLOR_PREFERENCES[mode])) {
+      migrated[mode] = cloneThemeModeColors(DEFAULT_THEME_COLOR_PREFERENCES[mode]);
+    }
+  });
+
+  return migrated;
+}
+
 function normalizeThemeColors(value: unknown): ThemeColorPreferences {
   if (!value || typeof value !== "object") {
     return {
@@ -203,10 +233,10 @@ function normalizeThemeColors(value: unknown): ThemeColorPreferences {
     };
   }
   const input = value as { light?: unknown; dark?: unknown };
-  return {
+  return migrateLegacyThemeColorPreferences({
     light: normalizeThemeModeColors(input.light, DEFAULT_THEME_COLOR_PREFERENCES.light),
     dark: normalizeThemeModeColors(input.dark, DEFAULT_THEME_COLOR_PREFERENCES.dark),
-  };
+  });
 }
 
 function normalizePreferences(value: unknown): ProfilePreferences {
