@@ -207,18 +207,19 @@ button {
 }
 
 .play-shell-button-muted {
-  background: var(--app-surface-subtle);
-  color: var(--app-text-strong);
+  background: var(--app-surface-input);
+  color: var(--app-text-secondary);
 }
 
 .play-shell-button-muted:hover {
   background: var(--app-surface-hover);
   border-color: var(--app-border-strong);
+  color: var(--app-text-strong);
 }
 
 .play-shell-nav-link {
   border: 1px solid var(--app-border);
-  background: color-mix(in srgb, var(--app-surface-subtle) 90%, transparent);
+  background: var(--app-surface-input);
   color: var(--app-text-secondary);
 }
 
@@ -239,6 +240,30 @@ button {
   color: var(--app-text-muted);
   cursor: not-allowed;
   opacity: 0.72;
+}
+
+.play-shell-dropdown-item {
+  color: var(--app-text-primary);
+}
+
+.play-shell-dropdown-item:hover {
+  background: var(--app-surface-hover);
+  color: var(--app-text-strong);
+}
+
+.play-shell-dropdown-item.is-active {
+  background: var(--app-accent);
+  color: var(--app-on-accent);
+  box-shadow: inset 0 0 0 1px var(--app-accent-strong);
+}
+
+.play-shell-dropdown-item-danger {
+  color: #ef4444;
+}
+
+.play-shell-dropdown-item-danger:hover {
+  background: color-mix(in srgb, #ef4444 12%, var(--app-surface-hover));
+  color: #ef4444;
 }
 
 .play-shell-toggle {
