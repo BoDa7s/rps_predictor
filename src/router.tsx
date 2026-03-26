@@ -3,13 +3,16 @@ import { Navigate, createBrowserRouter } from "react-router-dom";
 import LandingPage from "./pages/LandingPage";
 import AboutPage from "./pages/play/AboutPage";
 import BootPage from "./pages/play/BootPage";
+import ChallengeGamePage from "./pages/play/ChallengeGamePage";
 import CreatePlayerPage from "./pages/play/CreatePlayerPage";
+import DashboardPage from "./pages/play/DashboardPage";
 import GameplayPage from "./pages/play/GameplayPage";
 import HelpPage from "./pages/play/HelpPage";
 import LeaderboardPage from "./pages/play/LeaderboardPage";
 import RestorePlayerPage from "./pages/play/RestorePlayerPage";
 import SettingsPage from "./pages/play/SettingsPage";
 import StatsPage from "./pages/play/StatsPage";
+import TrainingGamePage from "./pages/play/TrainingGamePage";
 import WelcomePage from "./pages/play/WelcomePage";
 import PlayEntryGate from "./routes/PlayEntryGate";
 import PlayLayout from "./routes/PlayLayout";
@@ -55,6 +58,18 @@ export const router = createBrowserRouter([
               {
                 index: true,
                 element: <GameplayPage />,
+              },
+              {
+                path: "dashboard",
+                element: <DashboardPage />,
+              },
+              {
+                path: "training",
+                element: <TrainingGamePage />,
+              },
+              {
+                path: "challenge",
+                element: <ChallengeGamePage />,
               },
               {
                 path: "stats",

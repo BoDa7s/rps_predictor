@@ -38,18 +38,27 @@ function getPlayerFirstName(playerName: string | null | undefined) {
 function PlayLayoutShell() {
   const navigate = useNavigate();
   const location = useLocation();
-  const isGameRoute = location.pathname === "/play";
+  const isDashboardRoute = location.pathname === "/play/dashboard";
+  const isModeWorkspaceRoute =
+    location.pathname === "/play/training" ||
+    location.pathname === "/play/challenge";
+  const isGameRoute =
+    location.pathname === "/play" ||
+    isDashboardRoute ||
+    isModeWorkspaceRoute;
   const pageMeta = playPageMeta[location.pathname];
   const { currentPlayer, setCurrentPlayer } = usePlayers();
   const { themePreference, resolvedThemeMode, themeVariables, themeOptions, applyThemePreference } = usePlayTheme();
   const [playerMenuOpen, setPlayerMenuOpen] = useState(false);
   const playerMenuRef = useRef<HTMLDivElement | null>(null);
+  const headerRef = useRef<HTMLElement | null>(null);
   const dashboardItem = useMemo(() => playNavItems.find(item => item.surface === "game") ?? playNavItems[0], []);
   const playerMenuItems = useMemo(() => playNavItems.filter(item => item.surface !== "game"), []);
   const currentPlayerFirstName = getPlayerFirstName(currentPlayer?.playerName);
   const currentPlayerInitial = currentPlayerFirstName === "Current player" ? "?" : currentPlayerFirstName.charAt(0).toUpperCase();
   const playerMenuActive = playerMenuItems.some(item => item.to === location.pathname);
   const playerTriggerActive = playerMenuOpen || playerMenuActive;
+  const [headerHeight, setHeaderHeight] = useState(0);
 
   useEffect(() => {
     setPlayerMenuOpen(false);
@@ -78,6 +87,25 @@ function PlayLayoutShell() {
     };
   }, [playerMenuOpen]);
 
+  useEffect(() => {
+    const node = headerRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+
+    const updateHeight = () => {
+      setHeaderHeight(node.getBoundingClientRect().height);
+    };
+
+    updateHeight();
+
+    const observer = new ResizeObserver(() => updateHeight());
+    observer.observe(node);
+    window.addEventListener("resize", updateHeight);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateHeight);
+    };
+  }, []);
+
   const handleLogout = () => {
     setPlayerMenuOpen(false);
     setCurrentPlayer(null);
@@ -90,9 +118,14 @@ function PlayLayoutShell() {
       className="play-shell-theme app-theme landing-shell flex min-h-screen flex-col"
       data-theme={resolvedThemeMode}
       data-theme-preference={themePreference}
-      style={themeVariables as React.CSSProperties}
+      style={
+        {
+          ...(themeVariables as React.CSSProperties),
+          "--play-header-height": `${headerHeight}px`,
+        } as React.CSSProperties
+      }
     >
-      <header className="play-shell-header sticky top-0 z-[95] border-b backdrop-blur-xl">
+      <header ref={headerRef} className="play-shell-header sticky top-0 z-[95] border-b backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center gap-3">
@@ -218,7 +251,7 @@ function PlayLayoutShell() {
                 <NavLink
                   key={dashboardItem.to}
                   to={dashboardItem.to}
-                  end={dashboardItem.to === "/play"}
+                  end
                   className={({ isActive }) =>
                     `play-shell-nav-link inline-flex items-center justify-center rounded-full px-4 py-2 text-sm font-semibold transition ${
                       isActive ? "is-active" : ""
@@ -233,8 +266,24 @@ function PlayLayoutShell() {
         </div>
       </header>
 
-      <main className={isGameRoute ? "flex-1" : "flex-1 px-4 py-4 sm:px-6 sm:py-4 lg:px-8"}>
-        <div className={isGameRoute ? "h-full" : "mx-auto flex w-full max-w-7xl flex-col gap-4"}>
+      <main
+        className={
+          isModeWorkspaceRoute
+            ? "h-[calc(100dvh-var(--play-header-height,0px))] min-h-0 overflow-hidden"
+            : isGameRoute
+              ? "flex-1"
+              : "flex-1 px-4 py-4 sm:px-6 sm:py-4 lg:px-8"
+        }
+      >
+        <div
+          className={
+            isModeWorkspaceRoute
+              ? "h-full w-full min-h-0"
+              : isGameRoute
+                ? "h-full"
+                : "mx-auto flex w-full max-w-7xl flex-col gap-4"
+          }
+        >
           {!isGameRoute && pageMeta && (
             <section className="play-shell-surface rounded-[1.5rem] px-5 py-4 sm:px-6 sm:py-5">
               <h1 className="play-shell-heading text-2xl font-semibold tracking-[-0.04em] sm:text-3xl">

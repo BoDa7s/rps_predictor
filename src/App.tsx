@@ -67,8 +67,10 @@ import { type PlaySurface } from "./playNavigation";
 import { type HelpQuestion } from "./playFaq";
 import PlayerSetupForm from "./components/play/PlayerSetupForm";
 import {
+  CHALLENGE_LAUNCH_VALUE,
   persistWelcomePreference,
   TRAINING_ROUNDS_REQUIRED,
+  TRAINING_LAUNCH_VALUE,
   type PlayLaunchIntent,
 } from "./playEntry";
 
@@ -1651,7 +1653,10 @@ interface RPSDoodleAppProps {
   launchIntent?: PlayLaunchIntent | null;
 }
 
-function RPSDoodleAppInner({ embeddedInPlayLayout = false, launchIntent = null }: RPSDoodleAppProps){
+function RPSDoodleAppInner({
+  embeddedInPlayLayout = false,
+  launchIntent = null,
+}: RPSDoodleAppProps){
   const navigate = useNavigate();
   const {
     rounds: profileRounds,
@@ -2128,7 +2133,7 @@ function RPSDoodleAppInner({ embeddedInPlayLayout = false, launchIntent = null }
   );
   const navigateToPlayPage = useCallback(
     (page: PlaySurface) => {
-      navigate(page === "game" ? "/play" : `/play/${page}`);
+      navigate(page === "game" ? "/play/dashboard" : `/play/${page}`);
     },
     [navigate],
   );
@@ -3683,26 +3688,35 @@ function RPSDoodleAppInner({ embeddedInPlayLayout = false, launchIntent = null }
     if (launchIntentHandledRef.current === launchIntent) {
       return;
     }
-    if (launchIntent !== "training") {
-      launchIntentHandledRef.current = launchIntent;
-      return;
-    }
     if (!hasConsented || !currentProfile) {
       return;
     }
 
     launchIntentHandledRef.current = launchIntent;
 
-    if (needsTraining) {
-      if (!trainingActive) {
-        setTrainingActive(true);
+    if (launchIntent === TRAINING_LAUNCH_VALUE) {
+      if (needsTraining) {
+        if (!trainingActive) {
+          setTrainingActive(true);
+        }
+        startMatch("practice", { silent: true });
+        setLive("Training ready. Starting your warm-up rounds now.");
       }
-      startMatch("practice", { silent: true });
-      setLive("Training ready. Starting your warm-up rounds now.");
+
+      navigate("/play", { replace: true });
+      return;
+    }
+
+    if (launchIntent === CHALLENGE_LAUNCH_VALUE && !needsTraining && predictorMode) {
+      if (trainingActive) {
+        setTrainingActive(false);
+      }
+      startMatch("challenge", { silent: true });
+      setLive("Challenge ready. Starting your match.");
     }
 
     navigate("/play", { replace: true });
-  }, [launchIntent, hasConsented, currentProfile, navigate, needsTraining, trainingActive]);
+  }, [launchIntent, hasConsented, currentProfile, navigate, needsTraining, predictorMode, trainingActive]);
 
   useEffect(() => {
     if (needsTraining || trainingActive) {

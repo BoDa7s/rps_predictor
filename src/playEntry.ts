@@ -3,7 +3,7 @@ import type { StatsProfile } from "./stats";
 export type WelcomePreference = "show" | "skip";
 
 export type PlayEntryStep = "play" | "welcome" | "new" | "restore";
-export type PlayLaunchIntent = "training";
+export type PlayLaunchIntent = "training" | "challenge";
 
 export const LEGACY_WELCOME_SEEN_KEY = "rps_welcome_seen_v1";
 export const WELCOME_PREF_KEY = "rps_welcome_pref_v1";
@@ -11,6 +11,8 @@ export const PLAY_BOOT_DURATION_MS = 5000;
 export const TRAINING_ROUNDS_REQUIRED = 5;
 export const PLAY_LAUNCH_MODE_PARAM = "mode";
 export const TRAINING_LAUNCH_VALUE: PlayLaunchIntent = "training";
+export const CHALLENGE_LAUNCH_VALUE: PlayLaunchIntent = "challenge";
+export const PLAY_DASHBOARD_PATH = "/play/dashboard";
 
 export const PLAY_WELCOME_SLIDES = [
   {
@@ -98,6 +100,18 @@ export function buildTrainingStartPath(): string {
   return `/play?${searchParams.toString()}`;
 }
 
+export function buildChallengeStartPath(): string {
+  const searchParams = new URLSearchParams();
+  searchParams.set(PLAY_LAUNCH_MODE_PARAM, CHALLENGE_LAUNCH_VALUE);
+  return `/play?${searchParams.toString()}`;
+}
+
+export function getPlayHomeDestination(
+  profile: Pick<StatsProfile, "trainingCount" | "trained"> | null | undefined,
+): string {
+  return profileNeedsTraining(profile) ? buildTrainingStartPath() : PLAY_DASHBOARD_PATH;
+}
+
 export function buildPostOnboardingDestination(options: {
   returnTo?: string | null;
   profile?: Pick<StatsProfile, "trainingCount" | "trained"> | null;
@@ -107,7 +121,7 @@ export function buildPostOnboardingDestination(options: {
   if (forceTraining || profileNeedsTraining(profile)) {
     return buildTrainingStartPath();
   }
-  return sanitizeReturnTo(returnTo) ?? "/play";
+  return sanitizeReturnTo(returnTo) ?? PLAY_DASHBOARD_PATH;
 }
 
 export function getBootDestination(options: {
@@ -128,7 +142,7 @@ export function getBootDestination(options: {
 export function buildPlayPath(step: PlayEntryStep, returnTo?: string | null): string {
   const safeReturnTo = sanitizeReturnTo(returnTo);
   if (step === "play") {
-    return safeReturnTo ?? "/play";
+    return safeReturnTo ?? PLAY_DASHBOARD_PATH;
   }
 
   const pathname =
