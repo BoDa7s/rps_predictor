@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { motion, AnimatePresence, type Transition, useReducedMotion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import { Move, Mode, AIMode, Outcome, BestOf } from "./gameTypes";
+import { resolveOutcome } from "./gameRules";
 import {
   useStats,
   RoundLog,
@@ -70,7 +71,6 @@ import {
   CHALLENGE_LAUNCH_VALUE,
   persistWelcomePreference,
   TRAINING_ROUNDS_REQUIRED,
-  TRAINING_LAUNCH_VALUE,
   type PlayLaunchIntent,
 } from "./playEntry";
 
@@ -446,15 +446,6 @@ function getInitialWelcomePreference(): WelcomePreference {
 
 function getInitialScene(): Scene {
   return "MODE";
-}
-
-// ---- Core game logic (pure) ----
-export function resolveOutcome(player: Move, ai: Move): Outcome {
-  if (player === ai) return "tie";
-  if ((player === "rock" && ai === "scissors") ||
-      (player === "paper" && ai === "rock") ||
-      (player === "scissors" && ai === "paper")) return "win";
-  return "lose";
 }
 
 export function mostFrequentMove(moves: Move[]): Move | null {
@@ -3693,19 +3684,6 @@ function RPSDoodleAppInner({
     }
 
     launchIntentHandledRef.current = launchIntent;
-
-    if (launchIntent === TRAINING_LAUNCH_VALUE) {
-      if (needsTraining) {
-        if (!trainingActive) {
-          setTrainingActive(true);
-        }
-        startMatch("practice", { silent: true });
-        setLive("Training ready. Starting your warm-up rounds now.");
-      }
-
-      navigate("/play", { replace: true });
-      return;
-    }
 
     if (launchIntent === CHALLENGE_LAUNCH_VALUE && !needsTraining && predictorMode) {
       if (trainingActive) {

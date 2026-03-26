@@ -3,16 +3,17 @@ import type { StatsProfile } from "./stats";
 export type WelcomePreference = "show" | "skip";
 
 export type PlayEntryStep = "play" | "welcome" | "new" | "restore";
-export type PlayLaunchIntent = "training" | "challenge";
+export type PlayLaunchIntent = "challenge";
 
 export const LEGACY_WELCOME_SEEN_KEY = "rps_welcome_seen_v1";
 export const WELCOME_PREF_KEY = "rps_welcome_pref_v1";
 export const PLAY_BOOT_DURATION_MS = 5000;
 export const TRAINING_ROUNDS_REQUIRED = 5;
 export const PLAY_LAUNCH_MODE_PARAM = "mode";
-export const TRAINING_LAUNCH_VALUE: PlayLaunchIntent = "training";
 export const CHALLENGE_LAUNCH_VALUE: PlayLaunchIntent = "challenge";
 export const PLAY_DASHBOARD_PATH = "/play/dashboard";
+export const PLAY_TRAINING_PATH = "/play/training";
+export const PLAY_CHALLENGE_PATH = "/play/challenge";
 
 export const PLAY_WELCOME_SLIDES = [
   {
@@ -95,15 +96,11 @@ export function profileNeedsTraining(
 }
 
 export function buildTrainingStartPath(): string {
-  const searchParams = new URLSearchParams();
-  searchParams.set(PLAY_LAUNCH_MODE_PARAM, TRAINING_LAUNCH_VALUE);
-  return `/play?${searchParams.toString()}`;
+  return PLAY_TRAINING_PATH;
 }
 
 export function buildChallengeStartPath(): string {
-  const searchParams = new URLSearchParams();
-  searchParams.set(PLAY_LAUNCH_MODE_PARAM, CHALLENGE_LAUNCH_VALUE);
-  return `/play?${searchParams.toString()}`;
+  return PLAY_CHALLENGE_PATH;
 }
 
 export function getPlayHomeDestination(
