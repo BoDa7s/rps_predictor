@@ -20,6 +20,7 @@ interface MoveControlsProps {
   onSelect?: (option: MoveControlOption) => void;
   variant?: "default" | "challenge";
   density?: CockpitDensity;
+  testIdPrefix?: string;
 }
 
 export default function MoveControls({
@@ -29,25 +30,28 @@ export default function MoveControls({
   onSelect,
   variant = "default",
   density = "normal",
+  testIdPrefix,
 }: MoveControlsProps) {
   const isChallenge = variant === "challenge";
-  const isCompactDensity = density !== "normal";
+  const isCompactDensity = density !== "normal" && density !== "expanded";
   const isTightDensity = density === "tight";
+  const showFooter = footer && (!isChallenge || density === "normal" || density === "expanded");
 
   return (
     <section className="flex h-full flex-col justify-start">
-      <div className="flex items-center justify-between gap-[clamp(0.35rem,0.2rem+0.35vw,0.55rem)]">
+      <div className="flex items-center justify-between gap-[clamp(0.28rem,0.16rem+0.28vw,0.44rem)]">
         <p className={`play-shell-heading font-semibold uppercase tracking-[0.18em] ${isTightDensity ? "text-[clamp(0.64rem,0.58rem+0.14vw,0.78rem)]" : "text-[clamp(0.72rem,0.62rem+0.2vw,0.9rem)]"}`}>{title}</p>
-        {footer && <div className={`play-shell-text-muted ${isTightDensity ? "text-[clamp(0.56rem,0.52rem+0.1vw,0.66rem)]" : "text-[clamp(0.62rem,0.55rem+0.14vw,0.75rem)]"}`}>{footer}</div>}
+        {showFooter && <div className={`play-shell-text-muted ${isTightDensity ? "text-[clamp(0.56rem,0.52rem+0.1vw,0.66rem)]" : "text-[clamp(0.62rem,0.55rem+0.14vw,0.75rem)]"}`}>{footer}</div>}
       </div>
 
-      <div className={`grid gap-[clamp(0.28rem,0.16rem+0.24vw,0.5rem)] sm:grid-cols-3 ${isChallenge ? (isTightDensity ? "mt-[clamp(0.26rem,0.16rem+0.18vh,0.4rem)] items-start" : isCompactDensity ? "mt-[clamp(0.3rem,0.18rem+0.24vh,0.5rem)] items-start" : "mt-[clamp(0.4rem,0.25rem+0.5vh,0.8rem)] items-start") : "mt-[clamp(0.45rem,0.28rem+0.55vh,0.9rem)]"}`}>
+      <div className={`grid ${isChallenge ? "gap-[clamp(0.18rem,0.12rem+0.18vw,0.34rem)]" : "gap-[clamp(0.28rem,0.16rem+0.24vw,0.5rem)]"} sm:grid-cols-3 ${isChallenge ? (isTightDensity ? "mt-[clamp(0.16rem,0.1rem+0.1vh,0.26rem)] items-start" : isCompactDensity ? "mt-[clamp(0.2rem,0.12rem+0.14vh,0.32rem)] items-start" : "mt-[clamp(0.28rem,0.16rem+0.24vh,0.46rem)] items-start") : "mt-[clamp(0.45rem,0.28rem+0.55vh,0.9rem)]"}`}>
         {options.map(option => {
           const isSelected = Boolean(option.selected);
 
           return (
             <button
               key={option.id}
+              data-testid={testIdPrefix ? `${testIdPrefix}-option-${option.id}` : undefined}
               type="button"
               disabled={option.disabled}
               aria-pressed={isSelected}
@@ -67,15 +71,15 @@ export default function MoveControls({
                 isChallenge
                   ? {
                       paddingTop: isTightDensity
-                        ? "clamp(0.4rem, 0.22rem + 0.28vh, 0.56rem)"
+                        ? "clamp(0.32rem, 0.18rem + 0.2vh, 0.46rem)"
                         : isCompactDensity
-                          ? "clamp(0.48rem, 0.25rem + 0.34vh, 0.64rem)"
-                          : "clamp(0.55rem, 0.3rem + 0.75vh, 0.8rem)",
+                          ? "clamp(0.4rem, 0.22rem + 0.24vh, 0.56rem)"
+                          : "clamp(0.48rem, 0.26rem + 0.52vh, 0.72rem)",
                       paddingBottom: isTightDensity
-                        ? "clamp(0.4rem, 0.22rem + 0.28vh, 0.56rem)"
+                        ? "clamp(0.32rem, 0.18rem + 0.2vh, 0.46rem)"
                         : isCompactDensity
-                          ? "clamp(0.48rem, 0.25rem + 0.34vh, 0.64rem)"
-                          : "clamp(0.55rem, 0.3rem + 0.75vh, 0.8rem)",
+                          ? "clamp(0.4rem, 0.22rem + 0.24vh, 0.56rem)"
+                          : "clamp(0.48rem, 0.26rem + 0.52vh, 0.72rem)",
                       paddingLeft: isTightDensity
                         ? "clamp(0.5rem, 0.32rem + 0.28vw, 0.65rem)"
                         : isCompactDensity
@@ -103,7 +107,11 @@ export default function MoveControls({
                     <MoveIcon move={option.move} size={isChallenge ? "var(--play-cockpit-control-icon-size)" : "clamp(1.2rem,2.8vh,1.6rem)"} title={option.label} />
                   </div>
                   <div>
-                    <div className={`${isChallenge ? "text-[var(--play-cockpit-control-title)]" : "text-[clamp(0.88rem,0.7rem+0.42vw,1rem)]"} font-semibold tracking-[-0.03em]`}>
+                    <div
+                      data-testid={testIdPrefix ? `${testIdPrefix}-option-${option.id}-label` : undefined}
+                      className={`${isChallenge ? "text-[var(--play-cockpit-control-title)]" : "text-[clamp(0.88rem,0.7rem+0.42vw,1rem)]"} font-semibold tracking-[-0.03em]`}
+                      style={isChallenge ? { fontSize: "var(--play-cockpit-control-title)" } : undefined}
+                    >
                       {option.label}
                     </div>
                     <div className={`play-shell-text-muted uppercase tracking-[0.16em] ${isTightDensity ? "text-[clamp(0.46rem,0.42rem+0.1vw,0.56rem)]" : "text-[clamp(0.54rem,0.48rem+0.16vw,0.68rem)]"}`}>

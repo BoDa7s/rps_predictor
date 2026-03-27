@@ -25,6 +25,8 @@ interface GameArenaProps {
   footer?: React.ReactNode;
   centerEmphasis?: "default" | "strong";
   density?: CockpitDensity;
+  scale?: number;
+  testIdPrefix?: string;
 }
 
 const slotToneClasses: Record<NonNullable<GameArenaSlot["tone"]>, string> = {
@@ -32,15 +34,45 @@ const slotToneClasses: Record<NonNullable<GameArenaSlot["tone"]>, string> = {
   ai: "bg-[color:color-mix(in_srgb,var(--app-surface-subtle)_82%,transparent)]",
 };
 
-function ArenaEdgeSlot({ slot, density }: { slot: GameArenaSlot; density: CockpitDensity }) {
+function getArenaSizing(density: CockpitDensity, scale: number) {
+  const resolvedScale = density === "tight" ? Math.max(scale, 0.95) : scale;
+
+  if (density === "tight") {
+    return { slotIconBoxRem: 2.35 * resolvedScale, centerRingRem: 4.25 * resolvedScale, centerRingTextRem: 0.98 * resolvedScale, centerTitleRem: 1.38 * resolvedScale, centerDetailRem: 0.82 * resolvedScale };
+  }
+
+  if (density === "compact") {
+    return { slotIconBoxRem: 2.75 * resolvedScale, centerRingRem: 5.35 * resolvedScale, centerRingTextRem: 1.22 * resolvedScale, centerTitleRem: 1.68 * resolvedScale, centerDetailRem: 0.96 * resolvedScale };
+  }
+
+  if (density === "expanded") {
+    return { slotIconBoxRem: 3.7 * resolvedScale, centerRingRem: 6.8 * resolvedScale, centerRingTextRem: 1.92 * resolvedScale, centerTitleRem: 2.35 * resolvedScale, centerDetailRem: 1.08 * resolvedScale };
+  }
+
+  return { slotIconBoxRem: 3.2 * resolvedScale, centerRingRem: 5.65 * resolvedScale, centerRingTextRem: 1.54 * resolvedScale, centerTitleRem: 1.92 * resolvedScale, centerDetailRem: 1 * resolvedScale };
+}
+
+function ArenaEdgeSlot({
+  slot,
+  density,
+  scale,
+  testId,
+}: {
+  slot: GameArenaSlot;
+  density: CockpitDensity;
+  scale: number;
+  testId?: string;
+}) {
   const tone = slot.tone ?? "player";
   const placeholder = slot.placeholder ?? "Pending";
-  const isCompactDensity = density !== "normal";
+  const isCompactDensity = density !== "normal" && density !== "expanded";
   const isTightDensity = density === "tight";
+  const sizing = getArenaSizing(density, scale);
 
   return (
     <div
-      className={`flex min-h-0 flex-col justify-between ${isTightDensity ? "px-[clamp(0.38rem,0.24rem+0.2vw,0.52rem)] py-[clamp(0.32rem,0.18rem+0.2vh,0.45rem)]" : isCompactDensity ? "px-[clamp(0.45rem,0.28rem+0.26vw,0.62rem)] py-[clamp(0.38rem,0.22rem+0.24vh,0.56rem)]" : "px-[clamp(0.55rem,0.35rem+0.55vw,0.95rem)] py-[clamp(0.55rem,0.3rem+0.8vh,0.95rem)]"} ${slotToneClasses[tone]}`}
+      data-testid={testId}
+      className={`flex h-full min-h-0 flex-col justify-between ${isTightDensity ? "px-[clamp(0.38rem,0.24rem+0.2vw,0.52rem)] py-[clamp(0.32rem,0.18rem+0.2vh,0.45rem)]" : isCompactDensity ? "px-[clamp(0.45rem,0.28rem+0.26vw,0.62rem)] py-[clamp(0.38rem,0.22rem+0.24vh,0.56rem)]" : "px-[clamp(0.55rem,0.35rem+0.55vw,0.95rem)] py-[clamp(0.55rem,0.3rem+0.8vh,0.95rem)]"} ${slotToneClasses[tone]}`}
     >
       <div className="flex items-center justify-between gap-2">
         <span className={`play-shell-eyebrow font-semibold uppercase tracking-[0.18em] ${isTightDensity ? "text-[clamp(0.46rem,0.42rem+0.1vw,0.54rem)]" : "text-[clamp(0.54rem,0.46rem+0.16vw,0.64rem)]"}`}>
@@ -54,9 +86,12 @@ function ArenaEdgeSlot({ slot, density }: { slot: GameArenaSlot; density: Cockpi
       </div>
 
       <div className={`mt-[clamp(0.28rem,0.16rem+0.18vh,0.5rem)] flex min-h-0 flex-1 flex-col items-center justify-center text-center ${isTightDensity ? "gap-[clamp(0.24rem,0.14rem+0.14vh,0.36rem)]" : isCompactDensity ? "gap-[clamp(0.3rem,0.16rem+0.18vh,0.46rem)]" : "gap-[clamp(0.45rem,0.22rem+0.7vh,0.85rem)]"}`}>
-        <div className={`flex items-center justify-center rounded-[clamp(0.9rem,0.7rem+0.55vw,1.25rem)] border border-[color:var(--app-border)] bg-[color:var(--app-surface-input)] ${isTightDensity ? "h-[clamp(2.15rem,4vh,2.8rem)] w-[clamp(2.15rem,4vh,2.8rem)]" : isCompactDensity ? "h-[clamp(2.4rem,5vh,3.3rem)] w-[clamp(2.4rem,5vh,3.3rem)]" : "h-[clamp(3rem,7.5vh,5rem)] w-[clamp(3rem,7.5vh,5rem)]"}`}>
+        <div
+          className="flex h-[var(--play-cockpit-arena-slot-icon-box)] w-[var(--play-cockpit-arena-slot-icon-box)] items-center justify-center rounded-[clamp(0.9rem,0.7rem+0.55vw,1.25rem)] border border-[color:var(--app-border)] bg-[color:var(--app-surface-input)]"
+          style={{ height: `${sizing.slotIconBoxRem}rem`, width: `${sizing.slotIconBoxRem}rem` }}
+        >
           {slot.move ? (
-            <MoveIcon move={slot.move} size={isTightDensity ? "clamp(1rem,2.2vh,1.35rem)" : isCompactDensity ? "clamp(1.15rem,2.8vh,1.7rem)" : "clamp(1.7rem,4vw,3rem)"} title={slot.title} />
+            <MoveIcon move={slot.move} size="var(--play-cockpit-arena-slot-icon-size)" title={slot.title} />
           ) : (
             <span className={`play-shell-text-muted font-semibold uppercase tracking-[0.18em] ${isTightDensity ? "text-[clamp(0.42rem,0.4rem+0.08vw,0.5rem)]" : "text-[clamp(0.52rem,0.45rem+0.14vw,0.62rem)]"}`}>
               {placeholder}
@@ -84,10 +119,13 @@ export default function GameArena({
   footer,
   centerEmphasis = "default",
   density = "normal",
+  scale = 1,
+  testIdPrefix,
 }: GameArenaProps) {
   const isStrongCenter = centerEmphasis === "strong";
-  const isCompactDensity = density !== "normal";
+  const isCompactDensity = density !== "normal" && density !== "expanded";
   const isTightDensity = density === "tight";
+  const sizing = getArenaSizing(density, scale);
 
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden bg-[color:color-mix(in_srgb,var(--app-surface-card)_74%,transparent)]">
@@ -111,10 +149,13 @@ export default function GameArena({
         }}
       >
         <div className="border-r border-[color:var(--app-border)]">
-          <ArenaEdgeSlot slot={leftSlot} density={density} />
+          <ArenaEdgeSlot slot={leftSlot} density={density} scale={scale} testId={testIdPrefix ? `${testIdPrefix}-left-pane` : undefined} />
         </div>
 
-        <div className={`relative flex min-h-0 flex-col items-center justify-center overflow-hidden bg-[linear-gradient(180deg,color-mix(in_srgb,var(--app-accent-soft)_52%,transparent),color-mix(in_srgb,var(--app-surface-card)_88%,transparent))] text-center ${isTightDensity ? "px-[clamp(0.4rem,0.26rem+0.24vw,0.56rem)] py-[clamp(0.38rem,0.22rem+0.22vh,0.54rem)]" : isCompactDensity ? "px-[clamp(0.5rem,0.32rem+0.32vw,0.72rem)] py-[clamp(0.46rem,0.24rem+0.26vh,0.68rem)]" : "px-[clamp(0.7rem,0.4rem+0.85vw,1rem)] py-[clamp(0.7rem,0.3rem+1vh,1rem)]"}`}>
+        <div
+          data-testid={testIdPrefix ? `${testIdPrefix}-center-pane` : undefined}
+          className={`relative flex min-h-0 flex-col items-center justify-center overflow-hidden bg-[linear-gradient(180deg,color-mix(in_srgb,var(--app-accent-soft)_52%,transparent),color-mix(in_srgb,var(--app-surface-card)_88%,transparent))] text-center ${isTightDensity ? "px-[clamp(0.4rem,0.26rem+0.24vw,0.56rem)] py-[clamp(0.38rem,0.22rem+0.22vh,0.54rem)]" : isCompactDensity ? "px-[clamp(0.5rem,0.32rem+0.32vw,0.72rem)] py-[clamp(0.46rem,0.24rem+0.26vh,0.68rem)]" : "px-[clamp(0.7rem,0.4rem+0.85vw,1rem)] py-[clamp(0.7rem,0.3rem+1vh,1rem)]"}`}
+        >
           <div
             aria-hidden="true"
             className="pointer-events-none absolute inset-0 opacity-80"
@@ -130,27 +171,40 @@ export default function GameArena({
             </span>
             <div className={`max-w-[min(18rem,100%)] flex flex-col items-center ${isTightDensity ? "gap-[clamp(0.18rem,0.1rem+0.12vh,0.28rem)]" : isCompactDensity ? "gap-[clamp(0.26rem,0.14rem+0.18vh,0.42rem)]" : "gap-[clamp(0.45rem,0.22rem+0.7vh,0.9rem)]"}`}>
               <div
+                data-testid={testIdPrefix ? `${testIdPrefix}-center-ring` : undefined}
+                style={{
+                  height: `${sizing.centerRingRem}rem`,
+                  width: `${sizing.centerRingRem}rem`,
+                  fontSize: `${sizing.centerRingTextRem}rem`,
+                }}
                 className={`flex items-center justify-center rounded-full border border-[color:var(--app-border-strong)] bg-[color:color-mix(in_srgb,var(--app-surface-card)_92%,transparent)] text-[color:var(--app-accent-strong)] ${
                   isStrongCenter
                     ? isTightDensity
-                      ? "h-[clamp(2.8rem,5vh,3.6rem)] w-[clamp(2.8rem,5vh,3.6rem)] text-[clamp(0.72rem,0.62rem+0.2vw,0.9rem)] shadow-[0_0_0_clamp(0.08rem,0.32vw,0.16rem)_color-mix(in_srgb,var(--app-accent-soft)_40%,transparent)]"
+                      ? "h-[var(--play-cockpit-arena-center-ring)] w-[var(--play-cockpit-arena-center-ring)] text-[var(--play-cockpit-arena-center-ring-text)] shadow-[0_0_0_clamp(0.08rem,0.32vw,0.16rem)_color-mix(in_srgb,var(--app-accent-soft)_40%,transparent)]"
                       : isCompactDensity
-                        ? "h-[clamp(3.5rem,6.5vh,4.8rem)] w-[clamp(3.5rem,6.5vh,4.8rem)] text-[clamp(0.84rem,0.72rem+0.3vw,1.2rem)] shadow-[0_0_0_clamp(0.12rem,0.5vw,0.26rem)_color-mix(in_srgb,var(--app-accent-soft)_40%,transparent)]"
-                        : "h-[clamp(4.8rem,10vh,7rem)] w-[clamp(4.8rem,10vh,7rem)] text-[clamp(1.1rem,0.8rem+1vw,2rem)] shadow-[0_0_0_clamp(0.25rem,1.2vw,0.65rem)_color-mix(in_srgb,var(--app-accent-soft)_40%,transparent)]"
+                        ? "h-[var(--play-cockpit-arena-center-ring)] w-[var(--play-cockpit-arena-center-ring)] text-[var(--play-cockpit-arena-center-ring-text)] shadow-[0_0_0_clamp(0.12rem,0.5vw,0.26rem)_color-mix(in_srgb,var(--app-accent-soft)_40%,transparent)]"
+                        : "h-[var(--play-cockpit-arena-center-ring)] w-[var(--play-cockpit-arena-center-ring)] text-[var(--play-cockpit-arena-center-ring-text)] shadow-[0_0_0_clamp(0.25rem,1.2vw,0.65rem)_color-mix(in_srgb,var(--app-accent-soft)_40%,transparent)]"
                     : isTightDensity
-                      ? "h-[clamp(2.5rem,4.6vh,3.2rem)] w-[clamp(2.5rem,4.6vh,3.2rem)] text-[clamp(0.68rem,0.58rem+0.18vw,0.82rem)] shadow-[0_0_0_clamp(0.08rem,0.28vw,0.14rem)_color-mix(in_srgb,var(--app-accent-soft)_34%,transparent)]"
+                      ? "h-[var(--play-cockpit-arena-center-ring)] w-[var(--play-cockpit-arena-center-ring)] text-[var(--play-cockpit-arena-center-ring-text)] shadow-[0_0_0_clamp(0.08rem,0.28vw,0.14rem)_color-mix(in_srgb,var(--app-accent-soft)_34%,transparent)]"
                       : isCompactDensity
-                        ? "h-[clamp(3rem,5.8vh,4.2rem)] w-[clamp(3rem,5.8vh,4.2rem)] text-[clamp(0.76rem,0.66rem+0.24vw,1.02rem)] shadow-[0_0_0_clamp(0.1rem,0.4vw,0.2rem)_color-mix(in_srgb,var(--app-accent-soft)_34%,transparent)]"
-                        : "h-[clamp(4.1rem,8.6vh,6rem)] w-[clamp(4.1rem,8.6vh,6rem)] text-[clamp(0.95rem,0.72rem+0.8vw,1.6rem)] shadow-[0_0_0_clamp(0.16rem,0.7vw,0.32rem)_color-mix(in_srgb,var(--app-accent-soft)_34%,transparent)]"
+                        ? "h-[var(--play-cockpit-arena-center-ring)] w-[var(--play-cockpit-arena-center-ring)] text-[var(--play-cockpit-arena-center-ring-text)] shadow-[0_0_0_clamp(0.1rem,0.4vw,0.2rem)_color-mix(in_srgb,var(--app-accent-soft)_34%,transparent)]"
+                        : "h-[var(--play-cockpit-arena-center-ring)] w-[var(--play-cockpit-arena-center-ring)] text-[var(--play-cockpit-arena-center-ring-text)] shadow-[0_0_0_clamp(0.16rem,0.7vw,0.32rem)_color-mix(in_srgb,var(--app-accent-soft)_34%,transparent)]"
                 }`}
               >
                 VS
               </div>
-              <p className={`play-shell-heading font-semibold tracking-[-0.04em] ${isStrongCenter ? isTightDensity ? "text-[clamp(0.9rem,0.74rem+0.36vw,1.18rem)]" : isCompactDensity ? "text-[clamp(1rem,0.82rem+0.46vw,1.42rem)]" : "text-[clamp(1.2rem,0.8rem+1.15vw,2.1rem)]" : isTightDensity ? "text-[clamp(0.82rem,0.7rem+0.3vw,1rem)]" : isCompactDensity ? "text-[clamp(0.9rem,0.74rem+0.38vw,1.2rem)]" : "text-[clamp(1rem,0.76rem+0.9vw,1.6rem)]"}`}>
+              <p
+                data-testid={testIdPrefix ? `${testIdPrefix}-center-title` : undefined}
+                className="play-shell-heading font-semibold tracking-[-0.04em] text-[var(--play-cockpit-arena-center-title)]"
+                style={{ fontSize: `${sizing.centerTitleRem}rem` }}
+              >
                 {centerTitle}
               </p>
               {centerDetail && (
-                <p className={`play-shell-text-muted max-[900px]:line-clamp-2 ${isStrongCenter ? isTightDensity ? "mt-[clamp(0.04rem,0.02rem+0.04vh,0.08rem)] text-[clamp(0.64rem,0.58rem+0.16vw,0.76rem)]" : isCompactDensity ? "mt-[clamp(0.08rem,0.04rem+0.08vh,0.14rem)] text-[clamp(0.72rem,0.64rem+0.2vw,0.86rem)]" : "mt-[clamp(0.12rem,0.06rem+0.18vh,0.28rem)] text-[clamp(0.82rem,0.68rem+0.42vw,1.05rem)]" : isTightDensity ? "mt-[clamp(0.04rem,0.02rem+0.04vh,0.08rem)] text-[clamp(0.6rem,0.54rem+0.14vw,0.7rem)]" : "mt-[clamp(0.18rem,0.1rem+0.22vh,0.35rem)] text-[clamp(0.76rem,0.64rem+0.3vw,0.95rem)]"}`}>
+                <p
+                  className="play-shell-text-muted mt-[clamp(0.08rem,0.04rem+0.08vh,0.18rem)] max-[900px]:line-clamp-2 text-[var(--play-cockpit-arena-center-detail)]"
+                  style={{ fontSize: `${sizing.centerDetailRem}rem` }}
+                >
                   {centerDetail}
                 </p>
               )}
@@ -159,7 +213,7 @@ export default function GameArena({
         </div>
 
         <div className="border-l border-[color:var(--app-border)]">
-          <ArenaEdgeSlot slot={rightSlot} density={density} />
+          <ArenaEdgeSlot slot={rightSlot} density={density} scale={scale} testId={testIdPrefix ? `${testIdPrefix}-right-pane` : undefined} />
         </div>
       </div>
 

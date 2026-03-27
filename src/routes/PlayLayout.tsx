@@ -125,7 +125,11 @@ function PlayLayoutShell() {
         } as React.CSSProperties
       }
     >
-      <header ref={headerRef} className="play-shell-header sticky top-0 z-[95] border-b backdrop-blur-xl">
+      <header
+        ref={headerRef}
+        data-testid="play-shell-header"
+        className="play-shell-header sticky top-0 z-[95] border-b backdrop-blur-xl"
+      >
         <div className="flex w-full min-w-0 items-center justify-between gap-3 px-4 py-2 sm:px-5 sm:py-2.5 lg:px-6">
           <div className="flex min-w-0 items-center gap-3">
             <div className="play-shell-brand flex h-9 w-9 shrink-0 items-center justify-center rounded-full shadow-[0_10px_22px_rgba(14,165,233,0.16)]">

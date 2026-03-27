@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { GameplayTone } from "./GameHudHeader";
 import type { CockpitDensity } from "./cockpitViewport";
 
@@ -19,6 +19,7 @@ interface AiLivePanelProps {
   inactive?: boolean;
   inactiveMessage?: React.ReactNode;
   density?: CockpitDensity;
+  testIdPrefix?: string;
 }
 
 const toneClasses: Record<GameplayTone, string> = {
@@ -39,6 +40,27 @@ const toneTextClasses: Record<GameplayTone, string> = {
   danger: "text-rose-500",
 };
 
+const densityOrder: CockpitDensity[] = ["expanded", "normal", "compact", "tight"];
+
+function clampDensityIndex(index: number) {
+  return Math.max(0, Math.min(densityOrder.length - 1, index));
+}
+
+function getBottomSafetyBuffer(density: CockpitDensity) {
+  switch (density) {
+    case "expanded":
+      return 18;
+    case "normal":
+      return 16;
+    case "compact":
+      return 14;
+    case "tight":
+      return 12;
+    default:
+      return 14;
+  }
+}
+
 export default function AiLivePanel({
   title,
   summary,
@@ -49,19 +71,78 @@ export default function AiLivePanel({
   inactive = false,
   inactiveMessage,
   density = "normal",
+  testIdPrefix,
 }: AiLivePanelProps) {
-  const isCompactDensity = density !== "normal";
-  const isTightDensity = density === "tight";
-  const visibleNotes = isTightDensity ? [] : isCompactDensity ? notes.slice(0, 1) : notes;
+  const rootRef = useRef<HTMLElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const requestedDensityIndex = useMemo(() => densityOrder.indexOf(density), [density]);
+  const [effectiveDensity, setEffectiveDensity] = useState<CockpitDensity>(density);
+  useEffect(() => {
+    setEffectiveDensity(density);
+  }, [density]);
+
+  useEffect(() => {
+    const rootNode = rootRef.current;
+    const contentNode = contentRef.current;
+    if (!rootNode || !contentNode || typeof ResizeObserver === "undefined") return;
+
+    const reconcile = () => {
+      const activeIndex = densityOrder.indexOf(effectiveDensity);
+      const availableHeight = Math.max(0, rootNode.clientHeight - getBottomSafetyBuffer(effectiveDensity));
+      const neededHeight = contentNode.scrollHeight;
+      const overflow = neededHeight > availableHeight + 1;
+      const slack = availableHeight - neededHeight;
+
+      if (overflow && activeIndex < densityOrder.length - 1) {
+        setEffectiveDensity(densityOrder[clampDensityIndex(activeIndex + 1)]);
+        return;
+      }
+
+      if (!overflow && activeIndex > requestedDensityIndex && slack > 20) {
+        setEffectiveDensity(densityOrder[clampDensityIndex(activeIndex - 1)]);
+        return;
+      }
+
+    };
+
+    reconcile();
+
+    const observer = new ResizeObserver(() => reconcile());
+    observer.observe(rootNode);
+    observer.observe(contentNode);
+    window.addEventListener("resize", reconcile);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", reconcile);
+    };
+  }, [effectiveDensity, requestedDensityIndex, signals, notes, children]);
+
+  const isCompactDensity = effectiveDensity !== "normal" && effectiveDensity !== "expanded";
+  const isTightDensity = effectiveDensity === "tight";
+  const panelChildren = React.isValidElement(children)
+    ? React.cloneElement(children as React.ReactElement<{ cramped?: boolean }>, { cramped: isTightDensity })
+    : children;
+  const visibleNotes = notes;
+  const visibleSignals = signals;
+  const buildSignalTestId = (label: string) =>
+    testIdPrefix ? `${testIdPrefix}-signal-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}` : undefined;
 
   return (
-    <aside className={`flex h-full min-h-0 flex-col overflow-hidden ${inactive ? "opacity-75" : ""}`}>
+    <aside
+      ref={rootRef}
+      data-ai-density={effectiveDensity}
+      className={`flex h-full min-h-0 min-w-0 flex-col overflow-hidden ${inactive ? "opacity-75" : ""}`}
+    >
+      <div ref={contentRef} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className={`border-b border-[color:var(--app-border)] ${isTightDensity ? "pb-[clamp(0.24rem,0.12rem+0.18vh,0.36rem)]" : isCompactDensity ? "pb-[clamp(0.3rem,0.16rem+0.26vh,0.48rem)]" : "pb-[clamp(0.45rem,0.22rem+0.65vh,0.8rem)]"}`}>
         <p className={`play-shell-heading font-semibold tracking-[-0.03em] ${isTightDensity ? "text-[clamp(0.82rem,0.74rem+0.24vw,0.92rem)]" : isCompactDensity ? "text-[clamp(0.88rem,0.78rem+0.28vw,1rem)]" : "text-[clamp(0.95rem,0.78rem+0.42vw,1.1rem)]"}`}>{title}</p>
         {summary && (
           <p
-            className={`play-shell-text-muted mt-[clamp(0.12rem,0.06rem+0.12vh,0.22rem)] text-[clamp(0.62rem,0.56rem+0.14vw,0.76rem)] ${
-              isTightDensity ? "hidden" : "line-clamp-2"
+            className={`play-shell-text-muted mt-[clamp(0.12rem,0.06rem+0.12vh,0.22rem)] break-words ${
+              isTightDensity
+                ? "text-[clamp(0.56rem,0.52rem+0.1vw,0.66rem)] line-clamp-3"
+                : "text-[clamp(0.62rem,0.56rem+0.14vw,0.76rem)] line-clamp-2"
             }`}
           >
             {summary}
@@ -70,27 +151,44 @@ export default function AiLivePanel({
       </div>
 
       {signalLayout === "rows" ? (
-        <div className={`divide-y divide-[color:var(--app-border)] ${isTightDensity ? "py-[clamp(0.14rem,0.08rem+0.14vh,0.24rem)]" : isCompactDensity ? "py-[clamp(0.2rem,0.12rem+0.18vh,0.34rem)]" : "py-[clamp(0.3rem,0.16rem+0.35vh,0.5rem)]"}`}>
-          {signals.map((signal, index) => (
+        <div className={`min-h-0 min-w-0 divide-y divide-[color:var(--app-border)] ${isTightDensity ? "py-[clamp(0.1rem,0.06rem+0.08vh,0.16rem)]" : isCompactDensity ? "py-[clamp(0.16rem,0.1rem+0.12vh,0.26rem)]" : "py-[clamp(0.3rem,0.16rem+0.35vh,0.5rem)]"}`}>
+          {visibleSignals.map((signal, index) => (
             <article
               key={`${signal.label}-${signal.value}`}
-              className={`grid grid-cols-[auto_1fr] items-start ${
+              data-testid={buildSignalTestId(signal.label)}
+              className={`grid min-w-0 grid-cols-[minmax(0,auto)_minmax(0,1fr)] items-start ${
                 isTightDensity
-                  ? "gap-x-[clamp(0.26rem,0.14rem+0.18vw,0.42rem)] gap-y-[clamp(0.04rem,0.02rem+0.04vh,0.08rem)] px-[clamp(0.04rem,0.02rem+0.06vw,0.1rem)] py-[clamp(0.22rem,0.12rem+0.18vh,0.34rem)]"
+                  ? "gap-x-[clamp(0.22rem,0.12rem+0.14vw,0.34rem)] gap-y-[clamp(0.03rem,0.02rem+0.02vh,0.06rem)] px-[clamp(0.04rem,0.02rem+0.04vw,0.08rem)] py-[clamp(0.18rem,0.1rem+0.14vh,0.28rem)]"
                   : isCompactDensity
-                    ? "gap-x-[clamp(0.32rem,0.18rem+0.22vw,0.5rem)] gap-y-[clamp(0.06rem,0.03rem+0.06vh,0.12rem)] px-[clamp(0.06rem,0.03rem+0.08vw,0.16rem)] py-[clamp(0.28rem,0.15rem+0.22vh,0.42rem)]"
+                    ? "gap-x-[clamp(0.26rem,0.16rem+0.18vw,0.42rem)] gap-y-[clamp(0.04rem,0.02rem+0.04vh,0.08rem)] px-[clamp(0.05rem,0.03rem+0.06vw,0.12rem)] py-[clamp(0.22rem,0.12rem+0.16vh,0.34rem)]"
                     : "gap-x-[clamp(0.4rem,0.22rem+0.35vw,0.75rem)] gap-y-[clamp(0.1rem,0.04rem+0.1vh,0.2rem)] px-[clamp(0.1rem,0.05rem+0.12vw,0.3rem)] py-[clamp(0.38rem,0.2rem+0.45vh,0.65rem)]"
               }`}
             >
-              <p className={`font-semibold uppercase tracking-[0.18em] text-[color:var(--app-text-muted)] ${isTightDensity ? "text-[clamp(0.46rem,0.42rem+0.1vw,0.54rem)]" : "text-[clamp(0.52rem,0.46rem+0.12vw,0.62rem)]"}`}>
+              <p
+                className="min-w-0 font-semibold uppercase tracking-[0.18em] text-[color:var(--app-text-muted)] text-[var(--play-cockpit-ai-label-size)]"
+                style={{ fontSize: "var(--play-cockpit-ai-label-size)" }}
+              >
                 {signal.label}
               </p>
-              <div className="text-right">
-                <p className={`font-semibold tracking-[-0.02em] ${isTightDensity ? "text-[clamp(0.72rem,0.66rem+0.18vw,0.82rem)]" : isCompactDensity ? "text-[clamp(0.75rem,0.68rem+0.2vw,0.86rem)]" : "text-[clamp(0.78rem,0.68rem+0.24vw,0.92rem)]"} ${toneTextClasses[signal.tone ?? "default"]}`}>
+              <div className="min-w-0 text-right">
+                <p
+                  data-testid={buildSignalTestId(`${signal.label}-value`)}
+                  className={`min-w-0 break-words font-semibold tracking-[-0.02em] text-[var(--play-cockpit-ai-value-size)] ${toneTextClasses[signal.tone ?? "default"]}`}
+                  style={{ fontSize: "var(--play-cockpit-ai-value-size)" }}
+                >
                   {signal.value}
                 </p>
-                {signal.detail && !(isTightDensity && index >= 3) && (
-                  <p className={`mt-[clamp(0.04rem,0.02rem+0.04vh,0.1rem)] text-[color:var(--app-text-muted)] max-[900px]:line-clamp-1 ${isTightDensity ? "text-[clamp(0.56rem,0.52rem+0.1vw,0.64rem)]" : "text-[clamp(0.62rem,0.56rem+0.14vw,0.72rem)]"}`}>
+                {signal.detail && (
+                  <p
+                    className={`mt-[clamp(0.04rem,0.02rem+0.04vh,0.1rem)] break-words text-[color:var(--app-text-muted)] ${
+                      isTightDensity ? "line-clamp-2" : "max-[900px]:line-clamp-1"
+                    }`}
+                    style={{
+                      fontSize: isTightDensity
+                        ? "clamp(0.54rem, 0.5rem + 0.08vw, 0.62rem)"
+                        : "var(--play-cockpit-ai-detail-size)",
+                    }}
+                  >
                     {signal.detail}
                   </p>
                 )}
@@ -114,20 +212,32 @@ export default function AiLivePanel({
       )}
 
       {(notes.length > 0 || children) && (
-        <div className={`min-h-0 flex-1 border-t border-[color:var(--app-border)] ${isTightDensity ? "py-[clamp(0.22rem,0.12rem+0.18vh,0.34rem)]" : isCompactDensity ? "py-[clamp(0.28rem,0.16rem+0.22vh,0.44rem)]" : "py-[clamp(0.45rem,0.22rem+0.65vh,0.8rem)]"}`}>
+        <div
+          className={`min-h-0 min-w-0 flex-1 overflow-hidden border-t border-[color:var(--app-border)] ${
+            isTightDensity
+              ? "py-[clamp(0.12rem,0.06rem+0.1vh,0.2rem)] pb-[clamp(0.4rem,0.18rem+0.3vh,0.56rem)]"
+              : isCompactDensity
+                ? "py-[clamp(0.18rem,0.1rem+0.16vh,0.28rem)] pb-[clamp(0.5rem,0.24rem+0.38vh,0.72rem)]"
+                : "py-[clamp(0.36rem,0.18rem+0.55vh,0.62rem)] pb-[clamp(0.68rem,0.3rem+0.78vh,0.98rem)]"
+          }`}
+        >
           {visibleNotes.length > 0 && (
-            <div className={`mb-[clamp(0.24rem,0.12rem+0.18vh,0.38rem)] flex flex-wrap gap-[clamp(0.2rem,0.14rem+0.16vw,0.32rem)] ${isTightDensity ? "hidden" : ""}`}>
+            <div className={`mb-[clamp(0.24rem,0.12rem+0.18vh,0.38rem)] flex flex-wrap gap-[clamp(0.2rem,0.14rem+0.16vw,0.32rem)]`}>
               {visibleNotes.map(note => (
                 <span
                   key={note}
-                  className="rounded-full border border-[color:var(--app-border)] bg-[color:var(--app-surface-subtle)] px-[clamp(0.3rem,0.22rem+0.16vw,0.42rem)] py-[clamp(0.12rem,0.08rem+0.06vw,0.18rem)] text-[clamp(0.48rem,0.44rem+0.1vw,0.58rem)] font-medium text-[color:var(--app-text-secondary)]"
+                  className={`rounded-full border border-[color:var(--app-border)] bg-[color:var(--app-surface-subtle)] font-medium text-[color:var(--app-text-secondary)] ${
+                    isTightDensity
+                      ? "px-[clamp(0.22rem,0.16rem+0.1vw,0.3rem)] py-[clamp(0.08rem,0.06rem+0.04vw,0.12rem)] text-[clamp(0.42rem,0.4rem+0.08vw,0.5rem)]"
+                      : "px-[clamp(0.3rem,0.22rem+0.16vw,0.42rem)] py-[clamp(0.12rem,0.08rem+0.06vw,0.18rem)] text-[clamp(0.48rem,0.44rem+0.1vw,0.58rem)]"
+                  }`}
                 >
                   {note}
                 </span>
               ))}
             </div>
           )}
-          {children}
+          {panelChildren}
         </div>
       )}
 
@@ -136,6 +246,7 @@ export default function AiLivePanel({
           {inactiveMessage}
         </div>
       )}
+      </div>
     </aside>
   );
 }

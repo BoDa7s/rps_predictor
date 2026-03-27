@@ -100,6 +100,7 @@ export default function TrainingGamePage() {
   return (
     <div
       ref={viewport.rootRef}
+      data-testid="training-workspace"
       className="h-full min-h-0 overflow-hidden bg-[color:var(--app-bg)]"
       style={{
         ...viewport.style,
@@ -110,7 +111,10 @@ export default function TrainingGamePage() {
       <section className="grid h-full min-h-0 overflow-hidden" style={{ gridTemplateRows: cockpitGridTemplates.rows }}>
         <div className="grid min-h-0" style={{ gridTemplateColumns: cockpitGridTemplates.topColumns }}>
           <div className="grid min-h-0 [grid-template-rows:auto_minmax(0,1fr)] border-r border-[color:var(--app-border)]">
-            <div className="border-b border-[color:var(--app-border)] px-[var(--play-cockpit-header-pad-x)] py-[var(--play-cockpit-header-pad-y)]">
+            <div
+              data-testid="training-header"
+              className="border-b border-[color:var(--app-border)] px-[var(--play-cockpit-header-pad-x)] py-[var(--play-cockpit-header-pad-y)]"
+            >
               <GameHudHeader
                 title="Training Match"
                 subtitle={training.currentPlayerName}
@@ -121,7 +125,7 @@ export default function TrainingGamePage() {
               />
             </div>
 
-            <div className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
+            <div data-testid="training-arena" className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
               <AnimatePresence mode="wait">
                 <motion.div
                   key={arenaKey}
@@ -170,7 +174,7 @@ export default function TrainingGamePage() {
             </div>
           </div>
 
-          <div className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
+          <div data-testid="training-ai-rail" className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
             <AiLivePanel
               title="AI Live"
               summary="Unavailable during training"
@@ -204,7 +208,10 @@ export default function TrainingGamePage() {
           }`}
           style={{ gridTemplateColumns: cockpitGridTemplates.dockColumns }}
         >
-          <div className="min-h-0 border-r border-[color:var(--app-border)] px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
+          <div
+            data-testid="training-move-controls"
+            className="min-h-0 border-r border-[color:var(--app-border)] px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]"
+          >
             <MoveControls
               title="Choose move"
               options={moveOptions}
@@ -225,7 +232,7 @@ export default function TrainingGamePage() {
             />
           </div>
 
-          <div className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
+          <div data-testid="training-recent-strip" className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
             <motion.div
               key={historyKey}
               initial={{ opacity: 0.75, y: 8 }}

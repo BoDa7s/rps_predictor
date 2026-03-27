@@ -7,7 +7,7 @@ import GameHudHeader, { type GameHudStat } from "../../components/play/GameHudHe
 import MoveControls, { type MoveControlOption } from "../../components/play/MoveControls";
 import PredictionSourcesPanel from "../../components/play/PredictionSourcesPanel";
 import RoundHistoryStrip from "../../components/play/RoundHistoryStrip";
-import { cockpitGridTemplates, useCockpitViewport } from "../../components/play/cockpitViewport";
+import { cockpitGridTemplates, useCockpitViewport, usePaneDensity } from "../../components/play/cockpitViewport";
 import { useChallengeRuntime } from "../../hooks/useChallengeRuntime";
 import {
   PLAY_DASHBOARD_PATH,
@@ -23,7 +23,13 @@ function formatMoveLabel(move?: "rock" | "paper" | "scissors") {
 export default function ChallengeGamePage() {
   const { currentProfile } = useStats();
   const runtime = useChallengeRuntime();
-  const viewport = useCockpitViewport();
+  const viewport = useCockpitViewport({ variant: "challenge" });
+  const aiRailPane = usePaneDensity(viewport.density, {
+    minNormalHeight: 440,
+    minCompactHeight: 320,
+    minNormalWidth: 220,
+    minCompactWidth: 190,
+  });
 
   if (profileNeedsTraining(currentProfile)) {
     return <Navigate to={buildTrainingStartPath()} replace />;
@@ -71,6 +77,9 @@ export default function ChallengeGamePage() {
   return (
     <div
       ref={viewport.rootRef}
+      data-testid="challenge-workspace"
+      data-density={viewport.density}
+      data-game-scale={viewport.scale.toFixed(3)}
       className="relative h-full min-h-0 overflow-hidden bg-[color:var(--app-bg)]"
       style={{
         ...viewport.style,
@@ -81,7 +90,10 @@ export default function ChallengeGamePage() {
       <section className="grid h-full min-h-0 overflow-hidden" style={{ gridTemplateRows: cockpitGridTemplates.rows }}>
         <div className="grid min-h-0" style={{ gridTemplateColumns: cockpitGridTemplates.topColumns }}>
           <div className="grid min-h-0 [grid-template-rows:auto_minmax(0,1fr)] border-r border-[color:var(--app-border)]">
-            <div className="border-b border-[color:var(--app-border)] px-[var(--play-cockpit-header-pad-x)] py-[var(--play-cockpit-header-pad-y)]">
+            <div
+              data-testid="challenge-header"
+              className="border-b border-[color:var(--app-border)] px-[var(--play-cockpit-header-pad-x)] py-[var(--play-cockpit-header-pad-y)]"
+            >
               <GameHudHeader
                 title="Challenge Match"
                 subtitle={runtime.currentPlayerName}
@@ -93,7 +105,7 @@ export default function ChallengeGamePage() {
               />
             </div>
 
-            <div className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
+            <div data-testid="challenge-arena" className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
               <motion.div
                 key={`${runtime.phase}-${runtime.roundNumber}-${runtime.playerPick ?? "none"}-${runtime.aiPick ?? "none"}`}
                 className="h-full"
@@ -137,22 +149,33 @@ export default function ChallengeGamePage() {
                   centerBadge={`${Math.min(runtime.roundNumber, runtime.bestOf)} / ${runtime.bestOf}`}
                   centerEmphasis="strong"
                   density={viewport.density}
+                  scale={viewport.scale}
+                  testIdPrefix="challenge-arena"
                 />
               </motion.div>
             </div>
           </div>
 
-          <div className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
-            <AiLivePanel
-              title="AI Live"
-              summary="Intent, counter plan, and source balance"
-              signals={runtime.aiSignals}
-              signalLayout="rows"
-              notes={runtime.liveSnapshot?.topExperts.slice(0, 2).map(expert => expert.name) ?? ["Predictor active"]}
-              density={viewport.density}
-            >
-              <PredictionSourcesPanel title="Source mix" sources={runtime.predictionSources} layout="rows" metaLabel={null} density={viewport.density} />
-            </AiLivePanel>
+          <div
+            ref={aiRailPane.paneRef}
+            data-testid="challenge-ai-rail"
+            data-pane-density={aiRailPane.density}
+            className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]"
+          >
+            <div data-testid="challenge-ai-state" data-live-state={runtime.liveSnapshot ? "expanded" : "idle"} className="h-full">
+              {runtime.liveSnapshot && <span data-testid="challenge-ai-expanded-marker" className="sr-only">expanded</span>}
+              <AiLivePanel
+                title="AI Live"
+                summary="Intent, counter plan, and source balance"
+                signals={runtime.aiSignals}
+                signalLayout="rows"
+                notes={runtime.liveSnapshot?.topExperts.slice(0, 2).map(expert => expert.name) ?? ["Predictor active"]}
+                density={aiRailPane.density}
+                testIdPrefix="challenge-ai"
+              >
+                <PredictionSourcesPanel title="Source mix" sources={runtime.predictionSources} layout="rows" metaLabel={null} density={aiRailPane.density} />
+              </AiLivePanel>
+            </div>
           </div>
         </div>
 
@@ -166,7 +189,10 @@ export default function ChallengeGamePage() {
           }`}
           style={{ gridTemplateColumns: cockpitGridTemplates.dockColumns }}
         >
-          <div className="min-h-0 border-r border-[color:var(--app-border)] px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
+          <div
+            data-testid="challenge-move-controls"
+            className="min-h-0 border-r border-[color:var(--app-border)] px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]"
+          >
             <MoveControls
               title="Choose move"
               options={moveOptions}
@@ -174,10 +200,11 @@ export default function ChallengeGamePage() {
               footer={runtime.resultSummary ?? `Score ${runtime.scoreLabel}`}
               onSelect={option => runtime.selectMove(option.move)}
               density={viewport.density}
+              testIdPrefix="challenge-controls"
             />
           </div>
 
-          <div className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
+          <div data-testid="challenge-recent-strip" className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
             <RoundHistoryStrip title="Recent" rounds={runtime.matchHistory} compact metaLabel={null} />
           </div>
         </div>
