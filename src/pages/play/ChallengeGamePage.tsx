@@ -7,7 +7,7 @@ import GameHudHeader, { type GameHudStat } from "../../components/play/GameHudHe
 import MoveControls, { type MoveControlOption } from "../../components/play/MoveControls";
 import PredictionSourcesPanel from "../../components/play/PredictionSourcesPanel";
 import RoundHistoryStrip from "../../components/play/RoundHistoryStrip";
-import { cockpitGridTemplates, cockpitViewportStyle } from "../../components/play/cockpitViewport";
+import { cockpitGridTemplates, useCockpitViewport } from "../../components/play/cockpitViewport";
 import { useChallengeRuntime } from "../../hooks/useChallengeRuntime";
 import {
   PLAY_DASHBOARD_PATH,
@@ -23,6 +23,7 @@ function formatMoveLabel(move?: "rock" | "paper" | "scissors") {
 export default function ChallengeGamePage() {
   const { currentProfile } = useStats();
   const runtime = useChallengeRuntime();
+  const viewport = useCockpitViewport();
 
   if (profileNeedsTraining(currentProfile)) {
     return <Navigate to={buildTrainingStartPath()} replace />;
@@ -69,9 +70,10 @@ export default function ChallengeGamePage() {
 
   return (
     <div
+      ref={viewport.rootRef}
       className="relative h-full min-h-0 overflow-hidden bg-[color:var(--app-bg)]"
       style={{
-        ...cockpitViewportStyle,
+        ...viewport.style,
         backgroundImage:
           "radial-gradient(circle at top left, color-mix(in srgb, var(--app-accent-soft) 32%, transparent), transparent 28%), radial-gradient(circle at right center, color-mix(in srgb, var(--app-accent-muted) 18%, transparent), transparent 22%)",
       }}
@@ -87,14 +89,7 @@ export default function ChallengeGamePage() {
                 alignment="center"
                 statColumns={2}
                 compact
-                actions={
-                  <Link
-                    to={PLAY_DASHBOARD_PATH}
-                    className="play-shell-button play-shell-button-muted inline-flex items-center justify-center rounded-full px-3 py-2 text-sm font-semibold"
-                  >
-                    Dashboard
-                  </Link>
-                }
+                density={viewport.density}
               />
             </div>
 
@@ -141,6 +136,7 @@ export default function ChallengeGamePage() {
                   centerDetail={runtime.revealState.centerDetail}
                   centerBadge={`${Math.min(runtime.roundNumber, runtime.bestOf)} / ${runtime.bestOf}`}
                   centerEmphasis="strong"
+                  density={viewport.density}
                 />
               </motion.div>
             </div>
@@ -153,14 +149,21 @@ export default function ChallengeGamePage() {
               signals={runtime.aiSignals}
               signalLayout="rows"
               notes={runtime.liveSnapshot?.topExperts.slice(0, 2).map(expert => expert.name) ?? ["Predictor active"]}
+              density={viewport.density}
             >
-              <PredictionSourcesPanel title="Source mix" sources={runtime.predictionSources} layout="rows" metaLabel={null} />
+              <PredictionSourcesPanel title="Source mix" sources={runtime.predictionSources} layout="rows" metaLabel={null} density={viewport.density} />
             </AiLivePanel>
           </div>
         </div>
 
         <div
-          className="grid min-h-0 border-t border-[color:var(--app-border)] bg-[color:color-mix(in_srgb,var(--app-surface-subtle)_24%,transparent)] pt-[clamp(0.45rem,0.18rem+0.9vh,0.9rem)] pb-[calc(var(--play-cockpit-bottom-safe)+clamp(0.25rem,0.1rem+0.45vh,0.55rem))]"
+          className={`grid min-h-0 border-t border-[color:var(--app-border)] bg-[color:color-mix(in_srgb,var(--app-surface-subtle)_24%,transparent)] ${
+            viewport.density === "tight"
+              ? "pt-[clamp(0.24rem,0.12rem+0.18vh,0.34rem)] pb-[calc(var(--play-cockpit-bottom-safe)+clamp(0.12rem,0.06rem+0.12vh,0.2rem))]"
+              : viewport.density === "compact"
+                ? "pt-[clamp(0.3rem,0.16rem+0.22vh,0.44rem)] pb-[calc(var(--play-cockpit-bottom-safe)+clamp(0.16rem,0.08rem+0.16vh,0.26rem))]"
+                : "pt-[clamp(0.45rem,0.18rem+0.9vh,0.9rem)] pb-[calc(var(--play-cockpit-bottom-safe)+clamp(0.25rem,0.1rem+0.45vh,0.55rem))]"
+          }`}
           style={{ gridTemplateColumns: cockpitGridTemplates.dockColumns }}
         >
           <div className="min-h-0 border-r border-[color:var(--app-border)] px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
@@ -170,6 +173,7 @@ export default function ChallengeGamePage() {
               variant="challenge"
               footer={runtime.resultSummary ?? `Score ${runtime.scoreLabel}`}
               onSelect={option => runtime.selectMove(option.move)}
+              density={viewport.density}
             />
           </div>
 

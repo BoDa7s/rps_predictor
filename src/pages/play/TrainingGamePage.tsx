@@ -1,12 +1,11 @@
 import React, { useMemo } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Link } from "react-router-dom";
 import AiLivePanel, { type AiLiveSignal } from "../../components/play/AiLivePanel";
 import GameArena from "../../components/play/GameArena";
 import GameHudHeader, { type GameHudStat } from "../../components/play/GameHudHeader";
 import MoveControls, { type MoveControlOption } from "../../components/play/MoveControls";
 import RoundHistoryStrip from "../../components/play/RoundHistoryStrip";
-import { cockpitGridTemplates, cockpitViewportStyle } from "../../components/play/cockpitViewport";
+import { cockpitGridTemplates, useCockpitViewport } from "../../components/play/cockpitViewport";
 import { useTrainingRuntime } from "../../hooks/useTrainingRuntime";
 
 const trainingRailSignals: AiLiveSignal[] = [
@@ -47,6 +46,7 @@ function getOpponentDetail(
 
 export default function TrainingGamePage() {
   const training = useTrainingRuntime();
+  const viewport = useCockpitViewport();
   const playerMoveLabel = training.playerPick
     ? `${training.playerPick.charAt(0).toUpperCase() + training.playerPick.slice(1)}`
     : null;
@@ -99,9 +99,10 @@ export default function TrainingGamePage() {
 
   return (
     <div
+      ref={viewport.rootRef}
       className="h-full min-h-0 overflow-hidden bg-[color:var(--app-bg)]"
       style={{
-        ...cockpitViewportStyle,
+        ...viewport.style,
         backgroundImage:
           "radial-gradient(circle at top left, color-mix(in srgb, var(--app-accent-soft) 30%, transparent), transparent 28%), radial-gradient(circle at right center, color-mix(in srgb, var(--app-accent-muted) 14%, transparent), transparent 22%)",
       }}
@@ -116,14 +117,7 @@ export default function TrainingGamePage() {
                 stats={headerStats}
                 alignment="center"
                 compact
-                actions={
-                  <Link
-                    to="/play/dashboard"
-                    className="play-shell-button play-shell-button-muted inline-flex items-center justify-center rounded-full px-3 py-2 text-sm font-semibold"
-                  >
-                    Dashboard
-                  </Link>
-                }
+                density={viewport.density}
               />
             </div>
 
@@ -169,6 +163,7 @@ export default function TrainingGamePage() {
                     centerDetail={training.revealState.centerDetail}
                     centerBadge={`${Math.min(training.roundNumber, training.totalRounds)} / ${training.totalRounds}`}
                     centerEmphasis="strong"
+                    density={viewport.density}
                   />
                 </motion.div>
               </AnimatePresence>
@@ -183,8 +178,15 @@ export default function TrainingGamePage() {
               signalLayout="rows"
               notes={["AI off", "Random mode on"]}
               inactive
+              density={viewport.density}
               inactiveMessage={
-                <div className="rounded-[0.95rem] border border-dashed border-[color:var(--app-border)] bg-[color:var(--app-surface-subtle)] px-3 py-3 text-sm text-[color:var(--app-text-muted)]">
+                <div className={`rounded-[0.95rem] border border-dashed border-[color:var(--app-border)] bg-[color:var(--app-surface-subtle)] text-[color:var(--app-text-muted)] ${
+                  viewport.density === "tight"
+                    ? "px-2.5 py-2 text-[0.68rem] leading-4"
+                    : viewport.density === "compact"
+                      ? "px-3 py-2.5 text-[0.74rem] leading-5"
+                      : "px-3 py-3 text-sm"
+                }`}>
                   Training uses random hands only. Prediction and counterplay stay disabled until challenge mode.
                 </div>
               }
@@ -193,7 +195,13 @@ export default function TrainingGamePage() {
         </div>
 
         <div
-          className="grid min-h-0 border-t border-[color:var(--app-border)] bg-[color:color-mix(in_srgb,var(--app-surface-subtle)_24%,transparent)] pt-[clamp(0.45rem,0.18rem+0.9vh,0.9rem)] pb-[calc(var(--play-cockpit-bottom-safe)+clamp(0.25rem,0.1rem+0.45vh,0.55rem))]"
+          className={`grid min-h-0 border-t border-[color:var(--app-border)] bg-[color:color-mix(in_srgb,var(--app-surface-subtle)_24%,transparent)] ${
+            viewport.density === "tight"
+              ? "pt-[clamp(0.24rem,0.12rem+0.18vh,0.34rem)] pb-[calc(var(--play-cockpit-bottom-safe)+clamp(0.12rem,0.06rem+0.12vh,0.2rem))]"
+              : viewport.density === "compact"
+                ? "pt-[clamp(0.3rem,0.16rem+0.22vh,0.44rem)] pb-[calc(var(--play-cockpit-bottom-safe)+clamp(0.16rem,0.08rem+0.16vh,0.26rem))]"
+                : "pt-[clamp(0.45rem,0.18rem+0.9vh,0.9rem)] pb-[calc(var(--play-cockpit-bottom-safe)+clamp(0.25rem,0.1rem+0.45vh,0.55rem))]"
+          }`}
           style={{ gridTemplateColumns: cockpitGridTemplates.dockColumns }}
         >
           <div className="min-h-0 border-r border-[color:var(--app-border)] px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
@@ -201,6 +209,7 @@ export default function TrainingGamePage() {
               title="Choose move"
               options={moveOptions}
               variant="challenge"
+              density={viewport.density}
               onSelect={option => training.selectMove(option.move)}
               footer={
                 training.phase === "countdown"
