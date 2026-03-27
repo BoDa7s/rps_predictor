@@ -6,6 +6,7 @@ import GameArena from "../../components/play/GameArena";
 import GameHudHeader, { type GameHudStat } from "../../components/play/GameHudHeader";
 import MoveControls, { type MoveControlOption } from "../../components/play/MoveControls";
 import RoundHistoryStrip from "../../components/play/RoundHistoryStrip";
+import { cockpitGridTemplates, cockpitViewportStyle } from "../../components/play/cockpitViewport";
 import { useTrainingRuntime } from "../../hooks/useTrainingRuntime";
 
 const trainingRailSignals: AiLiveSignal[] = [
@@ -100,14 +101,15 @@ export default function TrainingGamePage() {
     <div
       className="h-full min-h-0 overflow-hidden bg-[color:var(--app-bg)]"
       style={{
+        ...cockpitViewportStyle,
         backgroundImage:
           "radial-gradient(circle at top left, color-mix(in srgb, var(--app-accent-soft) 30%, transparent), transparent 28%), radial-gradient(circle at right center, color-mix(in srgb, var(--app-accent-muted) 14%, transparent), transparent 22%)",
       }}
     >
-      <section className="grid h-full min-h-0 overflow-hidden [grid-template-rows:minmax(0,1fr)_10.5rem] lg:[grid-template-rows:minmax(0,1fr)_11rem]">
-        <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_13.5rem] sm:grid-cols-[minmax(0,1fr)_16rem] lg:grid-cols-[minmax(0,1fr)_clamp(18rem,24vw,22rem)]">
+      <section className="grid h-full min-h-0 overflow-hidden" style={{ gridTemplateRows: cockpitGridTemplates.rows }}>
+        <div className="grid min-h-0" style={{ gridTemplateColumns: cockpitGridTemplates.topColumns }}>
           <div className="grid min-h-0 [grid-template-rows:auto_minmax(0,1fr)] border-r border-[color:var(--app-border)]">
-            <div className="border-b border-[color:var(--app-border)] px-3 py-2 sm:px-4">
+            <div className="border-b border-[color:var(--app-border)] px-[var(--play-cockpit-header-pad-x)] py-[var(--play-cockpit-header-pad-y)]">
               <GameHudHeader
                 title="Training Match"
                 subtitle={training.currentPlayerName}
@@ -125,7 +127,7 @@ export default function TrainingGamePage() {
               />
             </div>
 
-            <div className="min-h-0 px-3 py-3 sm:px-4 sm:py-4">
+            <div className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
               <AnimatePresence mode="wait">
                 <motion.div
                   key={arenaKey}
@@ -173,7 +175,7 @@ export default function TrainingGamePage() {
             </div>
           </div>
 
-          <div className="min-h-0 px-3 py-3 sm:px-4 sm:py-4">
+          <div className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
             <AiLivePanel
               title="AI Live"
               summary="Unavailable during training"
@@ -190,8 +192,11 @@ export default function TrainingGamePage() {
           </div>
         </div>
 
-        <div className="grid min-h-0 grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)] border-t border-[color:var(--app-border)] bg-[color:color-mix(in_srgb,var(--app-surface-subtle)_24%,transparent)] pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
-          <div className="min-h-0 border-r border-[color:var(--app-border)] px-3 py-3.5 sm:px-4 sm:py-4">
+        <div
+          className="grid min-h-0 border-t border-[color:var(--app-border)] bg-[color:color-mix(in_srgb,var(--app-surface-subtle)_24%,transparent)] pt-[clamp(0.45rem,0.18rem+0.9vh,0.9rem)] pb-[calc(var(--play-cockpit-bottom-safe)+clamp(0.25rem,0.1rem+0.45vh,0.55rem))]"
+          style={{ gridTemplateColumns: cockpitGridTemplates.dockColumns }}
+        >
+          <div className="min-h-0 border-r border-[color:var(--app-border)] px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
             <MoveControls
               title="Choose move"
               options={moveOptions}
@@ -211,7 +216,7 @@ export default function TrainingGamePage() {
             />
           </div>
 
-          <div className="min-h-0 px-3 py-3.5 sm:px-4 sm:py-4">
+          <div className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
             <motion.div
               key={historyKey}
               initial={{ opacity: 0.75, y: 8 }}

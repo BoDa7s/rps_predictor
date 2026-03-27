@@ -49,26 +49,26 @@ export default function AiLivePanel({
 }: AiLivePanelProps) {
   return (
     <aside className={`flex h-full min-h-0 flex-col overflow-hidden ${inactive ? "opacity-75" : ""}`}>
-      <div className="border-b border-[color:var(--app-border)] pb-3">
-        <p className="play-shell-heading text-base font-semibold tracking-[-0.03em]">{title}</p>
-        {summary && <p className="play-shell-text-muted mt-1 text-sm">{summary}</p>}
+      <div className="border-b border-[color:var(--app-border)] pb-[clamp(0.45rem,0.22rem+0.65vh,0.8rem)]">
+        <p className="play-shell-heading text-[clamp(0.95rem,0.78rem+0.42vw,1.1rem)] font-semibold tracking-[-0.03em]">{title}</p>
+        {summary && <p className="play-shell-text-muted mt-[clamp(0.15rem,0.06rem+0.18vh,0.28rem)] text-[clamp(0.7rem,0.62rem+0.2vw,0.88rem)] max-[900px]:hidden">{summary}</p>}
       </div>
 
       {signalLayout === "rows" ? (
-        <div className="divide-y divide-[color:var(--app-border)] py-2">
+        <div className="divide-y divide-[color:var(--app-border)] py-[clamp(0.3rem,0.16rem+0.35vh,0.5rem)]">
           {signals.map(signal => (
             <article
               key={`${signal.label}-${signal.value}`}
-              className="grid grid-cols-[auto_1fr] items-start gap-x-3 gap-y-1 px-1 py-2"
+              className="grid grid-cols-[auto_1fr] items-start gap-x-[clamp(0.4rem,0.22rem+0.35vw,0.75rem)] gap-y-[clamp(0.1rem,0.04rem+0.1vh,0.2rem)] px-[clamp(0.1rem,0.05rem+0.12vw,0.3rem)] py-[clamp(0.38rem,0.2rem+0.45vh,0.65rem)]"
             >
-              <p className="text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[color:var(--app-text-muted)]">
+              <p className="text-[clamp(0.52rem,0.46rem+0.12vw,0.62rem)] font-semibold uppercase tracking-[0.18em] text-[color:var(--app-text-muted)]">
                 {signal.label}
               </p>
               <div className="text-right">
-                <p className={`text-sm font-semibold tracking-[-0.02em] ${toneTextClasses[signal.tone ?? "default"]}`}>
+                <p className={`text-[clamp(0.78rem,0.68rem+0.24vw,0.92rem)] font-semibold tracking-[-0.02em] ${toneTextClasses[signal.tone ?? "default"]}`}>
                   {signal.value}
                 </p>
-                {signal.detail && <p className="mt-0.5 text-[0.72rem] text-[color:var(--app-text-muted)]">{signal.detail}</p>}
+                {signal.detail && <p className="mt-[clamp(0.08rem,0.04rem+0.08vh,0.18rem)] text-[clamp(0.62rem,0.56rem+0.14vw,0.72rem)] text-[color:var(--app-text-muted)] max-[900px]:line-clamp-1">{signal.detail}</p>}
               </div>
             </article>
           ))}
@@ -89,13 +89,13 @@ export default function AiLivePanel({
       )}
 
       {(notes.length > 0 || children) && (
-        <div className="min-h-0 flex-1 border-t border-[color:var(--app-border)] py-3">
+        <div className="min-h-0 flex-1 border-t border-[color:var(--app-border)] py-[clamp(0.45rem,0.22rem+0.65vh,0.8rem)]">
           {notes.length > 0 && (
-            <div className="mb-3 flex flex-wrap gap-2">
+            <div className="mb-[clamp(0.35rem,0.18rem+0.45vh,0.65rem)] flex flex-wrap gap-[clamp(0.25rem,0.16rem+0.2vw,0.45rem)]">
               {notes.map(note => (
                 <span
                   key={note}
-                  className="rounded-full border border-[color:var(--app-border)] bg-[color:var(--app-surface-subtle)] px-2 py-0.5 text-[0.62rem] font-medium text-[color:var(--app-text-secondary)]"
+                  className="rounded-full border border-[color:var(--app-border)] bg-[color:var(--app-surface-subtle)] px-[clamp(0.35rem,0.25rem+0.2vw,0.5rem)] py-[clamp(0.14rem,0.08rem+0.08vw,0.22rem)] text-[clamp(0.52rem,0.46rem+0.12vw,0.62rem)] font-medium text-[color:var(--app-text-secondary)]"
                 >
                   {note}
                 </span>
@@ -107,7 +107,7 @@ export default function AiLivePanel({
       )}
 
       {inactiveMessage && (
-        <div className="border-t border-[color:var(--app-border)] pt-3">
+        <div className="border-t border-[color:var(--app-border)] pt-[clamp(0.45rem,0.22rem+0.65vh,0.8rem)]">
           {inactiveMessage}
         </div>
       )}

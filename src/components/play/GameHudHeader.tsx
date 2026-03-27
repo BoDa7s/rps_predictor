@@ -44,39 +44,40 @@ export default function GameHudHeader({
   compact = false,
 }: GameHudHeaderProps) {
   const centered = alignment === "center";
+  const headerGapClass = compact ? "gap-[clamp(0.45rem,0.25rem+0.5vh,0.7rem)]" : "gap-[clamp(0.55rem,0.3rem+0.55vh,0.85rem)]";
 
   return (
-    <header className={`flex min-w-0 flex-col ${compact ? "gap-1.5" : "gap-2"}`}>
+    <header className={`flex min-w-0 flex-col ${headerGapClass}`}>
       <div
-        className={`flex min-w-0 flex-col ${compact ? "gap-1.5" : "gap-2"} ${
+        className={`flex min-w-0 flex-col ${headerGapClass} ${
           centered ? "xl:grid xl:grid-cols-[1fr_auto_1fr] xl:items-center" : "xl:flex-row xl:items-center xl:justify-between"
         }`}
       >
         <div className={`min-w-0 ${centered ? "text-center xl:col-start-2" : ""}`}>
-          <div className={`flex flex-wrap items-center gap-2 ${centered ? "justify-center" : ""}`}>
+          <div className={`flex flex-wrap items-center gap-[clamp(0.35rem,0.25rem+0.35vw,0.5rem)] ${centered ? "justify-center" : ""}`}>
             {eyebrow && (
-              <p className="play-shell-eyebrow text-[0.68rem] font-semibold uppercase tracking-[0.24em]">
+              <p className="play-shell-eyebrow text-[clamp(0.58rem,0.5rem+0.18vw,0.68rem)] font-semibold uppercase tracking-[0.24em]">
                 {eyebrow}
               </p>
             )}
             {badge && (
               <span
-                className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.18em] ${toneClasses[badgeTone]}`}
+                className={`inline-flex items-center rounded-full border px-[clamp(0.55rem,0.4rem+0.35vw,0.7rem)] py-[clamp(0.3rem,0.22rem+0.18vw,0.45rem)] text-[clamp(0.58rem,0.5rem+0.18vw,0.68rem)] font-semibold uppercase tracking-[0.18em] ${toneClasses[badgeTone]}`}
               >
                 {badge}
               </span>
             )}
           </div>
-          <div className={`mt-0.5 flex flex-wrap items-end gap-x-3 gap-y-1 ${centered ? "justify-center" : ""}`}>
-            <h1 className={`play-shell-heading font-semibold tracking-[-0.05em] ${compact ? "text-[1.6rem] sm:text-[1.75rem]" : "text-2xl sm:text-[1.75rem]"}`}>
+          <div className={`mt-[clamp(0.15rem,0.05rem+0.2vh,0.35rem)] flex flex-wrap items-end gap-x-[clamp(0.45rem,0.3rem+0.45vw,0.75rem)] gap-y-[clamp(0.15rem,0.05rem+0.2vh,0.3rem)] ${centered ? "justify-center" : ""}`}>
+            <h1 className={`play-shell-heading font-semibold tracking-[-0.05em] ${compact ? "text-[clamp(1.2rem,0.9rem+1vw,1.75rem)]" : "text-[clamp(1.35rem,1rem+1.1vw,2rem)]"}`}>
               {title}
             </h1>
-            {subtitle && <p className="play-shell-text-muted text-sm">{subtitle}</p>}
+            {subtitle && <p className="play-shell-text-muted text-[clamp(0.72rem,0.65rem+0.2vw,0.875rem)]">{subtitle}</p>}
           </div>
         </div>
 
         {actions && (
-          <div className={`flex shrink-0 flex-wrap items-center gap-2 ${centered ? "xl:col-start-3 xl:justify-self-end" : ""}`}>
+          <div className={`flex shrink-0 flex-wrap items-center gap-[clamp(0.35rem,0.25rem+0.35vw,0.5rem)] ${centered ? "xl:col-start-3 xl:justify-self-end" : ""}`}>
             {actions}
           </div>
         )}
@@ -91,12 +92,12 @@ export default function GameHudHeader({
           {stats.map(stat => (
             <div
               key={`${stat.label}-${stat.value}`}
-              className={`flex items-center justify-between gap-3 bg-[color:var(--app-surface-card)] px-3 ${compact ? "py-2" : "py-2.5"} text-sm ${toneClasses[stat.tone ?? "default"]}`}
+              className={`flex items-center justify-between gap-[clamp(0.35rem,0.2rem+0.25vw,0.75rem)] bg-[color:var(--app-surface-card)] px-[clamp(0.55rem,0.4rem+0.5vw,0.75rem)] ${compact ? "py-[clamp(0.42rem,0.25rem+0.45vh,0.6rem)]" : "py-[clamp(0.55rem,0.28rem+0.55vh,0.8rem)]"} text-[clamp(0.72rem,0.65rem+0.22vw,0.9rem)] ${toneClasses[stat.tone ?? "default"]}`}
             >
-              <span className="text-[0.64rem] font-semibold uppercase tracking-[0.18em] opacity-80">
+              <span className="text-[clamp(0.55rem,0.48rem+0.18vw,0.64rem)] font-semibold uppercase tracking-[0.18em] opacity-80">
                 {stat.label}
               </span>
-              <span className="font-semibold tracking-[-0.02em]">{stat.value}</span>
+              <span className="font-semibold tracking-[-0.02em] text-[clamp(0.78rem,0.68rem+0.25vw,0.95rem)]">{stat.value}</span>
             </div>
           ))}
         </div>

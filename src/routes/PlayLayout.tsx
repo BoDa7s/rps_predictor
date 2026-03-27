@@ -269,7 +269,7 @@ function PlayLayoutShell() {
       <main
         className={
           isModeWorkspaceRoute
-            ? "h-[calc(100dvh-var(--play-header-height,0px))] min-h-0 overflow-hidden"
+            ? "h-[calc(100dvh-var(--play-header-height,0px))] max-h-[calc(100dvh-var(--play-header-height,0px))] min-h-0 overflow-hidden"
             : isGameRoute
               ? "flex-1"
               : "flex-1 px-4 py-4 sm:px-6 sm:py-4 lg:px-8"
@@ -278,7 +278,7 @@ function PlayLayoutShell() {
         <div
           className={
             isModeWorkspaceRoute
-              ? "h-full w-full min-h-0"
+              ? "h-full w-full min-h-0 overflow-hidden"
               : isGameRoute
                 ? "h-full"
                 : "mx-auto flex w-full max-w-7xl flex-col gap-4"

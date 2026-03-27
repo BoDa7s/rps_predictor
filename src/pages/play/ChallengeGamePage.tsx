@@ -7,6 +7,7 @@ import GameHudHeader, { type GameHudStat } from "../../components/play/GameHudHe
 import MoveControls, { type MoveControlOption } from "../../components/play/MoveControls";
 import PredictionSourcesPanel from "../../components/play/PredictionSourcesPanel";
 import RoundHistoryStrip from "../../components/play/RoundHistoryStrip";
+import { cockpitGridTemplates, cockpitViewportStyle } from "../../components/play/cockpitViewport";
 import { useChallengeRuntime } from "../../hooks/useChallengeRuntime";
 import {
   PLAY_DASHBOARD_PATH,
@@ -70,14 +71,15 @@ export default function ChallengeGamePage() {
     <div
       className="relative h-full min-h-0 overflow-hidden bg-[color:var(--app-bg)]"
       style={{
+        ...cockpitViewportStyle,
         backgroundImage:
           "radial-gradient(circle at top left, color-mix(in srgb, var(--app-accent-soft) 32%, transparent), transparent 28%), radial-gradient(circle at right center, color-mix(in srgb, var(--app-accent-muted) 18%, transparent), transparent 22%)",
       }}
     >
-      <section className="grid h-full min-h-0 overflow-hidden [grid-template-rows:minmax(0,1fr)_10.5rem] lg:[grid-template-rows:minmax(0,1fr)_11rem]">
-        <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_13.5rem] sm:grid-cols-[minmax(0,1fr)_16rem] lg:grid-cols-[minmax(0,1fr)_clamp(18rem,24vw,22rem)]">
+      <section className="grid h-full min-h-0 overflow-hidden" style={{ gridTemplateRows: cockpitGridTemplates.rows }}>
+        <div className="grid min-h-0" style={{ gridTemplateColumns: cockpitGridTemplates.topColumns }}>
           <div className="grid min-h-0 [grid-template-rows:auto_minmax(0,1fr)] border-r border-[color:var(--app-border)]">
-            <div className="border-b border-[color:var(--app-border)] px-3 py-2 sm:px-4">
+            <div className="border-b border-[color:var(--app-border)] px-[var(--play-cockpit-header-pad-x)] py-[var(--play-cockpit-header-pad-y)]">
               <GameHudHeader
                 title="Challenge Match"
                 subtitle={runtime.currentPlayerName}
@@ -96,7 +98,7 @@ export default function ChallengeGamePage() {
               />
             </div>
 
-            <div className="min-h-0 px-3 py-3 sm:px-4 sm:py-4">
+            <div className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
               <motion.div
                 key={`${runtime.phase}-${runtime.roundNumber}-${runtime.playerPick ?? "none"}-${runtime.aiPick ?? "none"}`}
                 className="h-full"
@@ -144,7 +146,7 @@ export default function ChallengeGamePage() {
             </div>
           </div>
 
-          <div className="min-h-0 px-3 py-3 sm:px-4 sm:py-4">
+          <div className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
             <AiLivePanel
               title="AI Live"
               summary="Intent, counter plan, and source balance"
@@ -157,8 +159,11 @@ export default function ChallengeGamePage() {
           </div>
         </div>
 
-        <div className="grid min-h-0 grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)] border-t border-[color:var(--app-border)] bg-[color:color-mix(in_srgb,var(--app-surface-subtle)_24%,transparent)] pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
-          <div className="min-h-0 border-r border-[color:var(--app-border)] px-3 py-3.5 sm:px-4 sm:py-4">
+        <div
+          className="grid min-h-0 border-t border-[color:var(--app-border)] bg-[color:color-mix(in_srgb,var(--app-surface-subtle)_24%,transparent)] pt-[clamp(0.45rem,0.18rem+0.9vh,0.9rem)] pb-[calc(var(--play-cockpit-bottom-safe)+clamp(0.25rem,0.1rem+0.45vh,0.55rem))]"
+          style={{ gridTemplateColumns: cockpitGridTemplates.dockColumns }}
+        >
+          <div className="min-h-0 border-r border-[color:var(--app-border)] px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
             <MoveControls
               title="Choose move"
               options={moveOptions}
@@ -168,7 +173,7 @@ export default function ChallengeGamePage() {
             />
           </div>
 
-          <div className="min-h-0 px-3 py-3.5 sm:px-4 sm:py-4">
+          <div className="min-h-0 px-[var(--play-cockpit-pad-x)] py-[var(--play-cockpit-pad-y)]">
             <RoundHistoryStrip title="Recent" rounds={runtime.matchHistory} compact metaLabel={null} />
           </div>
         </div>
