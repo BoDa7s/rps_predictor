@@ -77,8 +77,12 @@ export default function AiLivePanel({
   const contentRef = useRef<HTMLDivElement>(null);
   const requestedDensityIndex = useMemo(() => densityOrder.indexOf(density), [density]);
   const [effectiveDensity, setEffectiveDensity] = useState<CockpitDensity>(density);
+  const [isCramped, setIsCramped] = useState(false);
+  const [isUltraCramped, setIsUltraCramped] = useState(false);
   useEffect(() => {
     setEffectiveDensity(density);
+    setIsCramped(false);
+    setIsUltraCramped(false);
   }, [density]);
 
   useEffect(() => {
@@ -96,6 +100,17 @@ export default function AiLivePanel({
       if (overflow && activeIndex < densityOrder.length - 1) {
         setEffectiveDensity(densityOrder[clampDensityIndex(activeIndex + 1)]);
         return;
+      }
+
+      if (overflow && activeIndex === densityOrder.length - 1) {
+        setIsCramped(true);
+        setIsUltraCramped(rootNode.clientHeight < 420 || rootNode.clientWidth < 220);
+        return;
+      }
+
+      if (!overflow && isCramped && slack > 10) {
+        setIsCramped(false);
+        setIsUltraCramped(false);
       }
 
       if (!overflow && activeIndex > requestedDensityIndex && slack > 20) {
@@ -116,12 +131,15 @@ export default function AiLivePanel({
       observer.disconnect();
       window.removeEventListener("resize", reconcile);
     };
-  }, [effectiveDensity, requestedDensityIndex, signals, notes, children]);
+  }, [children, effectiveDensity, isCramped, notes, requestedDensityIndex, signals]);
 
   const isCompactDensity = effectiveDensity !== "normal" && effectiveDensity !== "expanded";
   const isTightDensity = effectiveDensity === "tight";
   const panelChildren = React.isValidElement(children)
-    ? React.cloneElement(children as React.ReactElement<{ cramped?: boolean }>, { cramped: isTightDensity })
+    ? React.cloneElement(children as React.ReactElement<{ cramped?: boolean; ultraCramped?: boolean }>, {
+        cramped: isTightDensity || isCramped,
+        ultraCramped: isUltraCramped,
+      })
     : children;
   const visibleNotes = notes;
   const visibleSignals = signals;
@@ -140,8 +158,12 @@ export default function AiLivePanel({
         {summary && (
           <p
             className={`play-shell-text-muted mt-[clamp(0.12rem,0.06rem+0.12vh,0.22rem)] break-words ${
-              isTightDensity
-                ? "text-[clamp(0.56rem,0.52rem+0.1vw,0.66rem)] line-clamp-3"
+              isUltraCramped
+                ? "text-[0.38rem] line-clamp-1"
+                : isCramped
+                  ? "text-[clamp(0.42rem,0.4rem+0.05vw,0.5rem)] line-clamp-2"
+                : isTightDensity
+                  ? "text-[clamp(0.56rem,0.52rem+0.1vw,0.66rem)] line-clamp-3"
                 : "text-[clamp(0.62rem,0.56rem+0.14vw,0.76rem)] line-clamp-2"
             }`}
           >
@@ -158,7 +180,11 @@ export default function AiLivePanel({
               data-testid={buildSignalTestId(signal.label)}
               className={`grid min-w-0 grid-cols-[minmax(0,auto)_minmax(0,1fr)] items-start ${
                 isTightDensity
-                  ? "gap-x-[clamp(0.22rem,0.12rem+0.14vw,0.34rem)] gap-y-[clamp(0.03rem,0.02rem+0.02vh,0.06rem)] px-[clamp(0.04rem,0.02rem+0.04vw,0.08rem)] py-[clamp(0.18rem,0.1rem+0.14vh,0.28rem)]"
+                  ? isCramped
+                    ? isUltraCramped
+                      ? "gap-x-[0.12rem] gap-y-[0.01rem] px-[0.01rem] py-[0.06rem]"
+                      : "gap-x-[clamp(0.16rem,0.1rem+0.1vw,0.24rem)] gap-y-[clamp(0.02rem,0.01rem+0.02vh,0.04rem)] px-[0.02rem] py-[clamp(0.12rem,0.08rem+0.08vh,0.18rem)]"
+                    : "gap-x-[clamp(0.22rem,0.12rem+0.14vw,0.34rem)] gap-y-[clamp(0.03rem,0.02rem+0.02vh,0.06rem)] px-[clamp(0.04rem,0.02rem+0.04vw,0.08rem)] py-[clamp(0.18rem,0.1rem+0.14vh,0.28rem)]"
                   : isCompactDensity
                     ? "gap-x-[clamp(0.26rem,0.16rem+0.18vw,0.42rem)] gap-y-[clamp(0.04rem,0.02rem+0.04vh,0.08rem)] px-[clamp(0.05rem,0.03rem+0.06vw,0.12rem)] py-[clamp(0.22rem,0.12rem+0.16vh,0.34rem)]"
                     : "gap-x-[clamp(0.4rem,0.22rem+0.35vw,0.75rem)] gap-y-[clamp(0.1rem,0.04rem+0.1vh,0.2rem)] px-[clamp(0.1rem,0.05rem+0.12vw,0.3rem)] py-[clamp(0.38rem,0.2rem+0.45vh,0.65rem)]"
@@ -174,19 +200,27 @@ export default function AiLivePanel({
                 <p
                   data-testid={buildSignalTestId(`${signal.label}-value`)}
                   className={`min-w-0 break-words font-semibold tracking-[-0.02em] text-[var(--play-cockpit-ai-value-size)] ${toneTextClasses[signal.tone ?? "default"]}`}
-                  style={{ fontSize: "var(--play-cockpit-ai-value-size)" }}
+                  style={{
+                    fontSize: isUltraCramped ? "0.75rem" : "var(--play-cockpit-ai-value-size)",
+                    lineHeight: isUltraCramped ? "1.05" : undefined,
+                  }}
                 >
                   {signal.value}
                 </p>
                 {signal.detail && (
                   <p
                     className={`mt-[clamp(0.04rem,0.02rem+0.04vh,0.1rem)] break-words text-[color:var(--app-text-muted)] ${
-                      isTightDensity ? "line-clamp-2" : "max-[900px]:line-clamp-1"
+                      isCramped ? "line-clamp-2" : isTightDensity ? "line-clamp-2" : "max-[900px]:line-clamp-1"
                     }`}
                     style={{
-                      fontSize: isTightDensity
-                        ? "clamp(0.54rem, 0.5rem + 0.08vw, 0.62rem)"
-                        : "var(--play-cockpit-ai-detail-size)",
+                      fontSize: isUltraCramped
+                        ? "0.34rem"
+                        : isCramped
+                          ? "clamp(0.42rem, 0.4rem + 0.05vw, 0.5rem)"
+                        : isTightDensity
+                          ? "clamp(0.54rem, 0.5rem + 0.08vw, 0.62rem)"
+                          : "var(--play-cockpit-ai-detail-size)",
+                      lineHeight: isUltraCramped ? "1.05" : undefined,
                     }}
                   >
                     {signal.detail}
@@ -215,20 +249,29 @@ export default function AiLivePanel({
         <div
           className={`min-h-0 min-w-0 flex-1 overflow-hidden border-t border-[color:var(--app-border)] ${
             isTightDensity
-              ? "py-[clamp(0.12rem,0.06rem+0.1vh,0.2rem)] pb-[clamp(0.4rem,0.18rem+0.3vh,0.56rem)]"
+              ? isCramped
+                ? isUltraCramped
+                  ? "py-[0.02rem] pb-[0.12rem]"
+                  : "py-[0.04rem] pb-[clamp(0.18rem,0.1rem+0.14vh,0.28rem)]"
+                : "py-[clamp(0.12rem,0.06rem+0.1vh,0.2rem)] pb-[clamp(0.4rem,0.18rem+0.3vh,0.56rem)]"
               : isCompactDensity
                 ? "py-[clamp(0.18rem,0.1rem+0.16vh,0.28rem)] pb-[clamp(0.5rem,0.24rem+0.38vh,0.72rem)]"
                 : "py-[clamp(0.36rem,0.18rem+0.55vh,0.62rem)] pb-[clamp(0.68rem,0.3rem+0.78vh,0.98rem)]"
           }`}
         >
           {visibleNotes.length > 0 && (
-            <div className={`mb-[clamp(0.24rem,0.12rem+0.18vh,0.38rem)] flex flex-wrap gap-[clamp(0.2rem,0.14rem+0.16vw,0.32rem)]`}>
+            <div
+              className={`mb-[clamp(0.24rem,0.12rem+0.18vh,0.38rem)] flex flex-wrap gap-[clamp(0.2rem,0.14rem+0.16vw,0.32rem)] ${isCramped ? "mb-[0.08rem] gap-[0.08rem]" : ""}`}
+              style={{ display: isUltraCramped ? "none" : undefined }}
+            >
               {visibleNotes.map(note => (
                 <span
                   key={note}
                   className={`rounded-full border border-[color:var(--app-border)] bg-[color:var(--app-surface-subtle)] font-medium text-[color:var(--app-text-secondary)] ${
-                    isTightDensity
-                      ? "px-[clamp(0.22rem,0.16rem+0.1vw,0.3rem)] py-[clamp(0.08rem,0.06rem+0.04vw,0.12rem)] text-[clamp(0.42rem,0.4rem+0.08vw,0.5rem)]"
+                    isCramped
+                      ? "px-[0.12rem] py-[0.03rem] text-[0.32rem]"
+                      : isTightDensity
+                        ? "px-[clamp(0.22rem,0.16rem+0.1vw,0.3rem)] py-[clamp(0.08rem,0.06rem+0.04vw,0.12rem)] text-[clamp(0.42rem,0.4rem+0.08vw,0.5rem)]"
                       : "px-[clamp(0.3rem,0.22rem+0.16vw,0.42rem)] py-[clamp(0.12rem,0.08rem+0.06vw,0.18rem)] text-[clamp(0.48rem,0.44rem+0.1vw,0.58rem)]"
                   }`}
                 >

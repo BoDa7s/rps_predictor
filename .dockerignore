@@ -5,3 +5,5 @@ Dockerfile
 dist
 .vscode
 npm-debug.log*
+test-results
+playwright-report

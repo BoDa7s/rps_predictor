@@ -35,34 +35,41 @@ function formatScale(value: number) {
   return value.toFixed(3);
 }
 
-function getCockpitDensity(width: number, height: number, variant: CockpitViewportVariant): CockpitDensity {
-  if (variant === "challenge" && height >= 940 && width >= 1600) {
-    return "expanded";
+function scaleValue(value: string, variant: CockpitViewportVariant) {
+  return variant === "challenge" ? `calc(${value} * var(--play-cockpit-game-scale))` : value;
+}
+
+function getCockpitScale(width: number, height: number, variant: CockpitViewportVariant) {
+  if (variant === "challenge") {
+    const referenceWidth = 1510;
+    const referenceHeight = 845;
+    const widthFit = width / referenceWidth;
+    const heightFit = height / referenceHeight;
+    const limitingFit = Math.min(widthFit, heightFit);
+    const areaFit = Math.sqrt((width * height) / (referenceWidth * referenceHeight));
+    const blendedFit = limitingFit * 0.82 + areaFit * 0.18;
+    return clampNumber(blendedFit, 0.78, 1.08);
   }
 
-  if (height <= 720 || (height <= 780 && width <= 1366)) {
+  const referenceWidth = 1440;
+  const referenceHeight = 840;
+  const widthFit = width / referenceWidth;
+  const heightFit = height / referenceHeight;
+  return clampNumber(Math.min(widthFit, heightFit), 0.86, 1.05);
+}
+
+function getCockpitDensity(scale: number, variant: CockpitViewportVariant): CockpitDensity {
+  if (variant === "challenge") {
+    if (scale >= 1.025) return "expanded";
+    if (scale >= 0.92) return "normal";
+    if (scale >= 0.84) return "compact";
     return "tight";
   }
 
-  if (height <= 840 || (height <= 900 && width <= 1440)) {
-    return "compact";
-  }
-
-  return "normal";
-}
-
-function getCockpitScale(width: number, height: number, density: CockpitDensity, variant: CockpitViewportVariant) {
-  const widthFactor = clampNumber((width - 1280) / 640, 0, 1);
-  const heightFactor = clampNumber((height - 720) / 360, 0, 1);
-  const sizeFactor = Math.min(widthFactor, heightFactor);
-  const densityOffset =
-    density === "tight" ? -0.02 : density === "compact" ? 0 : density === "expanded" ? 0.06 : 0.03;
-
-  if (variant === "challenge") {
-    return clampNumber(0.9 + sizeFactor * 0.16 + densityOffset, 0.88, 1.1);
-  }
-
-  return clampNumber(density === "tight" ? 0.92 : density === "compact" ? 0.96 : density === "expanded" ? 1.05 : 1, 0.9, 1.06);
+  if (scale >= 1.01) return "expanded";
+  if (scale >= 0.94) return "normal";
+  if (scale >= 0.88) return "compact";
+  return "tight";
 }
 
 function buildCockpitViewportStyle(
@@ -74,108 +81,108 @@ function buildCockpitViewportStyle(
     "--play-cockpit-game-scale": formatScale(scale),
     "--play-cockpit-ai-value-size":
       density === "tight"
-        ? "clamp(0.76rem,0.68rem+0.18vw,0.86rem)"
+        ? scaleValue("clamp(0.76rem,0.68rem+0.18vw,0.86rem)", variant)
         : density === "compact"
-          ? "clamp(0.82rem,0.74rem+0.2vw,0.94rem)"
+          ? scaleValue("clamp(0.82rem,0.74rem+0.2vw,0.94rem)", variant)
           : density === "expanded"
-            ? "clamp(1rem,0.84rem+0.34vw,1.18rem)"
-            : "clamp(0.9rem,0.78rem+0.26vw,1.02rem)",
+            ? scaleValue("clamp(1rem,0.84rem+0.34vw,1.18rem)", variant)
+            : scaleValue("clamp(0.9rem,0.78rem+0.26vw,1.02rem)", variant),
     "--play-cockpit-ai-label-size":
       density === "tight"
-        ? "clamp(0.48rem,0.44rem+0.1vw,0.56rem)"
-        : "clamp(0.54rem,0.48rem+0.12vw,0.66rem)",
+        ? scaleValue("clamp(0.48rem,0.44rem+0.1vw,0.56rem)", variant)
+        : scaleValue("clamp(0.54rem,0.48rem+0.12vw,0.66rem)", variant),
     "--play-cockpit-ai-detail-size":
       density === "tight"
-        ? "clamp(0.58rem,0.54rem+0.1vw,0.66rem)"
+        ? scaleValue("clamp(0.58rem,0.54rem+0.1vw,0.66rem)", variant)
         : density === "compact"
-          ? "clamp(0.64rem,0.58rem+0.14vw,0.76rem)"
+          ? scaleValue("clamp(0.64rem,0.58rem+0.14vw,0.76rem)", variant)
           : density === "expanded"
-            ? "clamp(0.76rem,0.68rem+0.2vw,0.9rem)"
-            : "clamp(0.68rem,0.62rem+0.16vw,0.82rem)",
+            ? scaleValue("clamp(0.76rem,0.68rem+0.2vw,0.9rem)", variant)
+            : scaleValue("clamp(0.68rem,0.62rem+0.16vw,0.82rem)", variant),
     "--play-cockpit-arena-slot-icon-box":
       density === "tight"
-        ? "clamp(2.2rem,4vh,2.9rem)"
+        ? scaleValue("clamp(2.2rem,4vh,2.9rem)", variant)
         : density === "compact"
-          ? "clamp(2.55rem,5vh,3.45rem)"
+          ? scaleValue("clamp(2.55rem,5vh,3.45rem)", variant)
           : density === "expanded"
-            ? "clamp(3.5rem,8vh,5.25rem)"
-            : "clamp(3.15rem,7.2vh,4.6rem)",
+            ? scaleValue("clamp(3.5rem,8vh,5.25rem)", variant)
+            : scaleValue("clamp(3.15rem,7.2vh,4.6rem)", variant),
     "--play-cockpit-arena-slot-icon-size":
       density === "tight"
-        ? "clamp(1rem,2.2vh,1.35rem)"
+        ? scaleValue("clamp(1rem,2.2vh,1.35rem)", variant)
         : density === "compact"
-          ? "clamp(1.15rem,2.8vh,1.7rem)"
+          ? scaleValue("clamp(1.15rem,2.8vh,1.7rem)", variant)
           : density === "expanded"
-            ? "clamp(1.95rem,4.4vh,3.2rem)"
-            : "clamp(1.7rem,4vw,3rem)",
+            ? scaleValue("clamp(1.95rem,4.4vh,3.2rem)", variant)
+            : scaleValue("clamp(1.7rem,4vw,3rem)", variant),
     "--play-cockpit-arena-center-ring":
       density === "tight"
-        ? "clamp(3rem,5.4vh,3.9rem)"
+        ? scaleValue("clamp(3rem,5.4vh,3.9rem)", variant)
         : density === "compact"
-          ? "clamp(3.8rem,6.8vh,5rem)"
+          ? scaleValue("clamp(3.8rem,6.8vh,5rem)", variant)
           : density === "expanded"
-            ? "clamp(5.4rem,10.5vh,7.8rem)"
-            : "clamp(4.8rem,9vh,6.6rem)",
+            ? scaleValue("clamp(5.4rem,10.5vh,7.8rem)", variant)
+            : scaleValue("clamp(4.8rem,9vh,6.6rem)", variant),
     "--play-cockpit-arena-center-ring-text":
       density === "tight"
-        ? "clamp(0.76rem,0.64rem+0.2vw,0.92rem)"
+        ? scaleValue("clamp(0.76rem,0.64rem+0.2vw,0.92rem)", variant)
         : density === "compact"
-          ? "clamp(0.9rem,0.76rem+0.3vw,1.24rem)"
+          ? scaleValue("clamp(0.9rem,0.76rem+0.3vw,1.24rem)", variant)
           : density === "expanded"
-            ? "clamp(1.24rem,0.92rem+1vw,2.1rem)"
-            : "clamp(1.08rem,0.82rem+0.86vw,1.72rem)",
+            ? scaleValue("clamp(1.24rem,0.92rem+1vw,2.1rem)", variant)
+            : scaleValue("clamp(1.08rem,0.82rem+0.86vw,1.72rem)", variant),
     "--play-cockpit-arena-center-title":
       density === "tight"
-        ? "clamp(1rem,0.82rem+0.42vw,1.32rem)"
+        ? scaleValue("clamp(1rem,0.82rem+0.42vw,1.32rem)", variant)
         : density === "compact"
-          ? "clamp(1.15rem,0.92rem+0.52vw,1.6rem)"
+          ? scaleValue("clamp(1.15rem,0.92rem+0.52vw,1.6rem)", variant)
           : density === "expanded"
-            ? "clamp(1.45rem,1rem+1.25vw,2.4rem)"
-            : "clamp(1.28rem,0.9rem+1vw,2rem)",
+            ? scaleValue("clamp(1.45rem,1rem+1.25vw,2.4rem)", variant)
+            : scaleValue("clamp(1.28rem,0.9rem+1vw,2rem)", variant),
     "--play-cockpit-arena-center-detail":
       density === "tight"
-        ? "clamp(0.68rem,0.62rem+0.16vw,0.8rem)"
+        ? scaleValue("clamp(0.68rem,0.62rem+0.16vw,0.8rem)", variant)
         : density === "compact"
-          ? "clamp(0.78rem,0.7rem+0.22vw,0.94rem)"
+          ? scaleValue("clamp(0.78rem,0.7rem+0.22vw,0.94rem)", variant)
           : density === "expanded"
-            ? "clamp(0.9rem,0.74rem+0.46vw,1.12rem)"
-            : "clamp(0.84rem,0.7rem+0.34vw,1rem)",
+            ? scaleValue("clamp(0.9rem,0.74rem+0.46vw,1.12rem)", variant)
+            : scaleValue("clamp(0.84rem,0.7rem+0.34vw,1rem)", variant),
   } as CSSProperties;
 
   if (density === "tight") {
     return {
       ...styleBase,
-      "--play-cockpit-pad-x": "clamp(0.45rem, 0.26rem + 0.4vw, 0.72rem)",
-      "--play-cockpit-pad-y": "clamp(0.34rem, 0.16rem + 0.34vh, 0.56rem)",
-      "--play-cockpit-gap": "clamp(0.3rem, 0.18rem + 0.22vw, 0.48rem)",
-      "--play-cockpit-header-pad-y": "clamp(0.26rem, 0.12rem + 0.25vh, 0.42rem)",
-      "--play-cockpit-header-pad-x": "clamp(0.45rem, 0.26rem + 0.42vw, 0.72rem)",
+      "--play-cockpit-pad-x": scaleValue("clamp(0.45rem, 0.26rem + 0.4vw, 0.72rem)", variant),
+      "--play-cockpit-pad-y": scaleValue("clamp(0.34rem, 0.16rem + 0.34vh, 0.56rem)", variant),
+      "--play-cockpit-gap": scaleValue("clamp(0.3rem, 0.18rem + 0.22vw, 0.48rem)", variant),
+      "--play-cockpit-header-pad-y": scaleValue("clamp(0.26rem, 0.12rem + 0.25vh, 0.42rem)", variant),
+      "--play-cockpit-header-pad-x": scaleValue("clamp(0.45rem, 0.26rem + 0.42vw, 0.72rem)", variant),
       "--play-cockpit-dock-height":
         variant === "challenge"
-          ? "calc(clamp(8rem, 16.2vh, 9.1rem) * var(--play-cockpit-game-scale))"
+          ? scaleValue("clamp(8.75rem, 17.4vh, 9.8rem)", variant)
           : "clamp(6.35rem, 13.5vh, 7.6rem)",
       "--play-cockpit-rail-width":
         variant === "challenge"
-          ? "calc(clamp(13.5rem, 21vw, 16.2rem) * max(0.96, var(--play-cockpit-game-scale)))"
+          ? `max(13.75rem, ${scaleValue("clamp(13.5rem, 21vw, 16.2rem)", variant)})`
           : "clamp(13rem, 21vw, 16.5rem)",
       "--play-cockpit-dock-main": "minmax(0, 1.95fr)",
       "--play-cockpit-dock-side": "minmax(0, 0.9fr)",
       "--play-cockpit-bottom-safe": "max(0.85rem, env(safe-area-inset-bottom))",
       "--play-cockpit-control-min-h":
         variant === "challenge"
-          ? "calc(clamp(4.15rem, 6.6vh, 4.9rem) * var(--play-cockpit-game-scale))"
+          ? scaleValue("clamp(4.6rem, 7.2vh, 5.3rem)", variant)
           : "clamp(3.6rem, 6vh, 4.45rem)",
       "--play-cockpit-control-icon-box":
         variant === "challenge"
-          ? "calc(clamp(1.9rem, 3.6vh, 2.35rem) * var(--play-cockpit-game-scale))"
+          ? scaleValue("clamp(1.9rem, 3.6vh, 2.35rem)", variant)
           : "clamp(2rem, 3.9vh, 2.55rem)",
       "--play-cockpit-control-icon-size":
         variant === "challenge"
-          ? "calc(clamp(1rem, 1.9vh, 1.28rem) * var(--play-cockpit-game-scale))"
+          ? scaleValue("clamp(1rem, 1.9vh, 1.28rem)", variant)
           : "clamp(1.05rem, 2.1vh, 1.42rem)",
       "--play-cockpit-control-title":
         variant === "challenge"
-          ? "clamp(0.84rem, 0.74rem + 0.24vw, 0.98rem)"
+          ? scaleValue("clamp(1rem, 0.88rem + 0.2vw, 1.08rem)", variant)
           : "clamp(0.82rem, 0.72rem + 0.28vw, 0.96rem)",
       "--play-cockpit-control-hint-display": "none",
       "--play-cockpit-ai-note-display": "none",
@@ -187,37 +194,37 @@ function buildCockpitViewportStyle(
   if (density === "compact") {
     return {
       ...styleBase,
-      "--play-cockpit-pad-x": "clamp(0.56rem, 0.32rem + 0.5vw, 0.84rem)",
-      "--play-cockpit-pad-y": "clamp(0.44rem, 0.22rem + 0.48vh, 0.72rem)",
-      "--play-cockpit-gap": "clamp(0.38rem, 0.24rem + 0.3vw, 0.62rem)",
-      "--play-cockpit-header-pad-y": "clamp(0.3rem, 0.15rem + 0.34vh, 0.5rem)",
-      "--play-cockpit-header-pad-x": "clamp(0.56rem, 0.34rem + 0.52vw, 0.84rem)",
+      "--play-cockpit-pad-x": scaleValue("clamp(0.56rem, 0.32rem + 0.5vw, 0.84rem)", variant),
+      "--play-cockpit-pad-y": scaleValue("clamp(0.44rem, 0.22rem + 0.48vh, 0.72rem)", variant),
+      "--play-cockpit-gap": scaleValue("clamp(0.38rem, 0.24rem + 0.3vw, 0.62rem)", variant),
+      "--play-cockpit-header-pad-y": scaleValue("clamp(0.3rem, 0.15rem + 0.34vh, 0.5rem)", variant),
+      "--play-cockpit-header-pad-x": scaleValue("clamp(0.56rem, 0.34rem + 0.52vw, 0.84rem)", variant),
       "--play-cockpit-dock-height":
         variant === "challenge"
-          ? "calc(clamp(8.5rem, 17vh, 10rem) * var(--play-cockpit-game-scale))"
+          ? scaleValue("clamp(9.2rem, 18.2vh, 10.4rem)", variant)
           : "clamp(6.85rem, 14.8vh, 8.5rem)",
       "--play-cockpit-rail-width":
         variant === "challenge"
-          ? "calc(clamp(14.5rem, 22.5vw, 18.5rem) * max(0.98, var(--play-cockpit-game-scale)))"
+          ? `max(13.75rem, ${scaleValue("clamp(14.5rem, 22.5vw, 18.5rem)", variant)})`
           : "clamp(14.5rem, 22vw, 18.5rem)",
       "--play-cockpit-dock-main": "minmax(0, 1.9fr)",
       "--play-cockpit-dock-side": "minmax(0, 0.95fr)",
       "--play-cockpit-bottom-safe": "max(0.95rem, env(safe-area-inset-bottom))",
       "--play-cockpit-control-min-h":
         variant === "challenge"
-          ? "calc(clamp(4.25rem, 7vh, 5.1rem) * var(--play-cockpit-game-scale))"
+          ? scaleValue("clamp(4.7rem, 7.5vh, 5.45rem)", variant)
           : "clamp(3.9rem, 6.8vh, 4.9rem)",
       "--play-cockpit-control-icon-box":
         variant === "challenge"
-          ? "calc(clamp(2.05rem, 4.1vh, 2.75rem) * var(--play-cockpit-game-scale))"
+          ? scaleValue("clamp(2.05rem, 4.1vh, 2.75rem)", variant)
           : "clamp(2.2rem, 4.5vh, 2.95rem)",
       "--play-cockpit-control-icon-size":
         variant === "challenge"
-          ? "calc(clamp(1.1rem, 2.2vh, 1.5rem) * var(--play-cockpit-game-scale))"
+          ? scaleValue("clamp(1.1rem, 2.2vh, 1.5rem)", variant)
           : "clamp(1.16rem, 2.35vh, 1.6rem)",
       "--play-cockpit-control-title":
         variant === "challenge"
-          ? "clamp(0.9rem, 0.8rem + 0.3vw, 1.06rem)"
+          ? scaleValue("clamp(1.02rem, 0.9rem + 0.22vw, 1.14rem)", variant)
           : "clamp(0.86rem, 0.76rem + 0.34vw, 1.02rem)",
       "--play-cockpit-control-hint-display": "none",
       "--play-cockpit-ai-note-display": "inline-flex",
@@ -229,20 +236,20 @@ function buildCockpitViewportStyle(
   if (density === "expanded") {
     return {
       ...styleBase,
-      "--play-cockpit-pad-x": "clamp(0.82rem, 0.52rem + 0.85vw, 1.2rem)",
-      "--play-cockpit-pad-y": "clamp(0.66rem, 0.36rem + 0.95vh, 1.05rem)",
-      "--play-cockpit-gap": "clamp(0.56rem, 0.38rem + 0.55vw, 0.95rem)",
-      "--play-cockpit-header-pad-y": "clamp(0.44rem, 0.24rem + 0.7vh, 0.8rem)",
-      "--play-cockpit-header-pad-x": "clamp(0.82rem, 0.52rem + 0.8vw, 1.18rem)",
-      "--play-cockpit-dock-height": "calc(clamp(9.4rem, 19.6vh, 12.8rem) * var(--play-cockpit-game-scale))",
-      "--play-cockpit-rail-width": "calc(clamp(16.5rem, 18.5vw, 22.5rem) * var(--play-cockpit-game-scale))",
+      "--play-cockpit-pad-x": scaleValue("clamp(0.82rem, 0.52rem + 0.85vw, 1.2rem)", variant),
+      "--play-cockpit-pad-y": scaleValue("clamp(0.66rem, 0.36rem + 0.95vh, 1.05rem)", variant),
+      "--play-cockpit-gap": scaleValue("clamp(0.56rem, 0.38rem + 0.55vw, 0.95rem)", variant),
+      "--play-cockpit-header-pad-y": scaleValue("clamp(0.44rem, 0.24rem + 0.7vh, 0.8rem)", variant),
+      "--play-cockpit-header-pad-x": scaleValue("clamp(0.82rem, 0.52rem + 0.8vw, 1.18rem)", variant),
+      "--play-cockpit-dock-height": scaleValue("clamp(9.4rem, 19.6vh, 12.8rem)", variant),
+      "--play-cockpit-rail-width": scaleValue("clamp(16.5rem, 18.5vw, 22.5rem)", variant),
       "--play-cockpit-dock-main": "minmax(0, 1.82fr)",
       "--play-cockpit-dock-side": "minmax(0, 1fr)",
       "--play-cockpit-bottom-safe": "max(1rem, env(safe-area-inset-bottom))",
-      "--play-cockpit-control-min-h": "calc(clamp(4.6rem, 8.8vh, 6rem) * var(--play-cockpit-game-scale))",
-      "--play-cockpit-control-icon-box": "calc(clamp(2.5rem, 5.6vh, 3.4rem) * var(--play-cockpit-game-scale))",
-      "--play-cockpit-control-icon-size": "calc(clamp(1.35rem, 2.85vh, 1.95rem) * var(--play-cockpit-game-scale))",
-      "--play-cockpit-control-title": "clamp(1rem, 0.82rem + 0.4vw, 1.16rem)",
+      "--play-cockpit-control-min-h": scaleValue("clamp(4.6rem, 8.8vh, 6rem)", variant),
+      "--play-cockpit-control-icon-box": scaleValue("clamp(2.5rem, 5.6vh, 3.4rem)", variant),
+      "--play-cockpit-control-icon-size": scaleValue("clamp(1.35rem, 2.85vh, 1.95rem)", variant),
+      "--play-cockpit-control-title": scaleValue("clamp(1rem, 0.82rem + 0.4vw, 1.16rem)", variant),
       "--play-cockpit-control-hint-display": "block",
       "--play-cockpit-ai-note-display": "inline-flex",
       "--play-cockpit-ai-summary-display": "block",
@@ -252,38 +259,38 @@ function buildCockpitViewportStyle(
 
   return {
     ...styleBase,
-    "--play-cockpit-pad-x": "clamp(0.7rem, 0.45rem + 0.7vw, 1rem)",
-    "--play-cockpit-pad-y": "clamp(0.6rem, 0.3rem + 0.85vh, 1rem)",
-    "--play-cockpit-gap": "clamp(0.5rem, 0.35rem + 0.5vw, 0.9rem)",
-    "--play-cockpit-header-pad-y": "clamp(0.4rem, 0.2rem + 0.65vh, 0.75rem)",
-    "--play-cockpit-header-pad-x": "clamp(0.7rem, 0.45rem + 0.7vw, 1rem)",
+    "--play-cockpit-pad-x": scaleValue("clamp(0.7rem, 0.45rem + 0.7vw, 1rem)", variant),
+    "--play-cockpit-pad-y": scaleValue("clamp(0.6rem, 0.3rem + 0.85vh, 1rem)", variant),
+    "--play-cockpit-gap": scaleValue("clamp(0.5rem, 0.35rem + 0.5vw, 0.9rem)", variant),
+    "--play-cockpit-header-pad-y": scaleValue("clamp(0.4rem, 0.2rem + 0.65vh, 0.75rem)", variant),
+    "--play-cockpit-header-pad-x": scaleValue("clamp(0.7rem, 0.45rem + 0.7vw, 1rem)", variant),
     "--play-cockpit-dock-height":
       variant === "challenge"
-        ? "calc(clamp(8.65rem, 18.4vh, 11.6rem) * var(--play-cockpit-game-scale))"
+        ? scaleValue("clamp(9rem, 18.8vh, 11.8rem)", variant)
         : "clamp(7.75rem, 17.5vh, 11rem)",
     "--play-cockpit-rail-width":
       variant === "challenge"
-        ? "calc(clamp(15rem, 18vw, 20rem) * var(--play-cockpit-game-scale))"
+        ? `max(13.75rem, ${scaleValue("clamp(15rem, 18vw, 20rem)", variant)})`
         : "clamp(16rem, 18vw, 22rem)",
     "--play-cockpit-dock-main": "minmax(0, 1.8fr)",
     "--play-cockpit-dock-side": "minmax(0, 1fr)",
     "--play-cockpit-bottom-safe": "max(1rem, env(safe-area-inset-bottom))",
     "--play-cockpit-control-min-h":
       variant === "challenge"
-        ? "calc(clamp(4.2rem, 8.1vh, 5.35rem) * var(--play-cockpit-game-scale))"
+        ? scaleValue("clamp(4.55rem, 8.4vh, 5.55rem)", variant)
         : "clamp(4.6rem, 10.5vh, 5.9rem)",
     "--play-cockpit-control-icon-box":
       variant === "challenge"
-        ? "calc(clamp(2.3rem, 5.2vh, 3.05rem) * var(--play-cockpit-game-scale))"
+        ? scaleValue("clamp(2.3rem, 5.2vh, 3.05rem)", variant)
         : "clamp(2.55rem, 6.2vh, 3.5rem)",
     "--play-cockpit-control-icon-size":
       variant === "challenge"
-        ? "calc(clamp(1.28rem, 2.8vh, 1.8rem) * var(--play-cockpit-game-scale))"
+        ? scaleValue("clamp(1.28rem, 2.8vh, 1.8rem)", variant)
         : "clamp(1.45rem, 3.5vh, 2rem)",
     "--play-cockpit-control-title":
       variant === "challenge"
-        ? "clamp(0.96rem, 0.78rem + 0.42vw, 1.12rem)"
-        : "clamp(0.95rem, 0.72rem + 0.55vw, 1.15rem)",
+        ? scaleValue("clamp(1.04rem, 0.9rem + 0.24vw, 1.18rem)", variant)
+      : "clamp(0.95rem, 0.72rem + 0.55vw, 1.15rem)",
     "--play-cockpit-control-hint-display": "block",
     "--play-cockpit-ai-note-display": "inline-flex",
     "--play-cockpit-ai-summary-display": "block",
@@ -301,8 +308,9 @@ export function useCockpitViewport(options: CockpitViewportOptions = {}): Cockpi
     if (!node || typeof ResizeObserver === "undefined") return;
 
     const updateSize = () => {
-      const nextWidth = Math.round(node.clientWidth);
-      const nextHeight = Math.round(node.clientHeight);
+      const nextRect = node.getBoundingClientRect();
+      const nextWidth = Math.round(nextRect.width);
+      const nextHeight = Math.round(nextRect.height);
       setSize(current => {
         if (current.width === nextWidth && current.height === nextHeight) {
           return current;
@@ -323,8 +331,8 @@ export function useCockpitViewport(options: CockpitViewportOptions = {}): Cockpi
     };
   }, []);
 
-  const density = useMemo(() => getCockpitDensity(size.width, size.height, variant), [size.height, size.width, variant]);
-  const scale = useMemo(() => getCockpitScale(size.width, size.height, density, variant), [density, size.height, size.width, variant]);
+  const scale = useMemo(() => getCockpitScale(size.width, size.height, variant), [size.height, size.width, variant]);
+  const density = useMemo(() => getCockpitDensity(scale, variant), [scale, variant]);
   const style = useMemo(() => buildCockpitViewportStyle(density, scale, variant), [density, scale, variant]);
 
   return { rootRef, density, scale, style };
@@ -339,8 +347,9 @@ export function usePaneDensity(baseDensity: CockpitDensity, options: PaneDensity
     if (!node || typeof ResizeObserver === "undefined") return;
 
     const updateSize = () => {
-      const nextWidth = Math.round(node.clientWidth);
-      const nextHeight = Math.round(node.clientHeight);
+      const nextRect = node.getBoundingClientRect();
+      const nextWidth = Math.round(nextRect.width);
+      const nextHeight = Math.round(nextRect.height);
       setSize(current => {
         if (current.width === nextWidth && current.height === nextHeight) {
           return current;

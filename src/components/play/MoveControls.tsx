@@ -36,6 +36,7 @@ export default function MoveControls({
   const isCompactDensity = density !== "normal" && density !== "expanded";
   const isTightDensity = density === "tight";
   const showFooter = footer && (!isChallenge || density === "normal" || density === "expanded");
+  const showHint = !isChallenge || density === "normal" || density === "expanded";
 
   return (
     <section className="flex h-full flex-col justify-start">
@@ -44,7 +45,7 @@ export default function MoveControls({
         {showFooter && <div className={`play-shell-text-muted ${isTightDensity ? "text-[clamp(0.56rem,0.52rem+0.1vw,0.66rem)]" : "text-[clamp(0.62rem,0.55rem+0.14vw,0.75rem)]"}`}>{footer}</div>}
       </div>
 
-      <div className={`grid ${isChallenge ? "gap-[clamp(0.18rem,0.12rem+0.18vw,0.34rem)]" : "gap-[clamp(0.28rem,0.16rem+0.24vw,0.5rem)]"} sm:grid-cols-3 ${isChallenge ? (isTightDensity ? "mt-[clamp(0.16rem,0.1rem+0.1vh,0.26rem)] items-start" : isCompactDensity ? "mt-[clamp(0.2rem,0.12rem+0.14vh,0.32rem)] items-start" : "mt-[clamp(0.28rem,0.16rem+0.24vh,0.46rem)] items-start") : "mt-[clamp(0.45rem,0.28rem+0.55vh,0.9rem)]"}`}>
+      <div className={`grid ${isChallenge ? "gap-[clamp(0.14rem,0.1rem+0.14vw,0.26rem)]" : "gap-[clamp(0.28rem,0.16rem+0.24vw,0.5rem)]"} sm:grid-cols-3 ${isChallenge ? (isTightDensity ? "mt-[clamp(0.12rem,0.08rem+0.08vh,0.2rem)] items-start" : isCompactDensity ? "mt-[clamp(0.16rem,0.1rem+0.12vh,0.26rem)] items-start" : "mt-[clamp(0.28rem,0.16rem+0.24vh,0.46rem)] items-start") : "mt-[clamp(0.45rem,0.28rem+0.55vh,0.9rem)]"}`}>
         {options.map(option => {
           const isSelected = Boolean(option.selected);
 
@@ -71,24 +72,24 @@ export default function MoveControls({
                 isChallenge
                   ? {
                       paddingTop: isTightDensity
-                        ? "clamp(0.32rem, 0.18rem + 0.2vh, 0.46rem)"
+                        ? "clamp(0.24rem, 0.14rem + 0.12vh, 0.34rem)"
                         : isCompactDensity
-                          ? "clamp(0.4rem, 0.22rem + 0.24vh, 0.56rem)"
+                          ? "clamp(0.32rem, 0.18rem + 0.18vh, 0.46rem)"
                           : "clamp(0.48rem, 0.26rem + 0.52vh, 0.72rem)",
                       paddingBottom: isTightDensity
-                        ? "clamp(0.32rem, 0.18rem + 0.2vh, 0.46rem)"
+                        ? "clamp(0.24rem, 0.14rem + 0.12vh, 0.34rem)"
                         : isCompactDensity
-                          ? "clamp(0.4rem, 0.22rem + 0.24vh, 0.56rem)"
+                          ? "clamp(0.32rem, 0.18rem + 0.18vh, 0.46rem)"
                           : "clamp(0.48rem, 0.26rem + 0.52vh, 0.72rem)",
                       paddingLeft: isTightDensity
-                        ? "clamp(0.5rem, 0.32rem + 0.28vw, 0.65rem)"
+                        ? "clamp(0.42rem, 0.28rem + 0.2vw, 0.56rem)"
                         : isCompactDensity
-                          ? "clamp(0.6rem, 0.4rem + 0.34vw, 0.78rem)"
+                          ? "clamp(0.52rem, 0.34rem + 0.28vw, 0.68rem)"
                           : "clamp(0.7rem, 0.45rem + 0.6vw, 0.95rem)",
                       paddingRight: isTightDensity
-                        ? "clamp(0.5rem, 0.32rem + 0.28vw, 0.65rem)"
+                        ? "clamp(0.42rem, 0.28rem + 0.2vw, 0.56rem)"
                         : isCompactDensity
-                          ? "clamp(0.6rem, 0.4rem + 0.34vw, 0.78rem)"
+                          ? "clamp(0.52rem, 0.34rem + 0.28vw, 0.68rem)"
                           : "clamp(0.7rem, 0.45rem + 0.6vw, 0.95rem)",
                     }
                   : {
@@ -125,9 +126,9 @@ export default function MoveControls({
                   </span>
                 )}
               </div>
-              {option.hint && (
+              {option.hint && showHint && (
                 <p
-                  className={`play-shell-text-muted mt-[clamp(0.18rem,0.12rem+0.12vh,0.28rem)] text-[clamp(0.58rem,0.54rem+0.12vw,0.68rem)] ${isCompactDensity ? "hidden min-[1320px]:block" : "hidden min-[1100px]:block"}`}
+                  className="play-shell-text-muted mt-[clamp(0.16rem,0.1rem+0.1vh,0.24rem)] text-[clamp(0.58rem,0.54rem+0.12vw,0.68rem)] hidden min-[1100px]:block"
                 >
                   {option.hint}
                 </p>

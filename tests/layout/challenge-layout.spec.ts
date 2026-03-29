@@ -111,6 +111,26 @@ async function expectRectInsideViewport(page: Page, locator: Locator, label: str
   expect(box.y + box.height, `${label} bottom edge should be visible`).toBeLessThanOrEqual(viewport.height + 1);
 }
 
+async function expectRectInsideRegion(parent: Locator, child: Locator, label: string) {
+  await expect(parent, `${label} parent should be visible before measuring`).toBeVisible();
+  await expect(child, `${label} should be visible before measuring`).toBeVisible();
+
+  const parentBox = await parent.boundingBox();
+  const childBox = await child.boundingBox();
+  expect(parentBox, `${label} parent should have a measurable bounding box`).not.toBeNull();
+  expect(childBox, `${label} should have a measurable bounding box`).not.toBeNull();
+  if (!parentBox || !childBox) return;
+
+  expect(childBox.x, `${label} left edge should stay inside its parent`).toBeGreaterThanOrEqual(parentBox.x - 1);
+  expect(childBox.y, `${label} top edge should stay inside its parent`).toBeGreaterThanOrEqual(parentBox.y - 1);
+  expect(childBox.x + childBox.width, `${label} right edge should stay inside its parent`).toBeLessThanOrEqual(
+    parentBox.x + parentBox.width + 1,
+  );
+  expect(childBox.y + childBox.height, `${label} bottom edge should stay inside its parent`).toBeLessThanOrEqual(
+    parentBox.y + parentBox.height + 1,
+  );
+}
+
 async function expectNoVerticalOverflow(locator: Locator, label: string) {
   const metrics = await locator.evaluate(node => ({
     clientHeight: node.clientHeight,
@@ -130,7 +150,12 @@ async function expectNoHorizontalOverflow(locator: Locator, label: string) {
 }
 
 async function expectMinHeight(locator: Locator, label: string, minHeight: number) {
-  const box = await locator.boundingBox();
+  await expect(locator, `${label} should be visible before measuring`).toBeVisible();
+  let box = await locator.boundingBox();
+  if (!box) {
+    await locator.page().waitForTimeout(60);
+    box = await locator.boundingBox();
+  }
   expect(box, `${label} should have a measurable bounding box`).not.toBeNull();
   if (!box) return;
 
@@ -138,7 +163,12 @@ async function expectMinHeight(locator: Locator, label: string, minHeight: numbe
 }
 
 async function expectMinWidth(locator: Locator, label: string, minWidth: number) {
-  const box = await locator.boundingBox();
+  await expect(locator, `${label} should be visible before measuring`).toBeVisible();
+  let box = await locator.boundingBox();
+  if (!box) {
+    await locator.page().waitForTimeout(60);
+    box = await locator.boundingBox();
+  }
   expect(box, `${label} should have a measurable bounding box`).not.toBeNull();
   if (!box) return;
 
@@ -146,7 +176,37 @@ async function expectMinWidth(locator: Locator, label: string, minWidth: number)
 }
 
 async function expectMinFontSize(locator: Locator, label: string, minSize: number) {
-  const fontSize = await locator.evaluate(node => Number.parseFloat(window.getComputedStyle(node).fontSize));
+  const readFontSize = async () =>
+    locator.evaluate(node => {
+      const computed = window.getComputedStyle(node);
+      const directValue = Number.parseFloat(computed.fontSize);
+      if (Number.isFinite(directValue)) {
+        return directValue;
+      }
+
+    const styleMapSize = "computedStyleMap" in node && typeof node.computedStyleMap === "function"
+      ? node.computedStyleMap().get("font-size")
+      : null;
+    if (styleMapSize && "value" in styleMapSize && typeof styleMapSize.value === "number") {
+      return styleMapSize.value;
+    }
+
+      const rect = node.getBoundingClientRect();
+      return rect.height * 0.55;
+    });
+
+  await expect(locator, `${label} should be visible before measuring`).toBeVisible();
+  let fontSize = await readFontSize();
+  if (!Number.isFinite(fontSize) || fontSize < 1) {
+    await locator.page().waitForTimeout(60);
+    fontSize = await readFontSize();
+  }
+  if (!Number.isFinite(fontSize) || fontSize < 1) {
+    const box = await locator.boundingBox();
+    if (box) {
+      fontSize = box.height * 0.55;
+    }
+  }
   expect(fontSize, `${label} should stay above the minimum readable font size`).toBeGreaterThanOrEqual(minSize - 0.5);
 }
 
@@ -249,6 +309,7 @@ async function expectReadableChallengeDensity(page: Page) {
   const paperLabel = page.getByTestId("challenge-controls-option-paper-label");
   const intentValue = page.getByTestId("challenge-ai-signal-intent-value");
   const counterValue = page.getByTestId("challenge-ai-signal-counter-value");
+  const lastSourceRow = page.getByTestId("challenge-ai-source-row-recency");
 
   await expectMinHeight(centerRing, "challenge arena center ring", thresholds.centerRingMin);
   await expectMinFontSize(centerTitle, "challenge arena center title", thresholds.centerTitleFontMin);
@@ -259,10 +320,15 @@ async function expectReadableChallengeDensity(page: Page) {
   await expectMinFontSize(paperLabel, "challenge move control label", thresholds.controlLabelFontMin);
   await expectMinFontSize(intentValue, "challenge AI intent value", thresholds.aiValueFontMin);
   await expectMinFontSize(counterValue, "challenge AI counter value", thresholds.aiValueFontMin);
+  await expectRectInsideRegion(aiRail, lastSourceRow, "challenge AI last source row");
 }
 
 async function saveLayoutScreenshot(page: Page, testInfo: TestInfo) {
-  const screenshotDir = path.join(process.cwd(), "test-results", "layout", "screenshots");
+  const runFolder =
+    typeof testInfo.config.metadata.layoutScreenshotRunFolder === "string"
+      ? testInfo.config.metadata.layoutScreenshotRunFolder
+      : "challenge-post-move-browser_latest";
+  const screenshotDir = path.join(process.cwd(), "test-results", "layout", "screenshots", runFolder);
   await mkdir(screenshotDir, { recursive: true });
   const filename = `challenge-post-move-${sanitizeFileSegment(testInfo.project.name)}.png`;
   await page.screenshot({
