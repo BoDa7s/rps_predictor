@@ -159,12 +159,12 @@ export default function AiLivePanel({
           <p
             className={`play-shell-text-muted mt-[clamp(0.12rem,0.06rem+0.12vh,0.22rem)] break-words ${
               isUltraCramped
-                ? "text-[0.38rem] line-clamp-1"
+                ? "text-[0.52rem] line-clamp-2"
                 : isCramped
-                  ? "text-[clamp(0.42rem,0.4rem+0.05vw,0.5rem)] line-clamp-2"
+                  ? "text-[clamp(0.54rem,0.48rem+0.1vw,0.64rem)] line-clamp-2"
                 : isTightDensity
-                  ? "text-[clamp(0.56rem,0.52rem+0.1vw,0.66rem)] line-clamp-3"
-                : "text-[clamp(0.62rem,0.56rem+0.14vw,0.76rem)] line-clamp-2"
+                  ? "text-[clamp(0.68rem,0.6rem+0.14vw,0.78rem)] line-clamp-3"
+                : "text-[clamp(0.74rem,0.64rem+0.18vw,0.9rem)] line-clamp-2"
             }`}
           >
             {summary}
@@ -214,13 +214,13 @@ export default function AiLivePanel({
                     }`}
                     style={{
                       fontSize: isUltraCramped
-                        ? "0.34rem"
+                        ? "0.5rem"
                         : isCramped
-                          ? "clamp(0.42rem, 0.4rem + 0.05vw, 0.5rem)"
+                          ? "clamp(0.54rem, 0.48rem + 0.1vw, 0.64rem)"
                         : isTightDensity
-                          ? "clamp(0.54rem, 0.5rem + 0.08vw, 0.62rem)"
+                          ? "clamp(0.66rem, 0.58rem + 0.12vw, 0.76rem)"
                           : "var(--play-cockpit-ai-detail-size)",
-                      lineHeight: isUltraCramped ? "1.05" : undefined,
+                      lineHeight: isUltraCramped ? "1.1" : undefined,
                     }}
                   >
                     {signal.detail}
