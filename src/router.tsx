@@ -6,6 +6,7 @@ import BootPage from "./pages/play/BootPage";
 import ChallengeGamePage from "./pages/play/ChallengeGamePage";
 import CreatePlayerPage from "./pages/play/CreatePlayerPage";
 import DashboardPage from "./pages/play/DashboardPage";
+import DeveloperPage from "./pages/play/DeveloperPage";
 import GameplayPage from "./pages/play/GameplayPage";
 import HelpPage from "./pages/play/HelpPage";
 import LeaderboardPage from "./pages/play/LeaderboardPage";
@@ -90,6 +91,10 @@ export const router = createBrowserRouter([
               {
                 path: "about",
                 element: <AboutPage />,
+              },
+              {
+                path: "developer",
+                element: <DeveloperPage />,
               },
             ],
           },

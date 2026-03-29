@@ -37,6 +37,8 @@ interface DeveloperConsoleProps {
   timings: MatchTimings;
   onTimingsUpdate: (timings: MatchTimings, options?: { persist?: boolean; clearSaved?: boolean }) => void;
   onTimingsReset: () => void;
+  layoutMode?: "modal" | "page";
+  closeLabel?: string;
 }
 
 const TAB_OPTIONS = ["overview", "data", "instrumentation", "timers", "audit"] as const;
@@ -106,7 +108,15 @@ interface ProfileSummaryData {
   modeCounts: Record<Mode, number>;
 }
 
-export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTimingsReset }: DeveloperConsoleProps) {
+export function DeveloperConsole({
+  open,
+  onClose,
+  timings,
+  onTimingsUpdate,
+  onTimingsReset,
+  layoutMode = "modal",
+  closeLabel = "Close",
+}: DeveloperConsoleProps) {
   const { players, updatePlayer, deletePlayer, setCurrentPlayer, currentPlayerId } = usePlayers();
   const {
     adminRounds,
@@ -436,6 +446,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
       ? "This will replace the current timings with the baseline defaults."
       : "";
   const timingConfirmDisabled = timingConfirmAction === "save" && !hasTimingChanges;
+  const isPageMode = layoutMode === "page";
 
   useEffect(() => {
     if (!ready) return;
@@ -1007,30 +1018,34 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
     <div
       role="presentation"
       style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(10, 15, 30, 0.72)",
-        zIndex: 9999,
+        position: isPageMode ? "relative" : "fixed",
+        inset: isPageMode ? "auto" : 0,
+        background: isPageMode ? "transparent" : "rgba(10, 15, 30, 0.72)",
+        zIndex: isPageMode ? "auto" : 9999,
         display: "flex",
-        alignItems: "center",
+        alignItems: isPageMode ? "stretch" : "center",
         justifyContent: "center",
+        minHeight: isPageMode ? "100%" : undefined,
       }}
-      aria-hidden={false}
+      aria-hidden={isPageMode ? undefined : false}
     >
       <div
-        role="dialog"
-        aria-modal="true"
+        role={isPageMode ? "region" : "dialog"}
+        aria-modal={isPageMode ? undefined : true}
         style={{
-          width: "min(95vw, 1200px)",
-          maxHeight: "92vh",
+          width: isPageMode ? "100%" : "min(95vw, 1200px)",
+          maxHeight: isPageMode ? "none" : "92vh",
+          minHeight: isPageMode ? "calc(100dvh - var(--play-header-height, 0px) - 11rem)" : undefined,
           background: "#0b1220",
-          borderRadius: "16px",
+          borderRadius: isPageMode ? "24px" : "16px",
           padding: "24px",
           color: "#f7fafc",
           boxShadow: "0 20px 60px rgba(0,0,0,0.45)",
           display: "flex",
           flexDirection: "column",
           gap: "16px",
+          border: isPageMode ? "1px solid rgba(255,255,255,0.08)" : "none",
+          overflow: "hidden",
         }}
       >
         <header
@@ -1113,7 +1128,7 @@ export function DeveloperConsole({ open, onClose, timings, onTimingsUpdate, onTi
                 cursor: "pointer",
               }}
             >
-              Close
+              {closeLabel}
             </button>
           </div>
         </header>

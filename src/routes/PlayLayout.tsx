@@ -27,6 +27,10 @@ const playPageMeta: Record<string, { title: string; description: string }> = {
     title: "About",
     description: "Project context, credits, educational framing, and links for RPS Predictor.",
   },
+  "/play/developer": {
+    title: "Developer Mode",
+    description: "Secure access to player data, instrumentation, timers, audit trails, and developer-only controls.",
+  },
 };
 
 function getPlayerFirstName(playerName: string | null | undefined) {

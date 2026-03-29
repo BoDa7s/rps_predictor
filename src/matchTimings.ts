@@ -14,26 +14,27 @@ export type MatchTimings = Record<Mode, ModeTimingConfig>;
 
 export const MATCH_TIMING_DEFAULTS: MatchTimings = {
   challenge: {
-    countdownTickMs: 800,
-    revealHoldMs: 1600,
-    resultBannerMs: 1600,
-    robotRoundReactionMs: 10000,
-    robotRoundRestMs: 120000,
-    robotResultReactionMs: 10000,
-    robotResultRestMs: 120000,
+    countdownTickMs: 650,
+    revealHoldMs: 300,
+    resultBannerMs: 2000,
+    robotRoundReactionMs: 5000,
+    robotRoundRestMs: 100,
+    robotResultReactionMs: 500,
+    robotResultRestMs: 500,
   },
   practice: {
-    countdownTickMs: 800,
-    revealHoldMs: 1600,
-    resultBannerMs: 1600,
-    robotRoundReactionMs: 10000,
-    robotRoundRestMs: 120000,
-    robotResultReactionMs: 10000,
-    robotResultRestMs: 120000,
+    countdownTickMs: 650,
+    revealHoldMs: 300,
+    resultBannerMs: 2000,
+    robotRoundReactionMs: 5000,
+    robotRoundRestMs: 100,
+    robotResultReactionMs: 500,
+    robotResultRestMs: 500,
   },
 };
 
-const STORAGE_KEY = "rps_match_timings_v1";
+const STORAGE_KEY = "rps_match_timings_v2";
+const LEGACY_STORAGE_KEYS = ["rps_match_timings_v1"];
 
 function sanitizeNumber(value: unknown, fallback: number): number {
   const parsed = typeof value === "string" ? Number.parseFloat(value) : typeof value === "number" ? value : Number.NaN;
@@ -95,6 +96,13 @@ export function loadMatchTimings(): MatchTimings {
     return normalizeMatchTimings(MATCH_TIMING_DEFAULTS);
   }
   try {
+    LEGACY_STORAGE_KEYS.forEach(key => {
+      try {
+        window.localStorage.removeItem(key);
+      } catch {
+        /* noop */
+      }
+    });
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) {
       return normalizeMatchTimings(MATCH_TIMING_DEFAULTS);
@@ -124,6 +132,7 @@ export function clearSavedMatchTimings() {
   }
   try {
     window.localStorage.removeItem(STORAGE_KEY);
+    LEGACY_STORAGE_KEYS.forEach(key => window.localStorage.removeItem(key));
   } catch (err) {
     console.warn("Failed to clear match timings", err);
   }
