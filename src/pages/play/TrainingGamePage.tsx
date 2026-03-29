@@ -4,6 +4,7 @@ import AiLivePanel, { type AiLiveSignal } from "../../components/play/AiLivePane
 import GameArena from "../../components/play/GameArena";
 import GameHudHeader, { type GameHudStat } from "../../components/play/GameHudHeader";
 import MoveControls, { type MoveControlOption } from "../../components/play/MoveControls";
+import { playOutcomeToneClasses } from "../../components/play/playOutcomeTone";
 import RoundHistoryStrip from "../../components/play/RoundHistoryStrip";
 import { cockpitGridTemplates, useCockpitViewport } from "../../components/play/cockpitViewport";
 import { useTrainingRuntime } from "../../hooks/useTrainingRuntime";
@@ -60,6 +61,36 @@ export default function TrainingGamePage() {
       value: `${training.trainingCount}/${training.totalRounds}`,
     },
   ];
+  const trainingScore = training.recentRounds.reduce(
+    (totals, round) => {
+      if (round.outcome === "win") totals.player += 1;
+      if (round.outcome === "lose") totals.ai += 1;
+      return totals;
+    },
+    { player: 0, ai: 0 },
+  );
+  const trainingScorePillToneClass =
+    trainingScore.player > trainingScore.ai
+      ? playOutcomeToneClasses.win
+      : trainingScore.player < trainingScore.ai
+        ? playOutcomeToneClasses.lose
+        : playOutcomeToneClasses.tie;
+  const trainingScoreDisplay = (
+    <div data-testid="training-score-display" className="flex min-w-0 flex-col items-center text-center">
+      <span className="text-[color:var(--app-text-secondary)] text-[clamp(0.5rem,0.45rem+0.12vw,0.62rem)] font-bold uppercase tracking-[0.18em]">
+        SCORE
+      </span>
+      <div
+        className={`mt-[clamp(0.04rem,0.02rem+0.06vh,0.12rem)] inline-flex items-center rounded-full border px-[clamp(0.5rem,0.34rem+0.32vw,0.8rem)] py-[clamp(0.14rem,0.08rem+0.1vh,0.24rem)] ${trainingScorePillToneClass}`}
+      >
+        <p className="font-bold tracking-[-0.05em] text-current text-[clamp(1.05rem,0.88rem+0.5vw,1.45rem)] leading-none">
+          <span>{trainingScore.player}</span>
+          <span className="mx-[clamp(0.22rem,0.14rem+0.16vw,0.4rem)] opacity-75">-</span>
+          <span>{trainingScore.ai}</span>
+        </p>
+      </div>
+    </div>
+  );
 
   const moveOptions = useMemo<MoveControlOption[]>(
     () => [
@@ -136,8 +167,7 @@ export default function TrainingGamePage() {
                   className="h-full"
                 >
                   <GameArena
-                    title={`Round ${Math.min(training.roundNumber, training.totalRounds)}`}
-                    subtitle={phaseLabels[training.phase]}
+                    title=""
                     leftSlot={{
                       label: "Player",
                       title: training.currentPlayerName,
@@ -162,12 +192,13 @@ export default function TrainingGamePage() {
                       tone: "ai",
                       meta: "AI off",
                     }}
-                    centerLabel={training.revealState.centerLabel}
-                    centerTitle={training.revealState.centerTitle}
+                  centerLabel={training.revealState.centerLabel}
+                  centerTitle={training.revealState.centerTitle}
                     centerDetail={training.revealState.centerDetail}
-                    centerBadge={`${Math.min(training.roundNumber, training.totalRounds)} / ${training.totalRounds}`}
                     centerEmphasis="strong"
                     density={viewport.density}
+                    headerCenter={trainingScoreDisplay}
+                    hideTitleBlock
                   />
                 </motion.div>
               </AnimatePresence>

@@ -139,10 +139,6 @@ function PlayLayoutShell() {
               <p className="play-shell-brand-title shrink-0 text-sm font-semibold uppercase tracking-[0.28em]">
                 RPS Predictor
               </p>
-              <span className="hidden h-4 w-px bg-[color:var(--app-border)] md:block" />
-              <p className="play-shell-muted hidden min-w-0 truncate text-sm md:block">
-                Play area with routed tools, stats, settings, and theme controls
-              </p>
             </div>
           </div>
 
@@ -210,12 +206,16 @@ function PlayLayoutShell() {
                   {currentPlayerFirstName}
                 </span>
                 <span
-                  className={`text-[10px] ${
-                    playerTriggerActive ? "text-[color:var(--app-on-accent)]" : "text-[color:var(--app-text-muted)]"
+                  className={`inline-flex h-5 w-5 items-center justify-center rounded-full ${
+                    playerTriggerActive
+                      ? "bg-white/10 text-[color:var(--app-on-accent)]"
+                      : "bg-[color:var(--app-surface-subtle)] text-[color:var(--app-text-muted)]"
                   }`}
                   aria-hidden="true"
                 >
-                  v
+                  <svg viewBox="0 0 12 12" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 4.5 6 7.5 9 4.5" />
+                  </svg>
                 </span>
               </button>
 

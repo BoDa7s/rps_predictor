@@ -8,6 +8,7 @@ import MoveControls, { type MoveControlOption } from "../../components/play/Move
 import PredictionSourcesPanel from "../../components/play/PredictionSourcesPanel";
 import RoundHistoryStrip from "../../components/play/RoundHistoryStrip";
 import { cockpitGridTemplates, useCockpitViewport, usePaneDensity } from "../../components/play/cockpitViewport";
+import { playOutcomeToneClasses } from "../../components/play/playOutcomeTone";
 import { useChallengeRuntime } from "../../hooks/useChallengeRuntime";
 import {
   PLAY_DASHBOARD_PATH,
@@ -18,6 +19,10 @@ import { useStats } from "../../stats";
 
 function formatMoveLabel(move?: "rock" | "paper" | "scissors") {
   return move ? `${move.charAt(0).toUpperCase() + move.slice(1)}` : "Pending";
+}
+
+function formatDifficultyLabel(value: "fair" | "normal" | "ruthless") {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 export default function ChallengeGamePage() {
@@ -39,10 +44,34 @@ export default function ChallengeGamePage() {
     return <Navigate to={PLAY_DASHBOARD_PATH} replace />;
   }
 
+  const roundProgress = `${Math.min(runtime.roundNumber, runtime.bestOf)} / ${runtime.bestOf}`;
   const headerStats: GameHudStat[] = [
     { label: "Best of", value: `${runtime.bestOf}`, tone: "accent" },
-    { label: "Score", value: runtime.scoreLabel },
+    { label: "AI Difficulty", value: formatDifficultyLabel(runtime.aiMode) },
+    { label: "Round", value: roundProgress },
   ];
+  const scorePillToneClass =
+    runtime.playerScore > runtime.aiScore
+      ? playOutcomeToneClasses.win
+      : runtime.playerScore < runtime.aiScore
+        ? playOutcomeToneClasses.lose
+        : playOutcomeToneClasses.tie;
+  const scoreDisplay = (
+    <div data-testid="challenge-score-display" className="flex min-w-0 flex-col items-center text-center">
+      <span className="text-[color:var(--app-text-secondary)] text-[clamp(0.5rem,0.45rem+0.12vw,0.62rem)] font-bold uppercase tracking-[0.18em]">
+        SCORE
+      </span>
+      <div
+        className={`mt-[clamp(0.04rem,0.02rem+0.06vh,0.12rem)] inline-flex items-center rounded-full border px-[clamp(0.5rem,0.34rem+0.32vw,0.8rem)] py-[clamp(0.14rem,0.08rem+0.1vh,0.24rem)] ${scorePillToneClass}`}
+      >
+        <p className="font-bold tracking-[-0.05em] text-current text-[clamp(1.05rem,0.88rem+0.5vw,1.45rem)] leading-none">
+          <span>{runtime.playerScore}</span>
+          <span className="mx-[clamp(0.22rem,0.14rem+0.16vw,0.4rem)] opacity-75">-</span>
+          <span>{runtime.aiScore}</span>
+        </p>
+      </div>
+    </div>
+  );
 
   const moveOptions: MoveControlOption[] = [
     {
@@ -99,7 +128,7 @@ export default function ChallengeGamePage() {
                 subtitle={runtime.currentPlayerName}
                 stats={headerStats}
                 alignment="center"
-                statColumns={2}
+                statColumns={3}
                 compact
                 density={viewport.density}
               />
@@ -114,7 +143,7 @@ export default function ChallengeGamePage() {
                 transition={{ duration: 0.18, ease: "easeOut" }}
               >
                 <GameArena
-                  title={`Round ${runtime.roundNumber}`}
+                  title=""
                   leftSlot={{
                     label: "Player",
                     title: runtime.currentPlayerName,
@@ -146,11 +175,12 @@ export default function ChallengeGamePage() {
                   centerLabel={runtime.revealState.centerLabel}
                   centerTitle={runtime.revealState.centerTitle}
                   centerDetail={runtime.revealState.centerDetail}
-                  centerBadge={`${Math.min(runtime.roundNumber, runtime.bestOf)} / ${runtime.bestOf}`}
                   centerEmphasis="strong"
                   density={viewport.density}
                   scale={viewport.scale}
                   testIdPrefix="challenge-arena"
+                  headerCenter={scoreDisplay}
+                  hideTitleBlock
                 />
               </motion.div>
             </div>

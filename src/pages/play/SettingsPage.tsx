@@ -7,9 +7,12 @@ import {
   cloneProfilePreferences,
   DEFAULT_PROFILE_PREFERENCES,
   DEFAULT_THEME_COLOR_PREFERENCES,
+  GAMEPLAY_BEST_OF_OPTIONS,
+  GAMEPLAY_DIFFICULTY_OPTIONS,
   type ThemeMode,
   useStats,
 } from "../../stats";
+import type { AIMode, BestOf } from "../../gameTypes";
 
 type PlayerFormState = {
   playerName: string;
@@ -173,6 +176,20 @@ export default function SettingsPage() {
       preferences.themeColors[themeModeEditor] = { ...DEFAULT_THEME_COLOR_PREFERENCES[themeModeEditor] };
     });
     setStatusMessage(`${themeModeEditor} colors reset.`);
+  };
+
+  const handleGameplayDifficultyChange = (value: AIMode) => {
+    applyCurrentProfilePreferences(preferences => {
+      preferences.gameplay.aiDifficulty = value;
+    });
+    setStatusMessage(`AI difficulty set to ${value}.`);
+  };
+
+  const handleGameplayBestOfChange = (value: BestOf) => {
+    applyCurrentProfilePreferences(preferences => {
+      preferences.gameplay.bestOf = value;
+    });
+    setStatusMessage(`Best of set to ${value}.`);
   };
 
   const sections = useMemo<PlaySection[]>(
@@ -369,30 +386,57 @@ export default function SettingsPage() {
       {
         id: "gameplay",
         label: "Gameplay",
-        title: "Know which controls live in settings and which stay in the match workspace",
-        description: "This routed settings page owns durable profile preferences, while live match controls remain attached to /play.",
+        title: "Set durable challenge preferences for AI difficulty and match length",
+        description: "These settings persist on the active statistics profile and apply when challenge launches. Training remains AI off with random mode on.",
         content: (
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 lg:grid-cols-2">
             <article className={sectionCardClass}>
-              <h3 className="play-shell-heading text-lg font-semibold">Difficulty and best-of</h3>
+              <h3 className="play-shell-heading text-lg font-semibold">AI Difficulty</h3>
               <p className="mt-3 text-sm leading-7 play-shell-muted">
-                Match-specific controls stay in the gameplay workspace so they remain coupled to the active round and
-                challenge flow.
+                Fair softens the predictor, Normal matches the current baseline, and Ruthless commits harder to the strongest read.
               </p>
+              <div className="play-shell-toggle mt-5 inline-flex flex-wrap overflow-hidden rounded-full border">
+                {GAMEPLAY_DIFFICULTY_OPTIONS.map(option => {
+                  const isActive = currentPreferences.gameplay.aiDifficulty === option;
+                  return (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => handleGameplayDifficultyChange(option)}
+                      disabled={!currentProfile}
+                      className={`play-shell-toggle-button px-4 py-2 text-sm font-semibold capitalize transition ${
+                        isActive ? "is-active" : ""
+                      }`}
+                    >
+                      {option}
+                    </button>
+                  );
+                })}
+              </div>
             </article>
             <article className={sectionCardClass}>
-              <h3 className="play-shell-heading text-lg font-semibold">Live AI Insight</h3>
+              <h3 className="play-shell-heading text-lg font-semibold">Best of</h3>
               <p className="mt-3 text-sm leading-7 play-shell-muted">
-                Open, close, and react to the live prediction panel directly inside <code>/play</code> where the round
-                engine is running.
+                Challenge matches end as soon as one side reaches the required majority for the selected format.
               </p>
-            </article>
-            <article className={sectionCardClass}>
-              <h3 className="play-shell-heading text-lg font-semibold">Profile defaults</h3>
-              <p className="mt-3 text-sm leading-7 play-shell-muted">
-                Durable identity and display preferences belong here because they should survive route changes and new
-                sessions.
-              </p>
+              <div className="play-shell-toggle mt-5 inline-flex flex-wrap overflow-hidden rounded-full border">
+                {GAMEPLAY_BEST_OF_OPTIONS.map(option => {
+                  const isActive = currentPreferences.gameplay.bestOf === option;
+                  return (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => handleGameplayBestOfChange(option)}
+                      disabled={!currentProfile}
+                      className={`play-shell-toggle-button px-4 py-2 text-sm font-semibold transition ${
+                        isActive ? "is-active" : ""
+                      }`}
+                    >
+                      {option}
+                    </button>
+                  );
+                })}
+              </div>
             </article>
           </div>
         ),

@@ -86,6 +86,11 @@ export function sanitizeReturnTo(value: string | null | undefined): string | nul
   return value;
 }
 
+function isBarePlayReturn(value: string | null | undefined): boolean {
+  if (!value) return false;
+  return value === "/play" || value.startsWith("/play?") || value.startsWith("/play#");
+}
+
 export function profileNeedsTraining(
   profile: Pick<StatsProfile, "trainingCount" | "trained"> | null | undefined,
 ): boolean {
@@ -118,7 +123,11 @@ export function buildPostOnboardingDestination(options: {
   if (forceTraining || profileNeedsTraining(profile)) {
     return buildTrainingStartPath();
   }
-  return sanitizeReturnTo(returnTo) ?? PLAY_DASHBOARD_PATH;
+  const safeReturnTo = sanitizeReturnTo(returnTo);
+  if (isBarePlayReturn(safeReturnTo)) {
+    return PLAY_DASHBOARD_PATH;
+  }
+  return safeReturnTo ?? PLAY_DASHBOARD_PATH;
 }
 
 export function getBootDestination(options: {
@@ -139,6 +148,9 @@ export function getBootDestination(options: {
 export function buildPlayPath(step: PlayEntryStep, returnTo?: string | null): string {
   const safeReturnTo = sanitizeReturnTo(returnTo);
   if (step === "play") {
+    if (isBarePlayReturn(safeReturnTo)) {
+      return PLAY_DASHBOARD_PATH;
+    }
     return safeReturnTo ?? PLAY_DASHBOARD_PATH;
   }
 

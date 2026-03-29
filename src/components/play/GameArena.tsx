@@ -27,6 +27,9 @@ interface GameArenaProps {
   density?: CockpitDensity;
   scale?: number;
   testIdPrefix?: string;
+  headerCenter?: React.ReactNode;
+  headerRight?: React.ReactNode;
+  hideTitleBlock?: boolean;
 }
 
 const slotToneClasses: Record<NonNullable<GameArenaSlot["tone"]>, string> = {
@@ -121,23 +124,50 @@ export default function GameArena({
   density = "normal",
   scale = 1,
   testIdPrefix,
+  headerCenter,
+  headerRight,
+  hideTitleBlock = false,
 }: GameArenaProps) {
   const isStrongCenter = centerEmphasis === "strong";
   const isCompactDensity = density !== "normal" && density !== "expanded";
   const isTightDensity = density === "tight";
   const sizing = getArenaSizing(density, scale);
+  const hasCustomHeaderLayout = Boolean(headerCenter || headerRight);
 
   return (
     <section className="flex h-full min-h-0 flex-col overflow-hidden bg-[color:color-mix(in_srgb,var(--app-surface-card)_74%,transparent)]">
-      <div className={`flex flex-wrap items-center justify-between gap-[clamp(0.35rem,0.25rem+0.35vw,0.6rem)] border-b border-[color:var(--app-border)] px-[clamp(0.2rem,0.15rem+0.18vw,0.4rem)] ${isTightDensity ? "pb-[clamp(0.22rem,0.14rem+0.16vh,0.32rem)]" : isCompactDensity ? "pb-[clamp(0.28rem,0.16rem+0.2vh,0.42rem)]" : "pb-[clamp(0.45rem,0.25rem+0.55vh,0.8rem)]"}`}>
-        <div>
-          <p className={`play-shell-heading font-semibold tracking-[-0.04em] ${isTightDensity ? "text-[clamp(0.82rem,0.72rem+0.22vw,0.94rem)]" : isCompactDensity ? "text-[clamp(0.9rem,0.78rem+0.26vw,1.02rem)]" : "text-[clamp(0.95rem,0.75rem+0.42vw,1.15rem)]"}`}>{title}</p>
-          {subtitle && <p className={`play-shell-text-muted mt-[clamp(0.08rem,0.04rem+0.06vh,0.14rem)] ${isTightDensity ? "text-[clamp(0.56rem,0.52rem+0.1vw,0.66rem)]" : "text-[clamp(0.66rem,0.58rem+0.16vw,0.86rem)]"}`}>{subtitle}</p>}
-        </div>
-        {centerBadge && (
-          <span className={`rounded-full border border-[color:var(--app-border-strong)] bg-[color:var(--app-accent-soft)] font-semibold uppercase tracking-[0.18em] text-[color:var(--app-accent-strong)] ${isTightDensity ? "px-[clamp(0.4rem,0.28rem+0.2vw,0.52rem)] py-[clamp(0.16rem,0.1rem+0.08vw,0.24rem)] text-[clamp(0.46rem,0.42rem+0.1vw,0.56rem)]" : "px-[clamp(0.55rem,0.42rem+0.35vw,0.75rem)] py-[clamp(0.25rem,0.18rem+0.15vw,0.38rem)] text-[clamp(0.54rem,0.48rem+0.16vw,0.68rem)]"}`}>
-            {centerBadge}
-          </span>
+      <div className={`border-b border-[color:var(--app-border)] px-[clamp(0.2rem,0.15rem+0.18vw,0.4rem)] ${isTightDensity ? "pb-[clamp(0.22rem,0.14rem+0.16vh,0.32rem)]" : isCompactDensity ? "pb-[clamp(0.28rem,0.16rem+0.2vh,0.42rem)]" : "pb-[clamp(0.45rem,0.25rem+0.55vh,0.8rem)]"}`}>
+        {hasCustomHeaderLayout ? (
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-[clamp(0.35rem,0.25rem+0.35vw,0.6rem)]">
+            <div>
+              {!hideTitleBlock && (
+                <>
+                  <p className={`play-shell-heading font-semibold tracking-[-0.04em] ${isTightDensity ? "text-[clamp(0.82rem,0.72rem+0.22vw,0.94rem)]" : isCompactDensity ? "text-[clamp(0.9rem,0.78rem+0.26vw,1.02rem)]" : "text-[clamp(0.95rem,0.75rem+0.42vw,1.15rem)]"}`}>{title}</p>
+                  {subtitle && <p className={`play-shell-text-muted mt-[clamp(0.08rem,0.04rem+0.06vh,0.14rem)] ${isTightDensity ? "text-[clamp(0.56rem,0.52rem+0.1vw,0.66rem)]" : "text-[clamp(0.66rem,0.58rem+0.16vw,0.86rem)]"}`}>{subtitle}</p>}
+                </>
+              )}
+            </div>
+            <div className="min-w-0 justify-self-center">{headerCenter}</div>
+            <div className="min-w-0 justify-self-end">
+              {headerRight ?? (centerBadge ? (
+                <span className={`rounded-full border border-[color:var(--app-border-strong)] bg-[color:var(--app-accent-soft)] font-semibold uppercase tracking-[0.18em] text-[color:var(--app-accent-strong)] ${isTightDensity ? "px-[clamp(0.4rem,0.28rem+0.2vw,0.52rem)] py-[clamp(0.16rem,0.1rem+0.08vw,0.24rem)] text-[clamp(0.46rem,0.42rem+0.1vw,0.56rem)]" : "px-[clamp(0.55rem,0.42rem+0.35vw,0.75rem)] py-[clamp(0.25rem,0.18rem+0.15vw,0.38rem)] text-[clamp(0.54rem,0.48rem+0.16vw,0.68rem)]"}`}>
+                  {centerBadge}
+                </span>
+              ) : null)}
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center justify-between gap-[clamp(0.35rem,0.25rem+0.35vw,0.6rem)]">
+            <div>
+              <p className={`play-shell-heading font-semibold tracking-[-0.04em] ${isTightDensity ? "text-[clamp(0.82rem,0.72rem+0.22vw,0.94rem)]" : isCompactDensity ? "text-[clamp(0.9rem,0.78rem+0.26vw,1.02rem)]" : "text-[clamp(0.95rem,0.75rem+0.42vw,1.15rem)]"}`}>{title}</p>
+              {subtitle && <p className={`play-shell-text-muted mt-[clamp(0.08rem,0.04rem+0.06vh,0.14rem)] ${isTightDensity ? "text-[clamp(0.56rem,0.52rem+0.1vw,0.66rem)]" : "text-[clamp(0.66rem,0.58rem+0.16vw,0.86rem)]"}`}>{subtitle}</p>}
+            </div>
+            {centerBadge && (
+              <span className={`rounded-full border border-[color:var(--app-border-strong)] bg-[color:var(--app-accent-soft)] font-semibold uppercase tracking-[0.18em] text-[color:var(--app-accent-strong)] ${isTightDensity ? "px-[clamp(0.4rem,0.28rem+0.2vw,0.52rem)] py-[clamp(0.16rem,0.1rem+0.08vw,0.24rem)] text-[clamp(0.46rem,0.42rem+0.1vw,0.56rem)]" : "px-[clamp(0.55rem,0.42rem+0.35vw,0.75rem)] py-[clamp(0.25rem,0.18rem+0.15vw,0.38rem)] text-[clamp(0.54rem,0.48rem+0.16vw,0.68rem)]"}`}>
+                {centerBadge}
+              </span>
+            )}
+          </div>
         )}
       </div>
 

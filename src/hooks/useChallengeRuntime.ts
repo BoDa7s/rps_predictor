@@ -8,7 +8,11 @@ import { loadMatchTimings } from "../matchTimings";
 import { PLAY_DASHBOARD_PATH } from "../playEntry";
 import { usePlayers } from "../players";
 import {
+  cloneProfilePreferences,
   type DecisionPolicy,
+  DEFAULT_GAMEPLAY_PREFERENCES,
+  GAMEPLAY_BEST_OF_OPTIONS,
+  GAMEPLAY_DIFFICULTY_OPTIONS,
   type HeuristicTrace,
   type MixerTrace,
   type SerializedExpertState,
@@ -84,8 +88,6 @@ const HISTORY_BASE_WEIGHT = 0.3;
 const HISTORY_EARLY_WEIGHT = 0.6;
 const HISTORY_SWITCH_ROUNDS = 4;
 const HISTORY_DECAY_MS = 45 * 60 * 1000;
-const DIFFICULTY_SEQUENCE: AIMode[] = ["fair", "normal", "ruthless"];
-const BEST_OF_OPTIONS: BestOf[] = [3, 5, 7];
 const EXPERT_LABELS = [
   "FrequencyExpert",
   "RecencyExpert",
@@ -587,7 +589,7 @@ function blendDistributions(realtime: Dist, history: Dist, weights: { realtimeWe
   return combined.rock === 0 && combined.paper === 0 && combined.scissors === 0 ? { ...UNIFORM } : normalize(combined);
 }
 
-function computeBlendWeights(sessionRounds: number, persisted: StoredPredictorModelState | null) {
+function computeBlendWeights(sessionRounds: number, persisted: StoredPredictorModelState | null, mode: AIMode) {
   const hasHistory = Boolean(
     persisted &&
       persisted.roundsSeen > 0 &&
@@ -603,6 +605,11 @@ function computeBlendWeights(sessionRounds: number, persisted: StoredPredictorMo
     const ageMs = Math.max(0, Date.now() - updatedAt);
     const decay = Math.exp(-ageMs / HISTORY_DECAY_MS);
     historyWeight *= Number.isFinite(decay) ? decay : 1;
+  }
+  if (mode === "fair") {
+    historyWeight *= 0.55;
+  } else if (mode === "ruthless") {
+    historyWeight *= 1.18;
   }
   historyWeight = Math.max(0, Math.min(0.8, historyWeight));
   const realtimeWeight = Math.max(0, 1 - historyWeight);
@@ -768,8 +775,7 @@ function predictNext(moves: Move[], rng: () => number): { move: Move | null; con
 }
 
 function policyCounterFromDist(dist: Dist, mode: AIMode, rng: () => number) {
-  if (mode === "fair") return MOVES[Math.floor(rng() * 3)] as Move;
-  const lambda = mode === "ruthless" ? 4 : 2;
+  const lambda = mode === "fair" ? 1.15 : mode === "ruthless" ? 4 : 2;
   const logits = MOVES.map(move => Math.log(Math.max(1e-6, dist[move])) * lambda);
   const max = Math.max(...logits);
   const exps = logits.map(value => Math.exp(value - max));
@@ -777,9 +783,13 @@ function policyCounterFromDist(dist: Dist, mode: AIMode, rng: () => number) {
   const probs = exps.map(value => value / sum);
   const idx = probs[0] > probs[1] ? (probs[0] > probs[2] ? 0 : 2) : probs[1] > probs[2] ? 1 : 2;
   let move = counterMove(MOVES[idx]);
-  const epsilon = mode === "normal" ? 0.05 : 0;
+  const epsilon = mode === "fair" ? 0.3 : mode === "normal" ? 0.05 : 0;
   if (rng() < epsilon) move = MOVES[Math.floor(rng() * 3)] as Move;
   return move;
+}
+
+function selectChallengeGameplayPreferences(currentProfile: ReturnType<typeof useStats>["currentProfile"]) {
+  return currentProfile?.preferences.gameplay ?? DEFAULT_GAMEPLAY_PREFERENCES;
 }
 
 function buildLiveSnapshot(
@@ -985,12 +995,14 @@ export function useChallengeRuntime() {
     logRound,
     getModelStateForProfile,
     saveModelStateForProfile,
+    updateProfile,
   } = useStats();
   const timings = useMemo(() => loadMatchTimings().challenge, []);
   const [seed] = useState(() => Math.floor(Math.random() * 1e9));
   const rng = useMemo(() => mulberry32(seed), [seed]);
-  const [bestOf, setBestOf] = useState<BestOf>(5);
-  const [aiMode, setAiMode] = useState<AIMode>("normal");
+  const gameplayPreferences = selectChallengeGameplayPreferences(currentProfile);
+  const [bestOf, setBestOfState] = useState<BestOf>(gameplayPreferences.bestOf);
+  const [aiMode, setAiModeState] = useState<AIMode>(gameplayPreferences.aiDifficulty);
   const [playerScore, setPlayerScore] = useState(0);
   const [aiScore, setAiScore] = useState(0);
   const [roundNumber, setRoundNumber] = useState(1);
@@ -1124,6 +1136,11 @@ export function useChallengeRuntime() {
   }, [currentProfile?.id, getModelStateForProfile, loadPersistedModel, resetSessionMixer]);
 
   useEffect(() => {
+    setBestOfState(gameplayPreferences.bestOf);
+    setAiModeState(gameplayPreferences.aiDifficulty);
+  }, [currentProfile?.id, gameplayPreferences.aiDifficulty, gameplayPreferences.bestOf]);
+
+  useEffect(() => {
     if (typeof document === "undefined" || typeof window === "undefined") return;
     const flush = () => {
       if (modelPersistTimeoutRef.current !== null) {
@@ -1192,6 +1209,28 @@ export function useChallengeRuntime() {
   useEffect(() => {
     resetMatch();
   }, [currentProfile?.id, resetMatch]);
+
+  const setBestOf = useCallback(
+    (value: BestOf) => {
+      setBestOfState(value);
+      if (!currentProfile) return;
+      const nextPreferences = cloneProfilePreferences(currentProfile.preferences);
+      nextPreferences.gameplay.bestOf = value;
+      updateProfile(currentProfile.id, { preferences: nextPreferences });
+    },
+    [currentProfile, updateProfile],
+  );
+
+  const setAiMode = useCallback(
+    (value: AIMode) => {
+      setAiModeState(value);
+      if (!currentProfile) return;
+      const nextPreferences = cloneProfilePreferences(currentProfile.preferences);
+      nextPreferences.gameplay.aiDifficulty = value;
+      updateProfile(currentProfile.id, { preferences: nextPreferences });
+    },
+    [currentProfile, updateProfile],
+  );
 
   const recordRound = useCallback(
     (playerMove: Move, aiMove: Move, outcomeForPlayer: Outcome) => {
@@ -1301,7 +1340,7 @@ export function useChallengeRuntime() {
           dist: normalize(expert.dist),
         }))
       : [];
-    const useMixer = currentProfile?.predictorDefault && aiMode !== "fair";
+    const useMixer = Boolean(currentProfile?.predictorDefault);
     if (!useMixer) {
       const heuristic = predictNext(playerHistory, rng);
       if (!heuristic.move || (heuristic.conf ?? 0) < 0.34) {
@@ -1339,7 +1378,7 @@ export function useChallengeRuntime() {
       );
       return move;
     }
-    const blendWeights = computeBlendWeights(playerHistory.length, persistedModelRef.current);
+    const blendWeights = computeBlendWeights(playerHistory.length, persistedModelRef.current, aiMode);
     const blendedDist = blendDistributions(realtimeDist, historyDist, blendWeights);
     const move = policyCounterFromDist(blendedDist, aiMode, rng);
     const confidence = Math.max(blendedDist.rock, blendedDist.paper, blendedDist.scissors);
@@ -1405,7 +1444,7 @@ export function useChallengeRuntime() {
       setOutcome(roundOutcome);
       setPhase("resolve");
       const ctx: Ctx = { playerMoves: playerHistory, aiMoves: aiHistory, outcomes: outcomeHistory, rng };
-      if (currentProfile?.predictorDefault && aiMode !== "fair") {
+      if (currentProfile?.predictorDefault) {
         ensureHistoryMixer().update(ctx, currentPlayerPick);
         roundsSeenRef.current += 1;
         scheduleModelPersist();
@@ -1621,10 +1660,10 @@ export function useChallengeRuntime() {
     aiScore,
     aiSignals,
     bestOf,
-    bestOfOptions: BEST_OF_OPTIONS,
+    bestOfOptions: GAMEPLAY_BEST_OF_OPTIONS,
     currentPlayerName,
     countdown,
-    difficultyOptions: DIFFICULTY_SEQUENCE,
+    difficultyOptions: GAMEPLAY_DIFFICULTY_OPTIONS,
     goToDashboard: () => navigate(PLAY_DASHBOARD_PATH),
     isInputLocked: phase !== "idle" || Boolean(resultBanner),
     liveSnapshot,

@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { createPortal } from "react-dom";
 import type { Move } from "../../gameTypes";
 import { MoveLabel } from "../../moveIcons";
+import { playOutcomeAccentHex, playOutcomeToneClasses } from "./playOutcomeTone";
 
 export interface RoundHistoryEntry {
   id: string;
@@ -19,21 +20,6 @@ interface RoundHistoryStripProps {
   metaLabel?: string | null;
   compact?: boolean;
 }
-
-const outcomeClasses: Record<RoundHistoryEntry["outcome"], string> = {
-  win: "border-emerald-300/60 bg-emerald-400/10 text-emerald-500",
-  lose: "border-rose-300/60 bg-rose-400/10 text-rose-500",
-  tie: "border-amber-300/60 bg-amber-400/10 text-amber-500",
-  pending:
-    "border-[color:var(--app-border)] bg-[color:var(--app-surface-subtle)] text-[color:var(--app-text-secondary)]",
-};
-
-const outcomeAccentHex: Record<RoundHistoryEntry["outcome"], string> = {
-  win: "#22c55e",
-  lose: "#fb7185",
-  tie: "#f59e0b",
-  pending: "var(--app-accent)",
-};
 
 function formatOutcome(outcome: RoundHistoryEntry["outcome"]) {
   if (outcome === "pending") return "Queued";
@@ -55,7 +41,7 @@ function isRoundExpandable(round: RoundHistoryEntry) {
 }
 
 function expandedPopupStyle(outcome: RoundHistoryEntry["outcome"]): React.CSSProperties {
-  const accent = outcomeAccentHex[outcome];
+  const accent = playOutcomeAccentHex[outcome];
   return {
     borderColor: `color-mix(in srgb, ${accent} 34%, var(--app-border-strong))`,
     background: `linear-gradient(180deg, color-mix(in srgb, ${accent} 8%, var(--app-surface-card)), var(--app-surface-card))`,
@@ -177,7 +163,7 @@ export default function RoundHistoryStrip({
                       {round.label}
                     </p>
                     <span
-                      className={`inline-flex items-center rounded-full border px-[clamp(0.3rem,0.22rem+0.14vw,0.5rem)] py-[clamp(0.08rem,0.05rem+0.08vw,0.16rem)] text-[clamp(0.48rem,0.42rem+0.12vw,0.6rem)] font-semibold uppercase tracking-[0.16em] ${outcomeClasses[round.outcome]}`}
+                      className={`inline-flex items-center rounded-full border px-[clamp(0.3rem,0.22rem+0.14vw,0.5rem)] py-[clamp(0.08rem,0.05rem+0.08vw,0.16rem)] text-[clamp(0.48rem,0.42rem+0.12vw,0.6rem)] font-semibold uppercase tracking-[0.16em] ${playOutcomeToneClasses[round.outcome]}`}
                     >
                       {formatOutcome(round.outcome)}
                     </span>
@@ -216,7 +202,7 @@ export default function RoundHistoryStrip({
                     {expandedRound.label}
                   </p>
                   <span
-                    className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[0.56rem] font-semibold uppercase tracking-[0.16em] ${outcomeClasses[expandedRound.outcome]}`}
+                    className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[0.56rem] font-semibold uppercase tracking-[0.16em] ${playOutcomeToneClasses[expandedRound.outcome]}`}
                   >
                     {formatOutcome(expandedRound.outcome)}
                   </span>

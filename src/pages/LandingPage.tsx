@@ -2,9 +2,10 @@ import React from "react";
 import { motion } from "framer-motion";
 import { Link } from "react-router-dom";
 import botHappy96 from "../assets/mascot/bot-happy-96.svg";
-import challengeScreenshot from "../../RPS_Screenshot_Examples/Figure 11 Challenge Mode - before any selections are made.png";
-import insightsScreenshot from "../../RPS_Screenshot_Examples/Figure_29_LiveAi_insight_panel_DarkMode.png";
-import statsScreenshot from "../../RPS_Screenshot_Examples/Figure 20 Statistics button - Overview tab.png";
+import { PLAY_DASHBOARD_PATH } from "../playEntry";
+import challengeScreenshot from "../../RPS_Screenshot_Examples/Figure 48 Routed challenge cockpit.png";
+import leaderboardScreenshot from "../../RPS_Screenshot_Examples/Figure 49 Routed leaderboard page.png";
+import statsScreenshot from "../../RPS_Screenshot_Examples/Figure 50 Routed stats page.png";
 
 const heroSignals = [
   "Adaptive AI that learns your patterns round by round",
@@ -83,7 +84,7 @@ export default function LandingPage() {
               How it works
             </a>
             <Link
-              to="/play"
+              to={PLAY_DASHBOARD_PATH}
               className="inline-flex items-center justify-center rounded-full border border-cyan-300/40 bg-cyan-400/10 px-5 py-2 text-sm font-semibold text-cyan-100 transition hover:border-cyan-200 hover:bg-cyan-300/15 hover:text-white"
             >
               Play now
@@ -112,7 +113,7 @@ export default function LandingPage() {
               </p>
               <div className="mt-10 flex flex-col gap-4 sm:flex-row sm:items-center">
                 <Link
-                  to="/play"
+                  to={PLAY_DASHBOARD_PATH}
                   className="inline-flex min-h-16 items-center justify-center rounded-2xl bg-gradient-to-r from-cyan-400 via-sky-500 to-emerald-400 px-8 text-lg font-semibold text-slate-950 shadow-[0_20px_50px_rgba(14,165,233,0.35)] transition duration-200 hover:scale-[1.01] hover:shadow-[0_24px_60px_rgba(52,211,153,0.28)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-200"
                 >
                   Get Started
@@ -150,7 +151,7 @@ export default function LandingPage() {
                   <div className="mt-3 overflow-hidden rounded-[1.1rem] border border-white/10 bg-slate-950">
                     <img
                       src={challengeScreenshot}
-                      alt="RPS Predictor gameplay preview"
+                      alt="RPS Predictor challenge cockpit preview"
                       className="h-full w-full object-cover"
                     />
                   </div>
@@ -217,19 +218,47 @@ export default function LandingPage() {
                 </h2>
               </div>
               <Link
-                to="/play"
+                to={PLAY_DASHBOARD_PATH}
                 className="inline-flex items-center justify-center rounded-full border border-white/15 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition hover:border-cyan-200/60 hover:bg-white/10"
               >
                 Launch Game
               </Link>
             </div>
             <div className="mt-8 grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
-              <article className="overflow-hidden rounded-[2rem] border border-white/10 bg-slate-900/80 shadow-2xl">
-                <img src={insightsScreenshot} alt="Live AI insight panel" className="h-full w-full object-cover" />
+              <article className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-3 shadow-[0_30px_80px_rgba(2,6,23,0.55)] backdrop-blur">
+                <div className="rounded-[1.55rem] border border-white/10 bg-slate-900 p-3">
+                  <div className="flex items-center gap-2 border-b border-white/10 px-2 pb-3">
+                    <span className="h-3 w-3 rounded-full bg-rose-400" />
+                    <span className="h-3 w-3 rounded-full bg-amber-300" />
+                    <span className="h-3 w-3 rounded-full bg-emerald-300" />
+                    <p className="ml-3 text-xs uppercase tracking-[0.24em] text-slate-400">Leaderboard Preview</p>
+                  </div>
+                  <div className="mt-3 overflow-hidden rounded-[1.1rem] border border-white/10 bg-slate-950">
+                    <img
+                      src={leaderboardScreenshot}
+                      alt="RPS Predictor leaderboard page"
+                      className="h-full w-full object-contain object-top"
+                    />
+                  </div>
+                </div>
               </article>
               <div className="grid gap-5">
-                <article className="overflow-hidden rounded-[2rem] border border-white/10 bg-slate-900/80 shadow-2xl">
-                  <img src={statsScreenshot} alt="RPS Predictor statistics overview" className="h-full w-full object-cover" />
+                <article className="rounded-[2rem] border border-white/10 bg-white/[0.06] p-3 shadow-[0_30px_80px_rgba(2,6,23,0.55)] backdrop-blur">
+                  <div className="rounded-[1.55rem] border border-white/10 bg-slate-900 p-3">
+                    <div className="flex items-center gap-2 border-b border-white/10 px-2 pb-3">
+                      <span className="h-3 w-3 rounded-full bg-rose-400" />
+                      <span className="h-3 w-3 rounded-full bg-amber-300" />
+                      <span className="h-3 w-3 rounded-full bg-emerald-300" />
+                      <p className="ml-3 text-xs uppercase tracking-[0.24em] text-slate-400">Statistics Preview</p>
+                    </div>
+                    <div className="mt-3 overflow-hidden rounded-[1.1rem] border border-white/10 bg-slate-950">
+                      <img
+                        src={statsScreenshot}
+                        alt="RPS Predictor statistics page"
+                        className="h-full w-full object-cover"
+                      />
+                    </div>
+                  </div>
                 </article>
                 <article className="rounded-[2rem] border border-cyan-300/15 bg-gradient-to-br from-cyan-400/10 via-slate-900 to-emerald-400/10 p-6">
                   <p className="text-sm font-semibold uppercase tracking-[0.24em] text-cyan-100/80">WHY IT STANDS OUT</p>
@@ -256,7 +285,7 @@ export default function LandingPage() {
             </p>
             <div className="mt-8">
               <Link
-                to="/play"
+                to={PLAY_DASHBOARD_PATH}
                 className="inline-flex min-h-16 items-center justify-center rounded-2xl bg-white px-8 text-lg font-semibold text-slate-950 shadow-[0_16px_40px_rgba(255,255,255,0.16)] transition hover:scale-[1.01] hover:bg-cyan-50"
               >
                 Get Started

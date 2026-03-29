@@ -144,9 +144,23 @@ export interface ThemeModeColors {
 
 export type ThemeColorPreferences = Record<ThemeMode, ThemeModeColors>;
 
+export interface GameplayPreferences {
+  aiDifficulty: AIMode;
+  bestOf: BestOf;
+}
+
+export const DEFAULT_GAMEPLAY_PREFERENCES: GameplayPreferences = {
+  aiDifficulty: "normal",
+  bestOf: 5,
+} as const;
+
+export const GAMEPLAY_DIFFICULTY_OPTIONS: AIMode[] = ["fair", "normal", "ruthless"];
+export const GAMEPLAY_BEST_OF_OPTIONS: BestOf[] = [3, 5, 7];
+
 export interface ProfilePreferences {
   theme: ThemePreference;
   themeColors: ThemeColorPreferences;
+  gameplay: GameplayPreferences;
 }
 
 export const DEFAULT_THEME_COLOR_PREFERENCES: ThemeColorPreferences = {
@@ -177,6 +191,7 @@ export const DEFAULT_PROFILE_PREFERENCES: ProfilePreferences = {
     light: { ...DEFAULT_THEME_COLOR_PREFERENCES.light },
     dark: { ...DEFAULT_THEME_COLOR_PREFERENCES.dark },
   },
+  gameplay: { ...DEFAULT_GAMEPLAY_PREFERENCES },
 } as const;
 
 function cloneThemeModeColors(value: ThemeModeColors): ThemeModeColors {
@@ -192,7 +207,25 @@ export function cloneProfilePreferences(
       light: cloneThemeModeColors(preferences.themeColors.light),
       dark: cloneThemeModeColors(preferences.themeColors.dark),
     },
+    gameplay: {
+      aiDifficulty: preferences.gameplay.aiDifficulty,
+      bestOf: preferences.gameplay.bestOf,
+    },
   };
+}
+
+function normalizeGameplayPreferences(value: unknown): GameplayPreferences {
+  if (!value || typeof value !== "object") {
+    return { ...DEFAULT_GAMEPLAY_PREFERENCES };
+  }
+  const input = value as { aiDifficulty?: unknown; bestOf?: unknown };
+  const aiDifficulty =
+    input.aiDifficulty === "fair" || input.aiDifficulty === "normal" || input.aiDifficulty === "ruthless"
+      ? input.aiDifficulty
+      : DEFAULT_GAMEPLAY_PREFERENCES.aiDifficulty;
+  const bestOf =
+    input.bestOf === 3 || input.bestOf === 5 || input.bestOf === 7 ? input.bestOf : DEFAULT_GAMEPLAY_PREFERENCES.bestOf;
+  return { aiDifficulty, bestOf };
 }
 
 function normalizeThemeModeColors(value: unknown, fallback: ThemeModeColors): ThemeModeColors {
@@ -243,13 +276,14 @@ function normalizePreferences(value: unknown): ProfilePreferences {
   if (!value || typeof value !== "object") {
     return cloneProfilePreferences();
   }
-  const input = value as { theme?: unknown; themeColors?: unknown };
+  const input = value as { theme?: unknown; themeColors?: unknown; gameplay?: unknown };
   const theme =
     input.theme === "dark" || input.theme === "light" || input.theme === "system"
       ? input.theme
       : DEFAULT_PROFILE_PREFERENCES.theme;
   const themeColors = normalizeThemeColors(input.themeColors);
-  return { theme, themeColors };
+  const gameplay = normalizeGameplayPreferences(input.gameplay);
+  return { theme, themeColors, gameplay };
 }
 
 export interface StatsProfile {

@@ -18,7 +18,7 @@ interface GameHudHeaderProps {
   stats?: GameHudStat[];
   actions?: React.ReactNode;
   alignment?: "start" | "center";
-  statColumns?: 2 | 4;
+  statColumns?: 2 | 3 | 4;
   compact?: boolean;
   density?: CockpitDensity;
 }
@@ -95,7 +95,7 @@ export default function GameHudHeader({
       {stats.length > 0 && (
         <div
           className={`grid gap-px overflow-hidden rounded-xl border border-[color:var(--app-border)] bg-[color:var(--app-border)] ${
-            statColumns === 2 ? "grid-cols-2" : "sm:grid-cols-2 xl:grid-cols-4"
+            statColumns === 2 ? "grid-cols-2" : statColumns === 3 ? "grid-cols-3" : "sm:grid-cols-2 xl:grid-cols-4"
           }`}
         >
           {stats.map(stat => (

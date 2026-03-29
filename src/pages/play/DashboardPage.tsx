@@ -1,8 +1,6 @@
 import React from "react";
 import { Navigate, useNavigate } from "react-router-dom";
-import { usePlayers } from "../../players";
 import {
-  TRAINING_ROUNDS_REQUIRED,
   buildChallengeStartPath,
   buildTrainingStartPath,
   profileNeedsTraining,
@@ -87,17 +85,17 @@ function ModeTile({
 
 export default function DashboardPage() {
   const navigate = useNavigate();
-  const { currentPlayer } = usePlayers();
   const { currentProfile } = useStats();
 
   if (profileNeedsTraining(currentProfile)) {
     return <Navigate to={buildTrainingStartPath()} replace />;
   }
 
-  const playerName = currentPlayer?.playerName?.trim() || "Player";
-  const trainingCount = Math.max(TRAINING_ROUNDS_REQUIRED, currentProfile?.trainingCount ?? 0);
   const predictorReady = Boolean(currentProfile?.predictorDefault);
-  const nextStep = predictorReady ? "Challenge" : "Training";
+  const challengeBestOf = currentProfile?.preferences.gameplay.bestOf ?? 5;
+  const challengeDifficulty = currentProfile?.preferences.gameplay.aiDifficulty ?? "normal";
+  const challengeDifficultyLabel =
+    challengeDifficulty.charAt(0).toUpperCase() + challengeDifficulty.slice(1);
 
   return (
     <div
@@ -109,65 +107,20 @@ export default function DashboardPage() {
     >
       <section className="grid h-full min-h-0 px-4 py-6 sm:px-6 lg:px-8">
         <div className="mx-auto grid h-full w-full max-w-6xl content-center">
-          <div className="grid gap-5">
+          <div className="grid gap-4 sm:gap-5">
             <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-center gap-2 text-xs font-semibold uppercase tracking-[0.24em] text-[color:var(--app-text-muted)]">
-              <span className="rounded-full border border-[color:var(--app-border)] bg-[color:color-mix(in_srgb,var(--app-surface-input)_82%,transparent)] px-3 py-1">
-                {playerName}
-              </span>
               <span className="rounded-full border border-[color:var(--app-border)] bg-[color:color-mix(in_srgb,var(--app-accent-soft)_28%,transparent)] px-3 py-1">
                 Training complete
-              </span>
-              <span className="rounded-full border border-[color:var(--app-border)] bg-[color:color-mix(in_srgb,var(--app-surface-input)_70%,transparent)] px-3 py-1">
-                Mode hub
               </span>
             </div>
 
             <div className="mx-auto max-w-3xl text-center">
-              <p className="text-sm font-semibold uppercase tracking-[0.32em] text-[color:var(--app-text-muted)]">
-                Mode launcher
-              </p>
-              <h1 className="mt-4 text-4xl font-semibold tracking-[-0.06em] text-[color:var(--app-text-strong)] sm:text-5xl">
+              <h1 className="text-4xl font-semibold tracking-[-0.06em] text-[color:var(--app-text-strong)] sm:text-5xl">
                 Choose Your Mode
               </h1>
-              <p className="mt-4 text-sm leading-7 text-[color:var(--app-text-secondary)] sm:text-base">
-                Pick the next live session. Training reopens the warm-up loop, while challenge launches the predictor
-                match flow.
-              </p>
             </div>
 
-            <div className="mx-auto w-full max-w-5xl">
-              <div className="relative overflow-hidden rounded-[1.75rem] border border-[color:var(--app-border)] bg-[linear-gradient(160deg,color-mix(in_srgb,var(--app-surface-card)_92%,transparent),color-mix(in_srgb,var(--app-surface-subtle)_38%,transparent))] px-4 py-4 sm:px-5">
-                <div className="absolute inset-x-0 top-0 h-px bg-[linear-gradient(90deg,transparent,color-mix(in_srgb,var(--app-accent)_48%,transparent),transparent)]" />
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div className="rounded-[1.25rem] border border-[color:var(--app-border)] bg-[color:color-mix(in_srgb,var(--app-surface-input)_74%,transparent)] px-4 py-3 text-center sm:text-left">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[color:var(--app-text-muted)]">
-                      Training
-                    </div>
-                    <div className="mt-1.5 text-xl font-semibold tracking-[-0.04em] text-[color:var(--app-text-strong)]">
-                      {trainingCount}/{TRAINING_ROUNDS_REQUIRED}
-                    </div>
-                  </div>
-                  <div className="rounded-[1.25rem] border border-[color:var(--app-border)] bg-[color:color-mix(in_srgb,var(--app-surface-input)_74%,transparent)] px-4 py-3 text-center sm:text-left">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[color:var(--app-text-muted)]">
-                      AI Predictor
-                    </div>
-                    <div className="mt-1.5 text-xl font-semibold tracking-[-0.04em] text-[color:var(--app-text-strong)]">
-                      {predictorReady ? "Ready" : "Off"}
-                    </div>
-                  </div>
-                  <div className="rounded-[1.25rem] border border-[color:var(--app-border)] bg-[color:color-mix(in_srgb,var(--app-surface-input)_74%,transparent)] px-4 py-3 text-center sm:text-left">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-[color:var(--app-text-muted)]">
-                      Next Step
-                    </div>
-                    <div className="mt-1.5 text-xl font-semibold tracking-[-0.04em] text-[color:var(--app-text-strong)]">
-                      {nextStep}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="mx-auto grid w-full max-w-5xl gap-4 lg:grid-cols-2">
+            <div className="mx-auto grid w-full max-w-5xl gap-4 pt-1 lg:grid-cols-2">
               <ModeTile
                 title="Training"
                 subtitle="Warm-up"
@@ -180,9 +133,9 @@ export default function DashboardPage() {
               <ModeTile
                 title="Challenge"
                 subtitle="Live match"
-                detail="Launch the predictor match flow and play into the current live challenge runtime."
+                detail={`Launch the predictor match flow using Best of ${challengeBestOf} with ${challengeDifficultyLabel} difficulty.`}
                 tone="challenge"
-                badge={predictorReady ? "Ready" : "Locked"}
+                badge={predictorReady ? challengeDifficultyLabel : "Locked"}
                 actionLabel={predictorReady ? "Launch challenge" : "Challenge locked"}
                 disabled={!predictorReady}
                 disabledReason={!predictorReady ? "Enable the AI predictor in the current profile before challenge can start." : undefined}
