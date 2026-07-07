@@ -19,6 +19,7 @@ interface LeaderboardModalProps {
 
 const MODE_LABELS: Record<Mode, string> = {
   challenge: "Challenge",
+  training: "Training",
   practice: "Practice",
 };
 

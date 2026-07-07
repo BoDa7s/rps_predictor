@@ -3,6 +3,8 @@ import PlaySectionLayout, { type PlaySection } from "../../components/play/PlayS
 import { type Move, type Outcome } from "../../gameTypes";
 import { usePlayers } from "../../players";
 import { useStats } from "../../stats";
+import { telemetryService, useTelemetryStore } from "../../telemetry";
+import { downloadStructuredTelemetryWorkbook } from "../../structuredTelemetryWorkbook";
 
 const TRAIN_ROUNDS = 5;
 const sectionCardClass = "play-shell-card rounded-2xl p-5";
@@ -50,9 +52,32 @@ function slugify(value: string) {
 
 export default function StatsPage() {
   const { currentPlayer } = usePlayers();
-  const { rounds, matches, currentProfile, profiles, selectProfile, createProfile, exportRoundsCsv } = useStats();
+  const { currentProfile, profiles, selectProfile, createProfile, exportRoundsCsv, sessionId } = useStats();
+  const telemetry = useTelemetryStore();
+  const [isWorkbookExporting, setIsWorkbookExporting] = React.useState(false);
 
-  const sortedRounds = useMemo(() => [...rounds].sort((a, b) => b.t.localeCompare(a.t)), [rounds]);
+  const rounds = useMemo(
+    () =>
+      telemetry.rounds.filter(round => {
+        if (currentProfile?.id) return round.profileId === currentProfile.id;
+        if (currentPlayer?.id) return round.playerId === currentPlayer.id;
+        return false;
+      }),
+    [currentPlayer?.id, currentProfile?.id, telemetry.rounds],
+  );
+
+  const matches = useMemo(
+    () =>
+      telemetry.matches.filter(match => {
+        if (!match.completed) return false;
+        if (currentProfile?.id) return match.profileId === currentProfile.id;
+        if (currentPlayer?.id) return match.playerId === currentPlayer.id;
+        return false;
+      }),
+    [currentPlayer?.id, currentProfile?.id, telemetry.matches],
+  );
+
+  const sortedRounds = useMemo(() => [...rounds].sort((a, b) => b.timestamp.localeCompare(a.timestamp)), [rounds]);
   const totalRounds = rounds.length;
   const totalMatches = matches.length;
   const playerWins = matches.reduce((count, match) => count + (match.score.you > match.score.ai ? 1 : 0), 0);
@@ -171,23 +196,81 @@ export default function StatsPage() {
     downloadCsv(filename, exportRoundsCsv());
   };
 
+  const handleWorkbookExport = async () => {
+    if (isWorkbookExporting) return;
+    if (!currentPlayer || !currentProfile) return;
+    setIsWorkbookExporting(true);
+    try {
+      const scopedSessions = telemetry.sessions.filter(
+        session => session.playerId === currentPlayer.id && (session.profileId ?? null) === currentProfile.id,
+      );
+      const scopedSessionIds = new Set(scopedSessions.map(session => session.id));
+      const scopedMatches = telemetry.matches.filter(match => match.profileId === currentProfile.id);
+      const scopedMatchIds = new Set(scopedMatches.map(match => match.id));
+      const scopedRounds = telemetry.rounds.filter(round => round.profileId === currentProfile.id);
+      const scopedRoundIds = new Set(scopedRounds.map(round => round.id));
+      const scopedPredictions = telemetry.predictions.filter(prediction => prediction.profileId === currentProfile.id);
+      const scopedPredictionRoundIds = new Set(scopedPredictions.map(prediction => prediction.roundId));
+      const scopedEvents = telemetry.uiEvents.filter(event => {
+        return (
+          (event.profileId ?? null) === currentProfile.id ||
+          scopedSessionIds.has(event.sessionId) ||
+          (event.matchId ? scopedMatchIds.has(event.matchId) : false) ||
+          (event.roundId ? scopedRoundIds.has(event.roundId) || scopedPredictionRoundIds.has(event.roundId) : false)
+        );
+      });
+
+      await downloadStructuredTelemetryWorkbook({
+        appPlayers: telemetry.appPlayers.filter(player => player.id === currentPlayer.id),
+        profiles: telemetry.profiles.filter(profile => profile.id === currentProfile.id),
+        sessions: scopedSessions,
+        matches: scopedMatches,
+        rounds: scopedRounds,
+        predictions: scopedPredictions,
+        events: scopedEvents,
+      });
+      telemetryService.logUIEvent({
+        sessionId,
+        timestamp: new Date().toISOString(),
+        playerId: currentPlayer?.id ?? undefined,
+        profileId: currentProfile?.id ?? null,
+        surface: "stats-page",
+        action: "telemetry-structured-workbook-downloaded",
+        value: "xlsx",
+      });
+    } finally {
+      setIsWorkbookExporting(false);
+    }
+  };
+
   const sections = useMemo<PlaySection[]>(
     () => [
       {
         id: "overview",
         label: "Overview",
         title: currentProfile?.name ?? "Statistics overview",
-        description: "Profile switching, high-level match totals, and training status for the active statistics history.",
+        description: `${totalMatches} matches tracked for the active profile, alongside training progress and export-ready history.`,
         content: (
           <div className="grid gap-4">
             <div className="grid gap-3 lg:grid-cols-[1.15fr,0.85fr]">
               <article className={sectionCardClass}>
+                <div className="mb-4 flex flex-wrap gap-3">
+                  <div className="play-shell-input rounded-2xl px-4 py-3">
+                    <p className="play-shell-eyebrow text-[11px] font-semibold uppercase tracking-[0.18em]">
+                      Match Count
+                    </p>
+                    <div data-testid="stats-match-count" className="play-shell-heading mt-2 text-2xl font-semibold tracking-[-0.04em]">
+                      {totalMatches}
+                    </div>
+                  </div>
+                </div>
                 <p className="play-shell-muted text-sm leading-7">
                   Switch between saved profile histories, start a fresh profile, and keep training progress separate
-                  without leaving the routed play workspace.
+                  without leaving the routed play workspace. Match count is shown here for a quick profile-level
+                  telemetry check.
                 </p>
               </article>
-              <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+              <div className="grid gap-3 sm:grid-cols-4 lg:grid-cols-1">
                 <select
                   value={currentProfile?.id ?? ""}
                   onChange={event => selectProfile(event.target.value)}
@@ -211,11 +294,19 @@ export default function StatsPage() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => void handleWorkbookExport()}
+                  disabled={isWorkbookExporting || !currentPlayer || !currentProfile}
+                  className={accentButtonClass}
+                >
+                  {isWorkbookExporting ? "Building workbook..." : "Export workbook"}
+                </button>
+                <button
+                  type="button"
                   onClick={handleExport}
                   disabled={!currentPlayer || !currentProfile || !rounds.length}
                   className={mutedButtonClass}
                 >
-                  Export CSV
+                  Export raw CSV
                 </button>
               </div>
             </div>
@@ -348,7 +439,7 @@ export default function StatsPage() {
                 <tbody>
                   {sortedRounds.slice(0, 20).map(round => (
                     <tr key={round.id} className="border-b play-shell-muted last:border-b-0">
-                      <td className="px-3 py-4 play-shell-text-muted">{formatTimestamp(round.t)}</td>
+                      <td className="px-3 py-4 play-shell-text-muted">{formatTimestamp(round.timestamp)}</td>
                       <td className="px-3 py-4">{round.mode}</td>
                       <td className="px-3 py-4 capitalize">{round.player}</td>
                       <td className="px-3 py-4 capitalize">{round.ai}</td>

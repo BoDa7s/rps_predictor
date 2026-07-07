@@ -5,8 +5,12 @@ export type WelcomePreference = "show" | "skip";
 export type PlayEntryStep = "play" | "welcome" | "new" | "restore";
 export type PlayLaunchIntent = "challenge";
 
-export const LEGACY_WELCOME_SEEN_KEY = "rps_welcome_seen_v1";
-export const WELCOME_PREF_KEY = "rps_welcome_pref_v1";
+// Shell-only onboarding preference. This does not belong to canonical gameplay telemetry.
+export const PLAY_ENTRY_PREFERENCE_KEY = "rps_welcome_pref_v1";
+export const LEGACY_PLAY_ENTRY_COMPLETED_KEY = "rps_welcome_seen_v1";
+// Compatibility aliases retained for older references.
+export const WELCOME_PREF_KEY = PLAY_ENTRY_PREFERENCE_KEY;
+export const LEGACY_WELCOME_SEEN_KEY = LEGACY_PLAY_ENTRY_COMPLETED_KEY;
 export const PLAY_BOOT_DURATION_MS = 5000;
 export const TRAINING_ROUNDS_REQUIRED = 5;
 export const PLAY_LAUNCH_MODE_PARAM = "mode";
@@ -26,14 +30,14 @@ export const PLAY_WELCOME_SLIDES = [
   },
 ] as const;
 
-export function getStoredWelcomePreference(): WelcomePreference {
+export function readPlayEntryPreference(): WelcomePreference {
   if (typeof window === "undefined") return "show";
   try {
-    const stored = window.localStorage.getItem(WELCOME_PREF_KEY);
+    const stored = window.localStorage.getItem(PLAY_ENTRY_PREFERENCE_KEY);
     if (stored === "show" || stored === "skip") {
       return stored;
     }
-    const legacy = window.localStorage.getItem(LEGACY_WELCOME_SEEN_KEY);
+    const legacy = window.localStorage.getItem(LEGACY_PLAY_ENTRY_COMPLETED_KEY);
     if (legacy === "true") {
       return "skip";
     }
@@ -43,18 +47,34 @@ export function getStoredWelcomePreference(): WelcomePreference {
   return "show";
 }
 
-export function persistWelcomePreference(value: WelcomePreference) {
+export function writePlayEntryPreference(value: WelcomePreference) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(WELCOME_PREF_KEY, value);
+    window.localStorage.setItem(PLAY_ENTRY_PREFERENCE_KEY, value);
     if (value === "skip") {
-      window.localStorage.setItem(LEGACY_WELCOME_SEEN_KEY, "true");
+      window.localStorage.setItem(LEGACY_PLAY_ENTRY_COMPLETED_KEY, "true");
     } else {
-      window.localStorage.removeItem(LEGACY_WELCOME_SEEN_KEY);
+      window.localStorage.removeItem(LEGACY_PLAY_ENTRY_COMPLETED_KEY);
     }
   } catch {
     /* noop */
   }
+}
+
+export function completePlayEntryOnboarding() {
+  writePlayEntryPreference("skip");
+}
+
+export function resetPlayEntryOnboarding() {
+  writePlayEntryPreference("show");
+}
+
+export function getStoredWelcomePreference(): WelcomePreference {
+  return readPlayEntryPreference();
+}
+
+export function persistWelcomePreference(value: WelcomePreference) {
+  writePlayEntryPreference(value);
 }
 
 export function getPlayEntryStep(options: {
@@ -70,6 +90,13 @@ export function getPlayEntryStep(options: {
     return "play";
   }
   return savedPlayerCount > 0 ? "restore" : "new";
+}
+
+export function shouldEnterPlayBoot(options: {
+  welcomePreference: WelcomePreference;
+  hasCurrentPlayer: boolean;
+}): boolean {
+  return options.welcomePreference === "show" || !options.hasCurrentPlayer;
 }
 
 export function sanitizeReturnTo(value: string | null | undefined): string | null {
@@ -109,9 +136,9 @@ export function buildChallengeStartPath(): string {
 }
 
 export function getPlayHomeDestination(
-  profile: Pick<StatsProfile, "trainingCount" | "trained"> | null | undefined,
+  _profile: Pick<StatsProfile, "trainingCount" | "trained"> | null | undefined,
 ): string {
-  return profileNeedsTraining(profile) ? buildTrainingStartPath() : PLAY_DASHBOARD_PATH;
+  return PLAY_DASHBOARD_PATH;
 }
 
 export function buildPostOnboardingDestination(options: {
@@ -121,9 +148,14 @@ export function buildPostOnboardingDestination(options: {
 }): string {
   const { returnTo, profile, forceTraining = false } = options;
   if (forceTraining || profileNeedsTraining(profile)) {
-    return buildTrainingStartPath();
+    if (forceTraining) {
+      return buildTrainingStartPath();
+    }
   }
   const safeReturnTo = sanitizeReturnTo(returnTo);
+  if (safeReturnTo === PLAY_CHALLENGE_PATH && profileNeedsTraining(profile)) {
+    return PLAY_DASHBOARD_PATH;
+  }
   if (isBarePlayReturn(safeReturnTo)) {
     return PLAY_DASHBOARD_PATH;
   }

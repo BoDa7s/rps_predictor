@@ -5,14 +5,17 @@ import { type AIMode, type BestOf, type Move, type Outcome } from "../gameTypes"
 import { resolveOutcome } from "../gameRules";
 import { computeMatchScore } from "../leaderboard";
 import { loadMatchTimings } from "../matchTimings";
+import { clearPersistedMatchSnapshot, loadPersistedMatchSnapshot, savePersistedMatchSnapshot } from "../matchProgress";
 import { PLAY_DASHBOARD_PATH } from "../playEntry";
 import { usePlayers } from "../players";
+import { telemetryService } from "../telemetry";
 import {
   cloneProfilePreferences,
   type DecisionPolicy,
   DEFAULT_GAMEPLAY_PREFERENCES,
   GAMEPLAY_BEST_OF_OPTIONS,
   GAMEPLAY_DIFFICULTY_OPTIONS,
+  type RoundLog,
   type HeuristicTrace,
   type MixerTrace,
   type SerializedExpertState,
@@ -67,6 +70,32 @@ interface PendingDecision {
   };
   heuristic?: { predicted?: Move | null; conf?: number | null; reason?: string };
   confidence: number;
+}
+
+interface PersistedChallengeMatchState {
+  version: 1;
+  matchId: string;
+  matchStartedAt: string;
+  bestOf: BestOf;
+  aiMode: AIMode;
+  playerScore: number;
+  aiScore: number;
+  phase: ChallengePhase;
+  countdown: number;
+  playerPick?: Move;
+  aiPick?: Move;
+  outcome?: Outcome;
+  liveSnapshot: LiveInsightSnapshot | null;
+  matchScoreTotal: number;
+  aiHistory: Move[];
+  playerHistory: Move[];
+  outcomeHistory: Outcome[];
+  matchHistory: ChallengeHistoryEntry[];
+  selectedMove?: Move;
+  lastDecisionMs: number | null;
+  pendingDecision: PendingDecision | null;
+  loggedRounds: RoundLog[];
+  sessionMixer: HedgeMixerSerializedState | null;
 }
 
 interface Ctx {
@@ -991,7 +1020,7 @@ export function useChallengeRuntime() {
   const { currentPlayer } = usePlayers();
   const {
     currentProfile,
-    logMatch,
+    sessionId,
     logRound,
     getModelStateForProfile,
     saveModelStateForProfile,
@@ -1005,7 +1034,7 @@ export function useChallengeRuntime() {
   const [aiMode, setAiModeState] = useState<AIMode>(gameplayPreferences.aiDifficulty);
   const [playerScore, setPlayerScore] = useState(0);
   const [aiScore, setAiScore] = useState(0);
-  const [roundNumber, setRoundNumber] = useState(1);
+  const [roundNumber, setRoundNumber] = useState(0);
   const [phase, setPhase] = useState<ChallengePhase>("idle");
   const [countdown, setCountdown] = useState(3);
   const [playerPick, setPlayerPick] = useState<Move | undefined>();
@@ -1028,6 +1057,7 @@ export function useChallengeRuntime() {
   const currentMatchIdRef = useRef<string>(makeLocalId("match"));
   const currentMatchRoundsRef = useRef<NonNullable<ReturnType<typeof logRound>>[]>([]);
   const matchStartRef = useRef<string>(new Date().toISOString());
+  const completedMatchIdRef = useRef<string | null>(null);
   const decisionTraceRef = useRef<PendingDecision | null>(null);
   const persistedModelRef = useRef<StoredPredictorModelState | null>(null);
   const historyMixerRef = useRef<HedgeMixer | null>(null);
@@ -1036,7 +1066,50 @@ export function useChallengeRuntime() {
   const roundsSeenRef = useRef(0);
   const modelPersistTimeoutRef = useRef<number | null>(null);
   const modelPersistPendingRef = useRef(false);
+  const playerScoreRef = useRef(0);
+  const aiScoreRef = useRef(0);
+  const phaseRef = useRef<ChallengePhase>("idle");
+  const playerHistoryRef = useRef<Move[]>([]);
+  const currentPlayerRef = useRef(currentPlayer);
+  const currentProfileRef = useRef(currentProfile);
+  const bestOfRef = useRef<BestOf>(gameplayPreferences.bestOf);
+  const aiModeRef = useRef<AIMode>(gameplayPreferences.aiDifficulty);
+  const resumePhaseRef = useRef<ChallengePhase | null>(null);
+  const persistEnabledRef = useRef(true);
+  const initializedScopeRef = useRef<string | null>(null);
   const currentPlayerName = currentPlayer?.playerName?.trim() || "Player";
+
+  useEffect(() => {
+    playerScoreRef.current = playerScore;
+  }, [playerScore]);
+
+  useEffect(() => {
+    aiScoreRef.current = aiScore;
+  }, [aiScore]);
+
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+
+  useEffect(() => {
+    playerHistoryRef.current = playerHistory;
+  }, [playerHistory]);
+
+  useEffect(() => {
+    currentPlayerRef.current = currentPlayer;
+  }, [currentPlayer]);
+
+  useEffect(() => {
+    currentProfileRef.current = currentProfile;
+  }, [currentProfile]);
+
+  useEffect(() => {
+    bestOfRef.current = bestOf;
+  }, [bestOf]);
+
+  useEffect(() => {
+    aiModeRef.current = aiMode;
+  }, [aiMode]);
 
   const clearCountdown = useCallback(() => {
     if (countdownRef.current !== null) {
@@ -1057,6 +1130,13 @@ export function useChallengeRuntime() {
     }, delayMs);
     timeoutIdsRef.current = [...timeoutIdsRef.current, timeoutId];
     return timeoutId;
+  }, []);
+
+  const clearPersistedState = useCallback(() => {
+    const activePlayer = currentPlayerRef.current;
+    const activeProfile = currentProfileRef.current;
+    if (!activePlayer || !activeProfile) return;
+    clearPersistedMatchSnapshot("challenge", activePlayer.id, activeProfile.id);
   }, []);
 
   const resetSessionMixer = useCallback(() => {
@@ -1177,12 +1257,178 @@ export function useChallengeRuntime() {
     };
   }, [clearCountdown, clearTimeouts, persistModelStateNow]);
 
+  const upsertTelemetryMatch = useCallback(
+    (status: "active" | "completed" | "abandoned", options?: { notes?: string }) => {
+      const activeProfile = currentProfileRef.current;
+      const activePlayer = currentPlayerRef.current;
+      if (!activeProfile || !activePlayer) return;
+      const roundsPlayed = currentMatchRoundsRef.current.length;
+      const aiWins = currentMatchRoundsRef.current.filter(round => round.outcome === "lose").length;
+      telemetryService.upsertMatch({
+        id: currentMatchIdRef.current,
+        sourceMatchId: currentMatchIdRef.current,
+        sessionId,
+        playerId: activePlayer.id,
+        profileId: activeProfile.id,
+        startedAt: matchStartRef.current,
+        endedAt: new Date().toISOString(),
+        mode: "challenge",
+        bestOf: bestOfRef.current,
+        difficulty: aiModeRef.current,
+        score: { you: playerScoreRef.current, ai: aiScoreRef.current },
+        rounds: roundsPlayed,
+        roundsPlayed,
+        winner:
+          playerScoreRef.current > aiScoreRef.current
+            ? "player"
+            : playerScoreRef.current < aiScoreRef.current
+              ? "ai"
+              : "tie",
+        completed: status === "completed",
+        status,
+        notes: options?.notes,
+        aiWinRate: roundsPlayed ? aiWins / roundsPlayed : 0,
+        youSwitchedRate: computeSwitchRate(playerHistoryRef.current),
+      });
+    },
+    [sessionId],
+  );
+
+  const abandonTelemetryMatch = useCallback(
+    (detail: string, options?: { notes?: string }) => {
+      const hasProgress =
+        currentMatchRoundsRef.current.length > 0 ||
+        playerScoreRef.current > 0 ||
+        aiScoreRef.current > 0 ||
+        phaseRef.current !== "idle" ||
+        Boolean(playerPickRef.current);
+      if (!hasProgress) return;
+      if (completedMatchIdRef.current === currentMatchIdRef.current) return;
+      upsertTelemetryMatch("abandoned", { notes: options?.notes });
+      telemetryService.logUIEvent({
+        sessionId,
+        timestamp: new Date().toISOString(),
+        playerId: currentPlayerRef.current?.id,
+        profileId: currentProfileRef.current?.id ?? null,
+        matchId: currentMatchIdRef.current,
+        surface: "challenge",
+        action: "match-abandoned",
+        detail,
+      });
+    },
+    [sessionId, upsertTelemetryMatch],
+  );
+
+  const restorePersistedMatch = useCallback(
+    (snapshot: PersistedChallengeMatchState) => {
+      clearCountdown();
+      clearTimeouts();
+      persistEnabledRef.current = true;
+      currentMatchIdRef.current = snapshot.matchId;
+      matchStartRef.current = snapshot.matchStartedAt;
+      currentMatchRoundsRef.current = snapshot.loggedRounds;
+      completedMatchIdRef.current = null;
+      decisionTraceRef.current = snapshot.pendingDecision;
+      lastDecisionMsRef.current = snapshot.lastDecisionMs;
+      sessionMixerRef.current = snapshot.sessionMixer ? instantiateMixerFromState(snapshot.sessionMixer) : instantiateMixerFromState(null);
+      setBestOfState(snapshot.bestOf);
+      setAiModeState(snapshot.aiMode);
+      setPlayerScore(snapshot.playerScore);
+      setAiScore(snapshot.aiScore);
+      setRoundNumber(snapshot.loggedRounds.length);
+      setPhase(snapshot.phase);
+      setCountdown(snapshot.countdown);
+      setPlayerPick(snapshot.playerPick);
+      playerPickRef.current = snapshot.playerPick;
+      setAiPick(snapshot.aiPick);
+      setOutcome(snapshot.outcome);
+      setLiveSnapshot(snapshot.liveSnapshot);
+      setMatchScoreTotal(snapshot.matchScoreTotal);
+      setAiHistory(snapshot.aiHistory);
+      setPlayerHistory(snapshot.playerHistory);
+      setOutcomeHistory(snapshot.outcomeHistory);
+      setMatchHistory(snapshot.matchHistory);
+      setSelectedMove(snapshot.selectedMove);
+      setResultBanner(null);
+      roundStartRef.current = typeof performance !== "undefined" ? performance.now() : Date.now();
+      resumePhaseRef.current =
+        snapshot.phase === "countdown" || snapshot.phase === "reveal" || snapshot.phase === "resolve"
+          ? snapshot.phase
+          : null;
+      upsertTelemetryMatch("active");
+      telemetryService.logUIEvent({
+        sessionId,
+        timestamp: new Date().toISOString(),
+        playerId: currentPlayerRef.current?.id,
+        profileId: currentProfileRef.current?.id ?? null,
+        matchId: currentMatchIdRef.current,
+        surface: "challenge",
+        action: "match-resumed",
+      });
+    },
+    [clearCountdown, clearTimeouts, sessionId, upsertTelemetryMatch],
+  );
+
+  const persistSnapshot = useCallback(() => {
+    const activePlayer = currentPlayerRef.current;
+    const activeProfile = currentProfileRef.current;
+    if (!persistEnabledRef.current || !activePlayer || !activeProfile || resultBanner) return;
+    savePersistedMatchSnapshot("challenge", activePlayer.id, activeProfile.id, {
+      version: 1,
+      matchId: currentMatchIdRef.current,
+      matchStartedAt: matchStartRef.current,
+      bestOf,
+      aiMode,
+      playerScore,
+      aiScore,
+      phase,
+      countdown,
+      playerPick,
+      aiPick,
+      outcome,
+      liveSnapshot,
+      matchScoreTotal,
+      aiHistory,
+      playerHistory,
+      outcomeHistory,
+      matchHistory,
+      selectedMove,
+      lastDecisionMs: lastDecisionMsRef.current,
+      pendingDecision: decisionTraceRef.current,
+      loggedRounds: currentMatchRoundsRef.current,
+      sessionMixer: sessionMixerRef.current ? serializeMixerInstance(sessionMixerRef.current) : null,
+    } satisfies PersistedChallengeMatchState);
+  }, [
+    aiHistory,
+    aiMode,
+    aiPick,
+    aiScore,
+    bestOf,
+    countdown,
+    liveSnapshot,
+    matchHistory,
+    matchScoreTotal,
+    outcome,
+    outcomeHistory,
+    phase,
+    playerHistory,
+    playerPick,
+    playerScore,
+    roundNumber,
+    resultBanner,
+    selectedMove,
+  ]);
+
   const resetMatch = useCallback(() => {
+    abandonTelemetryMatch("reset");
+    clearPersistedState();
     clearCountdown();
     clearTimeouts();
+    persistEnabledRef.current = true;
+    resumePhaseRef.current = null;
     setPlayerScore(0);
     setAiScore(0);
-    setRoundNumber(1);
+    setRoundNumber(0);
     setPhase("idle");
     setCountdown(3);
     setPlayerPick(undefined);
@@ -1200,15 +1446,72 @@ export function useChallengeRuntime() {
     decisionTraceRef.current = null;
     currentMatchRoundsRef.current = [];
     currentMatchIdRef.current = makeLocalId("match");
+    completedMatchIdRef.current = null;
     matchStartRef.current = new Date().toISOString();
     roundStartRef.current = typeof performance !== "undefined" ? performance.now() : Date.now();
     lastDecisionMsRef.current = null;
     resetSessionMixer();
-  }, [clearCountdown, clearTimeouts, resetSessionMixer]);
+    if (currentProfile && currentPlayer) {
+      telemetryService.upsertMatch({
+        id: currentMatchIdRef.current,
+        sourceMatchId: currentMatchIdRef.current,
+        sessionId,
+        playerId: currentPlayer.id,
+        profileId: currentProfile.id,
+        startedAt: matchStartRef.current,
+        endedAt: matchStartRef.current,
+        mode: "challenge",
+        bestOf,
+        difficulty: aiMode,
+        score: { you: 0, ai: 0 },
+        rounds: 0,
+        roundsPlayed: 0,
+        winner: "tie",
+        completed: false,
+        status: "active",
+        aiWinRate: 0,
+        youSwitchedRate: 0,
+      });
+      telemetryService.logUIEvent({
+        sessionId,
+        timestamp: matchStartRef.current,
+        playerId: currentPlayer.id,
+        profileId: currentProfile.id,
+        matchId: currentMatchIdRef.current,
+        surface: "challenge",
+        action: "match-started",
+        value: `${bestOf}`,
+        detail: aiMode,
+      });
+    }
+  }, [
+    abandonTelemetryMatch,
+    aiMode,
+    bestOf,
+    clearCountdown,
+    clearPersistedState,
+    clearTimeouts,
+    currentPlayer,
+    currentProfile,
+    resetSessionMixer,
+    sessionId,
+  ]);
 
   useEffect(() => {
+    if (!currentPlayer?.id || !currentProfile?.id) {
+      initializedScopeRef.current = null;
+      return;
+    }
+    const scopeKey = `${currentPlayer.id}:${currentProfile.id}`;
+    if (initializedScopeRef.current === scopeKey) return;
+    initializedScopeRef.current = scopeKey;
+    const persisted = loadPersistedMatchSnapshot<PersistedChallengeMatchState>("challenge", currentPlayer.id, currentProfile.id);
+    if (persisted?.version === 1 && persisted.matchId) {
+      restorePersistedMatch(persisted);
+      return;
+    }
     resetMatch();
-  }, [currentProfile?.id, resetMatch]);
+  }, [currentPlayer?.id, currentProfile?.id, resetMatch, restorePersistedMatch]);
 
   const setBestOf = useCallback(
     (value: BestOf) => {
@@ -1296,6 +1599,7 @@ export function useChallengeRuntime() {
       });
       if (logged) {
         currentMatchRoundsRef.current = [...currentMatchRoundsRef.current, logged];
+        setRoundNumber(currentMatchRoundsRef.current.length);
         const breakdown = computeMatchScore(currentMatchRoundsRef.current);
         setMatchScoreTotal(breakdown?.total ?? 0);
         setMatchHistory(prev => [
@@ -1433,13 +1737,21 @@ export function useChallengeRuntime() {
     return move;
   }, [aiHistory, aiMode, currentProfile?.predictorDefault, ensureHistoryDisplayMixer, ensureSessionMixer, outcomeHistory, playerHistory, rng]);
 
-  const reveal = useCallback(() => {
-    const currentPlayerPick = playerPickRef.current;
-    if (!currentPlayerPick) return;
-    const aiMove = aiChoose();
-    setAiPick(aiMove);
-    setPhase("reveal");
-    scheduleTimeout(() => {
+  const finalizeResolvedRound = useCallback(
+    (currentPlayerPick: Move, aiMove: Move, roundOutcome: Outcome) => {
+      scheduleTimeout(() => {
+        recordRound(currentPlayerPick, aiMove, roundOutcome);
+        setOutcomeHistory(prev => [...prev, roundOutcome]);
+        setPlayerHistory(prev => [...prev, currentPlayerPick]);
+        setAiHistory(prev => [...prev, aiMove]);
+        setPhase("feedback");
+      }, 150);
+    },
+    [recordRound, scheduleTimeout],
+  );
+
+  const applyRevealResolution = useCallback(
+    (currentPlayerPick: Move, aiMove: Move) => {
       const roundOutcome = resolveOutcome(currentPlayerPick, aiMove);
       setOutcome(roundOutcome);
       setPhase("resolve");
@@ -1450,29 +1762,29 @@ export function useChallengeRuntime() {
         scheduleModelPersist();
         ensureSessionMixer().update(ctx, currentPlayerPick);
       }
-      scheduleTimeout(() => {
-        recordRound(currentPlayerPick, aiMove, roundOutcome);
-        setOutcomeHistory(prev => [...prev, roundOutcome]);
-        setPlayerHistory(prev => [...prev, currentPlayerPick]);
-        setAiHistory(prev => [...prev, aiMove]);
-        setPhase("feedback");
-      }, 150);
-    }, timings.revealHoldMs);
-  }, [
-    aiChoose,
-    aiHistory,
-    aiMode,
-    currentProfile?.predictorDefault,
-    ensureHistoryMixer,
-    ensureSessionMixer,
-    outcomeHistory,
-    playerHistory,
-    recordRound,
-    rng,
-    scheduleModelPersist,
-    scheduleTimeout,
-    timings.revealHoldMs,
-  ]);
+      finalizeResolvedRound(currentPlayerPick, aiMove, roundOutcome);
+    },
+    [
+      aiHistory,
+      currentProfile?.predictorDefault,
+      ensureHistoryMixer,
+      ensureSessionMixer,
+      finalizeResolvedRound,
+      outcomeHistory,
+      playerHistory,
+      rng,
+      scheduleModelPersist,
+    ],
+  );
+
+  const reveal = useCallback(() => {
+    const currentPlayerPick = playerPickRef.current;
+    if (!currentPlayerPick) return;
+    const aiMove = aiChoose();
+    setAiPick(aiMove);
+    setPhase("reveal");
+    scheduleTimeout(() => applyRevealResolution(currentPlayerPick, aiMove), timings.revealHoldMs);
+  }, [aiChoose, applyRevealResolution, scheduleTimeout, timings.revealHoldMs]);
 
   const startCountdown = useCallback(() => {
     clearCountdown();
@@ -1490,6 +1802,41 @@ export function useChallengeRuntime() {
       });
     }, timings.countdownTickMs);
   }, [clearCountdown, reveal, timings.countdownTickMs]);
+
+  const resumeCountdown = useCallback(() => {
+    clearCountdown();
+    countdownRef.current = window.setInterval(() => {
+      setCountdown(prev => {
+        const next = prev - 1;
+        if (next <= 0) {
+          clearCountdown();
+          reveal();
+          return 0;
+        }
+        return next;
+      });
+    }, timings.countdownTickMs);
+  }, [clearCountdown, reveal, timings.countdownTickMs]);
+
+  useEffect(() => {
+    if (resumePhaseRef.current !== "countdown" || phase !== "countdown") return;
+    resumePhaseRef.current = null;
+    resumeCountdown();
+  }, [phase, resumeCountdown]);
+
+  useEffect(() => {
+    if (resumePhaseRef.current !== "reveal" || phase !== "reveal" || !playerPickRef.current || !aiPick) return;
+    resumePhaseRef.current = null;
+    const currentPlayerPick = playerPickRef.current;
+    const restoredAiPick = aiPick;
+    scheduleTimeout(() => applyRevealResolution(currentPlayerPick, restoredAiPick), timings.revealHoldMs);
+  }, [aiPick, applyRevealResolution, phase, scheduleTimeout, timings.revealHoldMs]);
+
+  useEffect(() => {
+    if (resumePhaseRef.current !== "resolve" || phase !== "resolve" || !playerPickRef.current || !aiPick || !outcome) return;
+    resumePhaseRef.current = null;
+    finalizeResolvedRound(playerPickRef.current, aiPick, outcome);
+  }, [aiPick, finalizeResolvedRound, outcome, phase]);
 
   const selectMove = useCallback(
     (move: Move) => {
@@ -1525,17 +1872,25 @@ export function useChallengeRuntime() {
 
   useEffect(() => {
     if (phase !== "feedback") return;
+    if (completedMatchIdRef.current === currentMatchIdRef.current && resultBanner) return;
     const timeoutId = scheduleTimeout(() => {
       const totalNeeded = Math.ceil(bestOf / 2);
       const someoneWon = playerScore >= totalNeeded || aiScore >= totalNeeded;
       if (someoneWon) {
+        if (completedMatchIdRef.current === currentMatchIdRef.current) {
+          return;
+        }
         const banner: ResultBanner = playerScore > aiScore ? "Victory" : playerScore < aiScore ? "Defeat" : "Tie";
         const endedAt = new Date().toISOString();
         const totalRounds = outcomeHistory.length + 1;
         const aiWins = [...outcomeHistory, outcome].filter(value => value === "lose").length;
         const matchScore = computeMatchScore(currentMatchRoundsRef.current);
-        logMatch({
-          clientId: currentMatchIdRef.current,
+        telemetryService.upsertMatch({
+          id: currentMatchIdRef.current,
+          sourceMatchId: currentMatchIdRef.current,
+          sessionId,
+          playerId: currentPlayer?.id ?? "",
+          profileId: currentProfile?.id ?? "",
           startedAt: matchStartRef.current,
           endedAt,
           mode: "challenge",
@@ -1552,12 +1907,29 @@ export function useChallengeRuntime() {
           leaderboardTimerBonus: matchScore?.timerBonus,
           leaderboardBeatConfidenceBonus: matchScore?.beatConfidenceBonus,
           leaderboardType: "Challenge",
+          roundsPlayed: totalRounds,
+          winner: playerScore > aiScore ? "player" : playerScore < aiScore ? "ai" : "tie",
+          completed: true,
+          status: "completed",
+        });
+        completedMatchIdRef.current = currentMatchIdRef.current;
+        persistEnabledRef.current = false;
+        clearPersistedState();
+        telemetryService.logUIEvent({
+          sessionId,
+          timestamp: endedAt,
+          playerId: currentPlayer?.id,
+          profileId: currentProfile?.id ?? null,
+          matchId: currentMatchIdRef.current,
+          surface: "challenge",
+          action: "match-completed",
+          value: `${playerScore}-${aiScore}`,
+          detail: banner,
         });
         currentMatchRoundsRef.current = [];
         setResultBanner(banner);
         return;
       }
-      setRoundNumber(prev => prev + 1);
       setPlayerPick(undefined);
       playerPickRef.current = undefined;
       setAiPick(undefined);
@@ -1572,7 +1944,8 @@ export function useChallengeRuntime() {
     aiMode,
     aiScore,
     bestOf,
-    logMatch,
+    currentPlayer?.id,
+    currentProfile?.id,
     outcome,
     outcomeHistory,
     phase,
@@ -1580,7 +1953,9 @@ export function useChallengeRuntime() {
     playerPick,
     playerScore,
     scheduleTimeout,
+    sessionId,
     timings.resultBannerMs,
+    clearPersistedState,
   ]);
 
   useEffect(() => {
@@ -1594,6 +1969,10 @@ export function useChallengeRuntime() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [navigate, selectMove]);
+
+  useEffect(() => {
+    persistSnapshot();
+  }, [persistSnapshot]);
 
   const historySlots = useMemo<ChallengeHistoryEntry[]>(() => {
     const totalSlots = Math.max(bestOf, matchHistory.length || bestOf);
@@ -1653,6 +2032,12 @@ export function useChallengeRuntime() {
 
   const aiSignals = useMemo(() => buildAiSignals(liveSnapshot), [liveSnapshot]);
   const predictionSources = useMemo(() => buildPredictionSources(liveSnapshot), [liveSnapshot]);
+  const exitMatch = useCallback(() => {
+    abandonTelemetryMatch("explicit-exit", { notes: JSON.stringify({ exitReason: "explicit-exit" }) });
+    persistEnabledRef.current = false;
+    clearPersistedState();
+    navigate(PLAY_DASHBOARD_PATH);
+  }, [abandonTelemetryMatch, clearPersistedState, navigate]);
 
   return {
     aiMode,
@@ -1664,7 +2049,10 @@ export function useChallengeRuntime() {
     currentPlayerName,
     countdown,
     difficultyOptions: GAMEPLAY_DIFFICULTY_OPTIONS,
-    goToDashboard: () => navigate(PLAY_DASHBOARD_PATH),
+    goToDashboard: () => {
+      navigate(PLAY_DASHBOARD_PATH);
+    },
+    exitMatch,
     isInputLocked: phase !== "idle" || Boolean(resultBanner),
     liveSnapshot,
     matchHistory: historySlots,

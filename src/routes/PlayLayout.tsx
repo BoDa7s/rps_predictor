@@ -1,10 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import botHappy96 from "../assets/mascot/bot-happy-96.svg";
-import { persistWelcomePreference } from "../playEntry";
 import { playNavItems } from "../playNavigation";
-import { usePlayers } from "../players";
 import { usePlayTheme } from "./PlayThemeProvider";
+import { usePlayAppFacade } from "./usePlayAppFacade";
 
 const playPageMeta: Record<string, { title: string; description: string }> = {
   "/play/stats": {
@@ -51,7 +50,7 @@ function PlayLayoutShell() {
     isDashboardRoute ||
     isModeWorkspaceRoute;
   const pageMeta = playPageMeta[location.pathname];
-  const { currentPlayer, setCurrentPlayer } = usePlayers();
+  const { currentPlayer, setCurrentPlayer, setWelcomePreference } = usePlayAppFacade();
   const { themePreference, resolvedThemeMode, themeVariables, themeOptions, applyThemePreference } = usePlayTheme();
   const [playerMenuOpen, setPlayerMenuOpen] = useState(false);
   const playerMenuRef = useRef<HTMLDivElement | null>(null);
@@ -113,7 +112,7 @@ function PlayLayoutShell() {
   const handleLogout = () => {
     setPlayerMenuOpen(false);
     setCurrentPlayer(null);
-    persistWelcomePreference("show");
+    setWelcomePreference("show");
     navigate("/", { replace: true });
   };
 

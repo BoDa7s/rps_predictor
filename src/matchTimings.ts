@@ -1,5 +1,3 @@
-import { Mode } from "./gameTypes";
-
 export interface ModeTimingConfig {
   countdownTickMs: number;
   revealHoldMs: number;
@@ -10,7 +8,8 @@ export interface ModeTimingConfig {
   robotResultRestMs: number;
 }
 
-export type MatchTimings = Record<Mode, ModeTimingConfig>;
+export type MatchTimingMode = "challenge" | "practice";
+export type MatchTimings = Record<MatchTimingMode, ModeTimingConfig>;
 
 export const MATCH_TIMING_DEFAULTS: MatchTimings = {
   challenge: {
@@ -44,7 +43,9 @@ function sanitizeNumber(value: unknown, fallback: number): number {
   return Math.round(parsed);
 }
 
-export function normalizeMatchTimings(input: Partial<Record<Mode, Partial<ModeTimingConfig>>> | MatchTimings): MatchTimings {
+export function normalizeMatchTimings(
+  input: Partial<Record<MatchTimingMode, Partial<ModeTimingConfig>>> | MatchTimings,
+): MatchTimings {
   return {
     challenge: {
       countdownTickMs: sanitizeNumber(input.challenge?.countdownTickMs, MATCH_TIMING_DEFAULTS.challenge.countdownTickMs),

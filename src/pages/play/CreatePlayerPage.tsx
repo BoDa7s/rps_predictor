@@ -1,23 +1,17 @@
 import React, { useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import PlayerSetupForm from "../../components/play/PlayerSetupForm";
-import { usePlayers } from "../../players";
-import {
-  buildPlayPath,
-  buildPostOnboardingDestination,
-  persistWelcomePreference,
-  sanitizeReturnTo,
-} from "../../playEntry";
+import { buildPlayPath, sanitizeReturnTo } from "../../playEntry";
+import { usePlayAppFacade } from "../../routes/usePlayAppFacade";
 
 export default function CreatePlayerPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { createPlayer, updatePlayer } = usePlayers();
+  const { createPlayer, updatePlayer, completeOnboarding } = usePlayAppFacade();
   const returnTo = useMemo(() => sanitizeReturnTo(searchParams.get("returnTo")), [searchParams]);
 
   const handleComplete = () => {
-    persistWelcomePreference("skip");
-    navigate(buildPostOnboardingDestination({ returnTo, forceTraining: true }), { replace: true });
+    navigate(completeOnboarding(returnTo, { forceTraining: true }), { replace: true });
   };
 
   return (

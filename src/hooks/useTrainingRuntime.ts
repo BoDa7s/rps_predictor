@@ -3,8 +3,11 @@ import { useNavigate } from "react-router-dom";
 import type { BestOf, Move, Outcome } from "../gameTypes";
 import { resolveOutcome } from "../gameRules";
 import { loadMatchTimings } from "../matchTimings";
+import { clearPersistedMatchSnapshot, loadPersistedMatchSnapshot, savePersistedMatchSnapshot } from "../matchProgress";
 import { PLAY_DASHBOARD_PATH, TRAINING_ROUNDS_REQUIRED } from "../playEntry";
 import { usePlayers } from "../players";
+import { telemetryService } from "../telemetry";
+import type { RoundLog } from "../stats";
 import { useStats } from "../stats";
 
 export type TrainingPhase = "idle" | "selected" | "countdown" | "reveal" | "resolve" | "feedback";
@@ -17,10 +20,32 @@ export interface TrainingHistoryEntry {
   outcome: Outcome | "pending";
 }
 
+interface PersistedTrainingMatchState {
+  version: 1;
+  matchId: string;
+  matchStartedAt: string;
+  phase: TrainingPhase;
+  countdown: number;
+  playerPick?: Move;
+  aiPick?: Move;
+  outcome?: Outcome;
+  isCompleting: boolean;
+  baseTrainingCount: number;
+  trainingScore: { you: number; ai: number };
+  loggedRounds: RoundLog[];
+  aiStreak: number;
+  playerStreak: number;
+  pendingCompletion: boolean;
+}
+
 const MOVES: Move[] = ["rock", "paper", "scissors"];
 const TRAINING_BEST_OF: BestOf = 5;
 const TRAINING_CONFIDENCE = 0.33;
 const TRAINING_REASON = "Training random mode";
+
+function makeTrainingMatchId() {
+  return `match-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 function randomMove(): Move {
   return MOVES[Math.floor(Math.random() * MOVES.length)] as Move;
@@ -35,11 +60,11 @@ function confidenceBucket(confidence: number): "low" | "medium" | "high" {
 export function useTrainingRuntime() {
   const navigate = useNavigate();
   const { currentPlayer } = usePlayers();
-  const { currentProfile, rounds, logRound, updateProfile } = useStats();
+  const { currentProfile, sessionId, logRound, updateProfile } = useStats();
   const timings = useMemo(() => loadMatchTimings().practice, []);
   const [phase, setPhase] = useState<TrainingPhase>("idle");
   const [count, setCount] = useState(3);
-  const [roundNumber, setRoundNumber] = useState(1);
+  const [roundNumber, setRoundNumber] = useState(0);
   const [playerPick, setPlayerPick] = useState<Move | undefined>();
   const [aiPick, setAiPick] = useState<Move | undefined>();
   const [outcome, setOutcome] = useState<Outcome | undefined>();
@@ -51,9 +76,29 @@ export function useTrainingRuntime() {
   const aiStreakRef = useRef(0);
   const playerStreakRef = useRef(0);
   const pendingCompletionRef = useRef(false);
+  const currentMatchIdRef = useRef(makeTrainingMatchId());
+  const matchStartRef = useRef(new Date().toISOString());
+  const currentMatchRoundsRef = useRef<RoundLog[]>([]);
+  const trainingScoreRef = useRef<{ you: number; ai: number }>({ you: 0, ai: 0 });
+  const completedMatchIdRef = useRef<string | null>(null);
+  const completionStartedRef = useRef(false);
+  const baseTrainingCountRef = useRef(0);
+  const currentPlayerRef = useRef(currentPlayer);
+  const currentProfileRef = useRef(currentProfile);
+  const resumePhaseRef = useRef<TrainingPhase | null>(null);
+  const persistEnabledRef = useRef(true);
+  const initializedScopeRef = useRef<string | null>(null);
   const profileTrainingCount = currentProfile?.trainingCount ?? 0;
   const completedRounds = Math.min(profileTrainingCount, TRAINING_ROUNDS_REQUIRED);
   const currentPlayerName = currentPlayer?.playerName?.trim() || "Player";
+
+  useEffect(() => {
+    currentPlayerRef.current = currentPlayer;
+  }, [currentPlayer]);
+
+  useEffect(() => {
+    currentProfileRef.current = currentProfile;
+  }, [currentProfile]);
 
   const clearCountdown = useCallback(() => {
     if (countdownRef.current !== null) {
@@ -76,8 +121,160 @@ export function useTrainingRuntime() {
     return timeoutId;
   }, []);
 
+  const clearPersistedState = useCallback(() => {
+    const activePlayer = currentPlayerRef.current;
+    const activeProfile = currentProfileRef.current;
+    if (!activePlayer || !activeProfile) return;
+    clearPersistedMatchSnapshot("training", activePlayer.id, activeProfile.id);
+  }, []);
+
+  const upsertTelemetryTrainingMatch = useCallback(
+    (status: "active" | "completed" | "abandoned", options?: { notes?: string }) => {
+      const activeProfile = currentProfileRef.current;
+      const activePlayer = currentPlayerRef.current;
+      if (!activeProfile || !activePlayer) return;
+      const roundsPlayed = currentMatchRoundsRef.current.length;
+      const aiWins = currentMatchRoundsRef.current.filter(round => round.outcome === "lose").length;
+      telemetryService.upsertMatch({
+        id: currentMatchIdRef.current,
+        sourceMatchId: currentMatchIdRef.current,
+        sessionId,
+        playerId: activePlayer.id,
+        profileId: activeProfile.id,
+        startedAt: matchStartRef.current,
+        endedAt: new Date().toISOString(),
+        mode: "training",
+        bestOf: TRAINING_BEST_OF,
+        difficulty: "fair",
+        score: { ...trainingScoreRef.current },
+        rounds: roundsPlayed,
+        roundsPlayed,
+        winner:
+          trainingScoreRef.current.you > trainingScoreRef.current.ai
+            ? "player"
+            : trainingScoreRef.current.you < trainingScoreRef.current.ai
+              ? "ai"
+              : "tie",
+        completed: status === "completed",
+        status,
+        notes: options?.notes,
+        aiWinRate: roundsPlayed ? aiWins / roundsPlayed : 0,
+        youSwitchedRate: 0,
+      });
+    },
+    [sessionId],
+  );
+
+  const startNewMatch = useCallback(
+    (options?: { logStartedEvent?: boolean }) => {
+      const logStartedEvent = options?.logStartedEvent ?? true;
+      clearCountdown();
+      clearTimeouts();
+      persistEnabledRef.current = true;
+      resumePhaseRef.current = null;
+      setCount(3);
+      setPhase("idle");
+      setRoundNumber(0);
+      setPlayerPick(undefined);
+      playerPickRef.current = undefined;
+      setAiPick(undefined);
+      setOutcome(undefined);
+      setIsCompleting(false);
+      pendingCompletionRef.current = false;
+      completionStartedRef.current = false;
+      aiStreakRef.current = 0;
+      playerStreakRef.current = 0;
+      trainingScoreRef.current = { you: 0, ai: 0 };
+      currentMatchRoundsRef.current = [];
+      currentMatchIdRef.current = makeTrainingMatchId();
+      matchStartRef.current = new Date().toISOString();
+      completedMatchIdRef.current = null;
+      baseTrainingCountRef.current = currentProfileRef.current?.trainingCount ?? 0;
+      roundStartRef.current = typeof performance !== "undefined" ? performance.now() : Date.now();
+
+      const activeProfile = currentProfileRef.current;
+      const activePlayer = currentPlayerRef.current;
+      if (activeProfile && activePlayer) {
+        telemetryService.upsertMatch({
+          id: currentMatchIdRef.current,
+          sourceMatchId: currentMatchIdRef.current,
+          sessionId,
+          playerId: activePlayer.id,
+          profileId: activeProfile.id,
+          startedAt: matchStartRef.current,
+          endedAt: matchStartRef.current,
+          mode: "training",
+          bestOf: TRAINING_BEST_OF,
+          difficulty: "fair",
+          score: { you: 0, ai: 0 },
+          rounds: 0,
+          roundsPlayed: 0,
+          winner: "tie",
+          completed: false,
+          status: "active",
+          aiWinRate: 0,
+          youSwitchedRate: 0,
+        });
+        if (logStartedEvent) {
+          telemetryService.logUIEvent({
+            sessionId,
+            timestamp: matchStartRef.current,
+            playerId: activePlayer.id,
+            profileId: activeProfile.id,
+            matchId: currentMatchIdRef.current,
+            surface: "training",
+            action: "match-started",
+          });
+        }
+      }
+    },
+    [clearCountdown, clearTimeouts, sessionId],
+  );
+
+  const restorePersistedMatch = useCallback(
+    (snapshot: PersistedTrainingMatchState) => {
+      clearCountdown();
+      clearTimeouts();
+      persistEnabledRef.current = true;
+      currentMatchIdRef.current = snapshot.matchId;
+      matchStartRef.current = snapshot.matchStartedAt;
+      currentMatchRoundsRef.current = snapshot.loggedRounds;
+      trainingScoreRef.current = snapshot.trainingScore;
+      aiStreakRef.current = snapshot.aiStreak;
+      playerStreakRef.current = snapshot.playerStreak;
+      pendingCompletionRef.current = snapshot.pendingCompletion;
+      completionStartedRef.current = false;
+      completedMatchIdRef.current = null;
+      baseTrainingCountRef.current = snapshot.baseTrainingCount;
+      roundStartRef.current = typeof performance !== "undefined" ? performance.now() : Date.now();
+      setRoundNumber(snapshot.loggedRounds.length);
+      setCount(snapshot.countdown);
+      setPlayerPick(snapshot.playerPick);
+      playerPickRef.current = snapshot.playerPick;
+      setAiPick(snapshot.aiPick);
+      setOutcome(snapshot.outcome);
+      setIsCompleting(snapshot.isCompleting);
+      setPhase(snapshot.phase);
+      resumePhaseRef.current =
+        snapshot.phase === "countdown" || snapshot.phase === "reveal" || snapshot.phase === "resolve"
+          ? snapshot.phase
+          : null;
+      upsertTelemetryTrainingMatch("active");
+      telemetryService.logUIEvent({
+        sessionId,
+        timestamp: new Date().toISOString(),
+        playerId: currentPlayerRef.current?.id,
+        profileId: currentProfileRef.current?.id ?? null,
+        matchId: currentMatchIdRef.current,
+        surface: "training",
+        action: "match-resumed",
+      });
+    },
+    [clearCountdown, clearTimeouts, sessionId, upsertTelemetryTrainingMatch],
+  );
+
   const resetRound = useCallback(
-    (nextRoundNumber?: number) => {
+    () => {
       clearCountdown();
       clearTimeouts();
       setCount(3);
@@ -88,24 +285,56 @@ export function useTrainingRuntime() {
       setOutcome(undefined);
       setIsCompleting(false);
       pendingCompletionRef.current = false;
+      completionStartedRef.current = false;
       roundStartRef.current = typeof performance !== "undefined" ? performance.now() : Date.now();
-      if (typeof nextRoundNumber === "number") {
-        setRoundNumber(Math.max(1, Math.min(nextRoundNumber, TRAINING_ROUNDS_REQUIRED)));
-      }
+      resumePhaseRef.current = null;
     },
     [clearCountdown, clearTimeouts],
   );
 
   useEffect(() => {
-    resetRound(Math.min(TRAINING_ROUNDS_REQUIRED, completedRounds + 1));
-    aiStreakRef.current = 0;
-    playerStreakRef.current = 0;
-  }, [currentProfile?.id, resetRound]);
+    if (!currentPlayer?.id || !currentProfile?.id) {
+      initializedScopeRef.current = null;
+      return;
+    }
+    const scopeKey = `${currentPlayer.id}:${currentProfile.id}`;
+    if (initializedScopeRef.current === scopeKey) return;
+    initializedScopeRef.current = scopeKey;
+    const persisted = loadPersistedMatchSnapshot<PersistedTrainingMatchState>("training", currentPlayer.id, currentProfile.id);
+    if (persisted?.version === 1 && persisted.matchId) {
+      restorePersistedMatch(persisted);
+      return;
+    }
+    startNewMatch();
+  }, [currentPlayer?.id, currentProfile?.id, restorePersistedMatch, startNewMatch]);
+
+  const persistSnapshot = useCallback(() => {
+    const activePlayer = currentPlayerRef.current;
+    const activeProfile = currentProfileRef.current;
+    if (!persistEnabledRef.current || !activePlayer || !activeProfile) return;
+    savePersistedMatchSnapshot("training", activePlayer.id, activeProfile.id, {
+      version: 1,
+      matchId: currentMatchIdRef.current,
+      matchStartedAt: matchStartRef.current,
+      phase,
+      countdown: count,
+      playerPick,
+      aiPick,
+      outcome,
+      isCompleting,
+      baseTrainingCount: baseTrainingCountRef.current,
+      trainingScore: trainingScoreRef.current,
+      loggedRounds: currentMatchRoundsRef.current,
+      aiStreak: aiStreakRef.current,
+      playerStreak: playerStreakRef.current,
+      pendingCompletion: pendingCompletionRef.current,
+    } satisfies PersistedTrainingMatchState);
+  }, [aiPick, count, isCompleting, outcome, phase, playerPick, roundNumber]);
 
   useEffect(() => {
-    if (phase !== "idle") return;
-    setRoundNumber(Math.min(TRAINING_ROUNDS_REQUIRED, completedRounds + 1));
-  }, [completedRounds, phase]);
+    if (completedMatchIdRef.current === currentMatchIdRef.current || isCompleting) return;
+    persistSnapshot();
+  }, [count, aiPick, isCompleting, outcome, persistSnapshot, phase, playerPick, roundNumber]);
 
   useEffect(() => {
     return () => {
@@ -115,21 +344,34 @@ export function useTrainingRuntime() {
   }, [clearCountdown, clearTimeouts]);
 
   const finishTraining = useCallback(() => {
+    if (completionStartedRef.current) return;
+    completionStartedRef.current = true;
     setIsCompleting(true);
+    persistEnabledRef.current = false;
+    clearPersistedState();
+    telemetryService.logUIEvent({
+      sessionId,
+      timestamp: new Date().toISOString(),
+      playerId: currentPlayerRef.current?.id,
+      profileId: currentProfileRef.current?.id ?? null,
+      matchId: currentMatchIdRef.current,
+      surface: "training",
+      action: "training-finished",
+    });
     scheduleTimeout(() => {
       navigate(PLAY_DASHBOARD_PATH, { replace: true });
     }, 260);
-  }, [navigate, scheduleTimeout]);
+  }, [clearPersistedState, navigate, scheduleTimeout, sessionId]);
 
   const advanceRound = useCallback(() => {
-    if (pendingCompletionRef.current) {
+    const totalCompleted = baseTrainingCountRef.current + currentMatchRoundsRef.current.length;
+    if (pendingCompletionRef.current || totalCompleted >= TRAINING_ROUNDS_REQUIRED) {
       finishTraining();
       return;
     }
 
-    const nextRoundNumber = Math.min(TRAINING_ROUNDS_REQUIRED, completedRounds + 1);
-    resetRound(nextRoundNumber);
-  }, [completedRounds, finishTraining, resetRound]);
+    resetRound();
+  }, [finishTraining, resetRound]);
 
   const commitRound = useCallback(
     (playerMove: Move, aiMove: Move, roundOutcome: Outcome) => {
@@ -144,9 +386,10 @@ export function useTrainingRuntime() {
       aiStreakRef.current = aiStreak;
       playerStreakRef.current = playerStreak;
 
-      logRound({
+      const loggedRound = logRound({
         t: now,
-        mode: "practice",
+        matchId: currentMatchIdRef.current,
+        mode: "training",
         bestOf: TRAINING_BEST_OF,
         difficulty: "fair",
         player: playerMove,
@@ -165,42 +408,118 @@ export function useTrainingRuntime() {
         confidenceBucket: confidenceBucket(TRAINING_CONFIDENCE),
         decisionTimeMs,
       });
+      if (loggedRound) {
+        currentMatchRoundsRef.current = [...currentMatchRoundsRef.current, loggedRound];
+        setRoundNumber(currentMatchRoundsRef.current.length);
+      }
+      if (roundOutcome === "win") trainingScoreRef.current = { ...trainingScoreRef.current, you: trainingScoreRef.current.you + 1 };
+      if (roundOutcome === "lose") trainingScoreRef.current = { ...trainingScoreRef.current, ai: trainingScoreRef.current.ai + 1 };
 
-      if (!currentProfile) return;
+      const activeProfile = currentProfileRef.current;
+      if (!activeProfile) return;
 
-      const nextCount = Math.min(TRAINING_ROUNDS_REQUIRED, profileTrainingCount + 1);
+      const nextCount = Math.min(
+        TRAINING_ROUNDS_REQUIRED,
+        baseTrainingCountRef.current + currentMatchRoundsRef.current.length,
+      );
       const completedTraining = nextCount >= TRAINING_ROUNDS_REQUIRED;
       pendingCompletionRef.current = completedTraining;
+      if (completedTraining) {
+        completedMatchIdRef.current = currentMatchIdRef.current;
+        persistEnabledRef.current = false;
+        clearPersistedState();
+        upsertTelemetryTrainingMatch("completed");
+        telemetryService.logUIEvent({
+          sessionId,
+          timestamp: now,
+          playerId: currentPlayerRef.current?.id,
+          profileId: activeProfile.id,
+          matchId: currentMatchIdRef.current,
+          surface: "training",
+          action: "match-completed",
+        });
+      } else {
+        upsertTelemetryTrainingMatch("active");
+      }
 
-      updateProfile(currentProfile.id, {
+      updateProfile(activeProfile.id, {
         trainingCount: nextCount,
-        trained: completedTraining ? true : currentProfile.trained,
-        predictorDefault: completedTraining ? true : currentProfile.predictorDefault,
-        seenPostTrainingCTA: completedTraining ? true : currentProfile.seenPostTrainingCTA,
+        trained: completedTraining ? true : activeProfile.trained,
+        predictorDefault: completedTraining ? true : activeProfile.predictorDefault,
+        seenPostTrainingCTA: completedTraining ? true : activeProfile.seenPostTrainingCTA,
       });
     },
-    [currentProfile, logRound, profileTrainingCount, updateProfile],
+    [clearPersistedState, logRound, sessionId, updateProfile, upsertTelemetryTrainingMatch],
   );
 
+  const resumeCountdown = useCallback(() => {
+    clearCountdown();
+    countdownRef.current = window.setInterval(() => {
+      setCount(prev => {
+        const next = prev - 1;
+        if (next <= 0) {
+          clearCountdown();
+          setCount(0);
+          setAiPick(randomMove());
+          setPhase("reveal");
+          resumePhaseRef.current = "reveal";
+          return 0;
+        }
+        return next;
+      });
+    }, timings.countdownTickMs);
+  }, [clearCountdown, timings.countdownTickMs]);
+
   const reveal = useCallback(() => {
-    const playerMove = playerPickRef.current;
-    if (!playerMove) return;
+    const selectedPlayerMove = playerPickRef.current;
+    if (!selectedPlayerMove) return;
 
     const opponentMove = randomMove();
     setAiPick(opponentMove);
     setPhase("reveal");
 
     scheduleTimeout(() => {
-      const roundOutcome = resolveOutcome(playerMove, opponentMove);
+      const roundOutcome = resolveOutcome(selectedPlayerMove, opponentMove);
       setOutcome(roundOutcome);
       setPhase("resolve");
 
       scheduleTimeout(() => {
-        commitRound(playerMove, opponentMove, roundOutcome);
+        commitRound(selectedPlayerMove, opponentMove, roundOutcome);
         setPhase("feedback");
       }, 150);
     }, timings.revealHoldMs);
   }, [commitRound, scheduleTimeout, timings.revealHoldMs]);
+
+  useEffect(() => {
+    if (resumePhaseRef.current !== "countdown" || phase !== "countdown") return;
+    resumePhaseRef.current = null;
+    resumeCountdown();
+  }, [phase, resumeCountdown]);
+
+  useEffect(() => {
+    if (resumePhaseRef.current !== "reveal" || phase !== "reveal" || !playerPickRef.current || !aiPick) return;
+    resumePhaseRef.current = null;
+    const selectedPlayerMove = playerPickRef.current;
+    const opponentMove = aiPick;
+    scheduleTimeout(() => {
+      const roundOutcome = resolveOutcome(selectedPlayerMove, opponentMove);
+      setOutcome(roundOutcome);
+      setPhase("resolve");
+      resumePhaseRef.current = "resolve";
+    }, timings.revealHoldMs);
+  }, [aiPick, phase, scheduleTimeout, timings.revealHoldMs]);
+
+  useEffect(() => {
+    if (resumePhaseRef.current !== "resolve" || phase !== "resolve" || !playerPickRef.current || !aiPick || !outcome) return;
+    resumePhaseRef.current = null;
+    const selectedPlayerMove = playerPickRef.current;
+    const opponentMove = aiPick;
+    const roundOutcome = outcome;
+    scheduleTimeout(() => {
+      commitRound(selectedPlayerMove, opponentMove, roundOutcome);
+      setPhase("feedback");
+    }, 150);
+  }, [aiPick, commitRound, outcome, phase, scheduleTimeout]);
 
   const startCountdown = useCallback(() => {
     clearCountdown();
@@ -221,7 +540,8 @@ export function useTrainingRuntime() {
 
   const selectMove = useCallback(
     (move: Move) => {
-      if (phase !== "idle" || isCompleting) return;
+      if (phase !== "idle" || isCompleting || pendingCompletionRef.current) return;
+      if (baseTrainingCountRef.current + currentMatchRoundsRef.current.length >= TRAINING_ROUNDS_REQUIRED) return;
       setPlayerPick(move);
       playerPickRef.current = move;
       setPhase("selected");
@@ -230,6 +550,28 @@ export function useTrainingRuntime() {
     },
     [isCompleting, phase, scheduleTimeout, startCountdown],
   );
+
+  const exitMatch = useCallback(() => {
+    const activeProfile = currentProfileRef.current;
+    if (!activeProfile) {
+      navigate(PLAY_DASHBOARD_PATH);
+      return;
+    }
+    upsertTelemetryTrainingMatch("abandoned", { notes: JSON.stringify({ exitReason: "explicit-exit" }) });
+    telemetryService.logUIEvent({
+      sessionId,
+      timestamp: new Date().toISOString(),
+      playerId: currentPlayerRef.current?.id,
+      profileId: activeProfile.id,
+      matchId: currentMatchIdRef.current,
+      surface: "training",
+      action: "match-exited",
+      detail: "explicit-exit",
+    });
+    persistEnabledRef.current = false;
+    clearPersistedState();
+    navigate(PLAY_DASHBOARD_PATH);
+  }, [clearPersistedState, navigate, sessionId, upsertTelemetryTrainingMatch]);
 
   useEffect(() => {
     if (phase !== "selected") return;
@@ -259,14 +601,10 @@ export function useTrainingRuntime() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectMove]);
 
-  const practiceRounds = useMemo(
-    () => rounds.filter(round => round.mode === "practice").slice(-TRAINING_ROUNDS_REQUIRED),
-    [rounds],
-  );
-
   const recentRounds = useMemo<TrainingHistoryEntry[]>(() => {
+    const trainingRounds = currentMatchRoundsRef.current.slice(-TRAINING_ROUNDS_REQUIRED);
     return Array.from({ length: TRAINING_ROUNDS_REQUIRED }, (_, index) => {
-      const loggedRound = practiceRounds[index];
+      const loggedRound = trainingRounds[index];
       if (loggedRound) {
         return {
           id: loggedRound.id,
@@ -283,7 +621,7 @@ export function useTrainingRuntime() {
         outcome: "pending",
       };
     });
-  }, [practiceRounds]);
+  }, [roundNumber]);
 
   const revealState = useMemo(() => {
     const completionMessage = completedRounds >= TRAINING_ROUNDS_REQUIRED || isCompleting;
@@ -348,5 +686,6 @@ export function useTrainingRuntime() {
     revealState,
     recentRounds,
     selectMove,
+    exitMatch,
   };
 }

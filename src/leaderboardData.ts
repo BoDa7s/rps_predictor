@@ -1,7 +1,7 @@
 import { AIMode, Mode } from "./gameTypes";
 import { Grade } from "./players";
 import { computeMatchScore } from "./leaderboard";
-import { MatchSummary, RoundLog } from "./stats";
+import type { TelemetryMode } from "./telemetry";
 
 export interface LeaderboardPlayerInfo {
   name: string;
@@ -18,7 +18,7 @@ export interface LeaderboardMatchEntry {
   score: number;
   streak: number;
   rounds: number;
-  mode: Mode;
+  mode: Mode | TelemetryMode;
   difficulty: AIMode;
   endedAt: string;
   endedAtMs: number;
@@ -32,8 +32,36 @@ const DIFFICULTY_RANK: Record<AIMode, number> = {
   ruthless: 2,
 };
 
-export function groupRoundsByMatch(rounds: RoundLog[]): Map<string, RoundLog[]> {
-  const map = new Map<string, RoundLog[]>();
+type LeaderboardRoundLike = {
+  id: string;
+  matchId?: string;
+  mode: Mode | TelemetryMode;
+  difficulty: AIMode;
+  outcome: "win" | "lose" | "tie";
+  decisionTimeMs?: number;
+  confidence: number;
+  streakYou: number;
+};
+
+type LeaderboardMatchLike = {
+  id: string;
+  clientId?: string;
+  playerId: string;
+  profileId: string;
+  mode: Mode | TelemetryMode;
+  difficulty: AIMode;
+  endedAt: string;
+  startedAt: string;
+  leaderboardScore?: number;
+  leaderboardRoundCount?: number;
+  leaderboardMaxStreak?: number;
+  leaderboardType?: "Challenge" | "Practice Legacy";
+  completed?: boolean;
+  status?: "active" | "completed" | "abandoned";
+};
+
+export function groupRoundsByMatch(rounds: LeaderboardRoundLike[]): Map<string, LeaderboardRoundLike[]> {
+  const map = new Map<string, LeaderboardRoundLike[]>();
   rounds.forEach(round => {
     if (!round.matchId) return;
     const existing = map.get(round.matchId);
@@ -109,14 +137,15 @@ export function collectLeaderboardEntries({
   roundsByMatchId,
   playersById,
 }: {
-  matches: MatchSummary[];
-  roundsByMatchId: Map<string, RoundLog[]>;
+  matches: LeaderboardMatchLike[];
+  roundsByMatchId: Map<string, LeaderboardRoundLike[]>;
   playersById?: Map<string, LeaderboardPlayerInfo>;
 }): { entries: LeaderboardMatchEntry[]; hasPracticeLegacy: boolean } {
   let hasPracticeLegacy = false;
   const entries: LeaderboardMatchEntry[] = [];
   matches.forEach(match => {
-    if (match.mode === "practice" || match.leaderboardType === PRACTICE_LEGACY_TYPE) {
+    if (match.completed === false || match.status === "active" || match.status === "abandoned") return;
+    if (match.mode === "practice" || match.mode === "training" || match.leaderboardType === PRACTICE_LEGACY_TYPE) {
       hasPracticeLegacy = true;
       return;
     }

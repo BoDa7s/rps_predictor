@@ -1,23 +1,22 @@
 import React from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
-import RPSDoodleApp from "../../App";
-import { buildTrainingStartPath, profileNeedsTraining } from "../../playEntry";
+import { PLAY_DASHBOARD_PATH } from "../../playEntry";
 import {
   CHALLENGE_LAUNCH_VALUE,
   PLAY_LAUNCH_MODE_PARAM,
   type PlayLaunchIntent,
 } from "../../playEntry";
-import { useStats } from "../../stats";
+import { usePlayAppFacade } from "../../routes/usePlayAppFacade";
 
 export default function GameplayPage() {
-  const { currentProfile } = useStats();
+  const { trainingRequired } = usePlayAppFacade();
   const [searchParams] = useSearchParams();
   const launchValue = searchParams.get(PLAY_LAUNCH_MODE_PARAM);
   const launchIntent: PlayLaunchIntent | null = launchValue === CHALLENGE_LAUNCH_VALUE ? launchValue : null;
 
-  if (profileNeedsTraining(currentProfile)) {
-    return <Navigate to={buildTrainingStartPath()} replace />;
+  if (launchIntent === CHALLENGE_LAUNCH_VALUE) {
+    return <Navigate to={trainingRequired ? PLAY_DASHBOARD_PATH : "/play/challenge"} replace />;
   }
 
-  return <RPSDoodleApp embeddedInPlayLayout launchIntent={launchIntent} />;
+  return <Navigate to={PLAY_DASHBOARD_PATH} replace />;
 }

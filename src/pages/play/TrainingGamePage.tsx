@@ -48,12 +48,13 @@ function getOpponentDetail(
 export default function TrainingGamePage() {
   const training = useTrainingRuntime();
   const viewport = useCockpitViewport();
+  const displayedTrainingRound = Math.min(training.roundNumber, training.totalRounds);
   const playerMoveLabel = training.playerPick
     ? `${training.playerPick.charAt(0).toUpperCase() + training.playerPick.slice(1)}`
     : null;
   const aiMoveLabel = training.aiPick ? `${training.aiPick.charAt(0).toUpperCase() + training.aiPick.slice(1)}` : null;
   const headerStats: GameHudStat[] = [
-    { label: "Round", value: `${Math.min(training.roundNumber, training.totalRounds)} / ${training.totalRounds}`, tone: "accent" },
+    { label: "Round", value: `${displayedTrainingRound} / ${training.totalRounds}`, tone: "accent" },
     { label: "AI", value: "OFF", tone: "danger" },
     { label: "Random", value: "ON", tone: "success" },
     {
@@ -153,6 +154,15 @@ export default function TrainingGamePage() {
                 alignment="center"
                 compact
                 density={viewport.density}
+                actions={
+                  <button
+                    type="button"
+                    onClick={training.exitMatch}
+                    className="inline-flex items-center justify-center rounded-full border border-rose-400/50 bg-rose-500/15 px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-rose-200 transition hover:bg-rose-500/25"
+                  >
+                    Exit Match
+                  </button>
+                }
               />
             </div>
 

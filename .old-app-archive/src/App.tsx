@@ -1,3 +1,11 @@
+/**
+ * Archived legacy monolithic app shell.
+ *
+ * This file is kept only as historical reference for the pre-router app.
+ * It is not mounted by the current runtime. The active play app starts in
+ * src/main.tsx and renders the router-based experience instead.
+ */
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence, type Transition, useReducedMotion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
@@ -99,6 +107,7 @@ function mulberry32(a:number){
 const MOVES: Move[] = ["rock", "paper", "scissors"];
 const MODES: Mode[] = ["challenge", "practice"];
 const VISIBLE_MODE_OPTIONS: Mode[] = MODES.filter(mode => mode !== "practice");
+const resolveTimingMode = (mode: Mode): "challenge" | "practice" => (mode === "training" ? "practice" : mode);
 
 const DIFFICULTY_INFO: Record<AIMode, { label: string; helper: string }> = {
   fair: { label: "Fair", helper: "Gentle counterplay tuned for learning." },
@@ -3191,7 +3200,7 @@ function RPSDoodleAppInner({
   const clearCountdown = ()=>{ if (countdownRef.current!==null){ clearInterval(countdownRef.current); countdownRef.current=null; } };
   const startCountdown = ()=>{
     const modeForTiming: Mode = selectedMode ?? "practice";
-    const interval = matchTimings[modeForTiming].countdownTickMs;
+    const interval = matchTimings[resolveTimingMode(modeForTiming)].countdownTickMs;
     setPhase("countdown");
     setCount(3);
     clearCountdown();
@@ -4879,7 +4888,7 @@ function RPSDoodleAppInner({
     const player = playerPick; if (!player) return;
     const ai = aiChoose(); setAiPick(ai); setAiHistory(h=>[...h, ai]); setPhase("reveal");
     const modeForTiming: Mode = selectedMode ?? "practice";
-    const holdMs = matchTimings[modeForTiming].revealHoldMs;
+    const holdMs = matchTimings[resolveTimingMode(modeForTiming)].revealHoldMs;
     setTimeout(()=>{
       const res = resolveOutcome(player, ai); setOutcome(res); setPhase("resolve");
       // Online update mixer with context prior to adding current move
@@ -5038,7 +5047,7 @@ function RPSDoodleAppInner({
   useEffect(()=>{
     if (phase !== "countdown") return;
     const modeForTiming: Mode = selectedMode ?? "practice";
-    const interval = matchTimings[modeForTiming].countdownTickMs;
+    const interval = matchTimings[resolveTimingMode(modeForTiming)].countdownTickMs;
     const failSafeMs = Math.max(interval * 4, interval * 3 + 600);
     const t = setTimeout(()=>{ if (phase === "countdown"){ clearCountdown(); reveal(); } }, failSafeMs);
     return ()=> clearTimeout(t);
@@ -5049,7 +5058,7 @@ function RPSDoodleAppInner({
   useEffect(() => {
     if (phase !== "feedback") return;
     const modeForTiming: Mode = selectedMode ?? "practice";
-    const delayBase = matchTimings[modeForTiming].resultBannerMs;
+    const delayBase = matchTimings[resolveTimingMode(modeForTiming)].resultBannerMs;
     const delay = trainingActive
       ? Math.min(delayBase, 600)
       : delayBase;
@@ -5166,8 +5175,8 @@ function RPSDoodleAppInner({
             };
     clearRobotReactionTimers();
     setRobotResultReaction(reaction);
-    const reactionDuration = matchTimings[modeForReaction].robotRoundReactionMs;
-    const restDuration = matchTimings[modeForReaction].robotRoundRestMs;
+    const reactionDuration = matchTimings[resolveTimingMode(modeForReaction)].robotRoundReactionMs;
+    const restDuration = matchTimings[resolveTimingMode(modeForReaction)].robotRoundRestMs;
     const timeoutId = window.setTimeout(() => {
       if (robotResultTimeoutRef.current !== timeoutId) return;
       robotResultTimeoutRef.current = null;
@@ -5189,7 +5198,7 @@ function RPSDoodleAppInner({
     if (scene !== "RESULTS" || !resultBanner) return;
     const modeForReaction: Mode = selectedMode ?? "practice";
     const reaction: RobotReaction = (() => {
-      if (modeForReaction === "practice") {
+      if (modeForReaction === "practice" || modeForReaction === "training") {
         return resultBanner === "Victory"
           ? {
               emoji: "😊",
@@ -5219,8 +5228,8 @@ function RPSDoodleAppInner({
     })();
     clearRobotReactionTimers();
     setRobotResultReaction(reaction);
-    const reactionDuration = matchTimings[modeForReaction].robotResultReactionMs;
-    const restDuration = matchTimings[modeForReaction].robotResultRestMs;
+    const reactionDuration = matchTimings[resolveTimingMode(modeForReaction)].robotResultReactionMs;
+    const restDuration = matchTimings[resolveTimingMode(modeForReaction)].robotResultRestMs;
     const timeoutId = window.setTimeout(() => {
       if (robotResultTimeoutRef.current !== timeoutId) return;
       robotResultTimeoutRef.current = null;

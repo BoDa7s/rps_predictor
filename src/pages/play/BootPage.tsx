@@ -1,25 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { usePlayers } from "../../players";
-import { getActiveStatsProfileForPlayer, useStats } from "../../stats";
-import {
-  PLAY_BOOT_DURATION_MS,
-  getBootDestination,
-  getStoredWelcomePreference,
-  sanitizeReturnTo,
-} from "../../playEntry";
+import { PLAY_BOOT_DURATION_MS, sanitizeReturnTo } from "../../playEntry";
+import { usePlayAppFacade } from "../../routes/usePlayAppFacade";
 
 export default function BootPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { currentPlayer, players } = usePlayers();
-  const { adminProfiles } = useStats();
+  const { resolveBootDestination } = usePlayAppFacade();
   const [progress, setProgress] = useState(0);
   const returnTo = useMemo(() => sanitizeReturnTo(searchParams.get("returnTo")), [searchParams]);
-  const currentStatsProfile = useMemo(
-    () => (currentPlayer ? getActiveStatsProfileForPlayer(adminProfiles, currentPlayer.id) : null),
-    [adminProfiles, currentPlayer],
-  );
 
   useEffect(() => {
     let frameId = 0;
@@ -34,13 +23,7 @@ export default function BootPage() {
       setProgress(ratio * 100);
 
       if (ratio >= 1) {
-        const nextPath = getBootDestination({
-          welcomePreference: getStoredWelcomePreference(),
-          hasCurrentPlayer: Boolean(currentPlayer),
-          savedPlayerCount: players.length,
-          returnTo,
-          currentProfile: currentStatsProfile,
-        });
+        const nextPath = resolveBootDestination(returnTo);
         navigate(nextPath, { replace: true });
         return;
       }
@@ -54,7 +37,7 @@ export default function BootPage() {
         window.cancelAnimationFrame(frameId);
       }
     };
-  }, [currentPlayer, currentStatsProfile, navigate, players.length, returnTo]);
+  }, [navigate, resolveBootDestination, returnTo]);
 
   const percent = Math.max(4, Math.round(progress));
 

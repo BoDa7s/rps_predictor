@@ -1,14 +1,18 @@
 import React from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
-import { usePlayers } from "../players";
-import { buildBootPath, getStoredWelcomePreference } from "../playEntry";
+import { buildBootPath, shouldEnterPlayBoot } from "../playEntry";
+import { usePlayAppFacade } from "./usePlayAppFacade";
 
 export default function PlayEntryGate() {
   const location = useLocation();
-  const { currentPlayer } = usePlayers();
-  const welcomePreference = getStoredWelcomePreference();
+  const { currentPlayer, welcomePreference } = usePlayAppFacade();
 
-  if (!currentPlayer || welcomePreference === "show") {
+  if (
+    shouldEnterPlayBoot({
+      welcomePreference,
+      hasCurrentPlayer: Boolean(currentPlayer),
+    })
+  ) {
     const returnTo = `${location.pathname}${location.search}${location.hash}`;
     return <Navigate to={buildBootPath(returnTo)} replace />;
   }

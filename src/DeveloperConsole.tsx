@@ -3,9 +3,18 @@ import { DEV_MODE_ENABLED, DEV_MODE_SECURE } from "./devMode";
 import { usePlayers } from "./players";
 import type { PlayerProfile } from "./players";
 import { useStats } from "./stats";
-import type { MatchSummary, RoundLog, StatsProfile } from "./stats";
 import type { AIMode, Mode } from "./gameTypes";
 import { MatchTimings, MATCH_TIMING_DEFAULTS, normalizeMatchTimings } from "./matchTimings";
+import type {
+  AIPredictionRecord,
+  GameSession,
+  MatchRecord,
+  MatchStatus,
+  PlayerProfile as TelemetryProfile,
+  RoundRecord,
+  UIEventRecord,
+} from "./telemetry";
+import { telemetryService, useTelemetryStore } from "./telemetry";
 import { useDevInstrumentationSnapshot } from "./devInstrumentation";
 import {
   instrumentationSnapshots,
@@ -16,13 +25,16 @@ import InstrumentationTab from "./InstrumentationTab";
 import {
   appendAuditEntry,
   AuditEntry,
+  getSecureUnlockDiagnostics,
   isUnlocked,
+  tryAutomationUnlock,
   loadAuditLog,
   loadDatasetSnapshot,
   saveDatasetSnapshot,
   subscribeSecure,
   unlockWithPin,
 } from "./secureStore";
+import { downloadStructuredTelemetryWorkbook } from "./structuredTelemetryWorkbook";
 
 function cloneTimings(value: MatchTimings): MatchTimings {
   return {
@@ -41,8 +53,9 @@ interface DeveloperConsoleProps {
   closeLabel?: string;
 }
 
-const TAB_OPTIONS = ["overview", "data", "instrumentation", "timers", "audit"] as const;
+const TAB_OPTIONS = ["explorer", "instrumentation", "timers", "audit"] as const;
 type TabKey = typeof TAB_OPTIONS[number];
+type ExplorerEntityKey = "sessions" | "matches" | "rounds" | "predictions" | "events";
 type TimingField = keyof MatchTimings["challenge"];
 
 function countTimingDifferences(base: MatchTimings, compare: MatchTimings): number {
@@ -62,6 +75,7 @@ interface ControlFilters {
   profileId: string | null;
   mode: Mode | "";
   difficulty: AIMode | "";
+  status: MatchStatus | "";
   dateRange: {
     start: string | null;
     end: string | null;
@@ -79,15 +93,95 @@ interface RoundSearchFilters {
   mode: string;
 }
 
-const MODE_OPTIONS: Mode[] = ["practice", "challenge"];
+interface PredictionSearchFilters {
+  player: string;
+  policy: string;
+  reason: string;
+}
+
+interface EventSearchFilters {
+  action: string;
+  surface: string;
+}
+
+const MODE_OPTIONS: Mode[] = ["training", "challenge"];
 const DIFFICULTY_OPTIONS: AIMode[] = ["fair", "normal", "ruthless"];
 const FILTER_DEFAULTS: ControlFilters = {
   playerId: null,
   profileId: null,
   mode: "",
   difficulty: "",
+  status: "",
   dateRange: { start: null, end: null },
 };
+
+const searchInputStyle: React.CSSProperties = {
+  padding: "4px 8px",
+  borderRadius: "8px",
+  border: "1px solid rgba(255,255,255,0.2)",
+  background: "rgba(9,14,26,0.85)",
+  color: "inherit",
+};
+
+const inlineClearButtonStyle: React.CSSProperties = {
+  marginLeft: "8px",
+  background: "transparent",
+  border: "1px solid rgba(255,255,255,0.2)",
+  color: "inherit",
+  borderRadius: "999px",
+  padding: "2px 10px",
+  cursor: "pointer",
+  fontSize: "0.75rem",
+};
+
+const linkButtonStyle: React.CSSProperties = {
+  background: "transparent",
+  border: "none",
+  color: "inherit",
+  textDecoration: "underline",
+  cursor: "pointer",
+  fontSize: "0.8rem",
+  padding: 0,
+};
+
+const inspectorBlockStyle: React.CSSProperties = {
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: "14px",
+  padding: "14px",
+  display: "grid",
+  gap: "10px",
+};
+
+const inspectorMetaRowStyle: React.CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: "8px",
+  fontSize: "0.74rem",
+  opacity: 0.72,
+};
+
+const emptyInspectorStyle: React.CSSProperties = {
+  background: "rgba(255,255,255,0.03)",
+  border: "1px dashed rgba(255,255,255,0.14)",
+  borderRadius: "14px",
+  padding: "14px",
+  fontSize: "0.82rem",
+  opacity: 0.68,
+};
+
+function pillActionButtonStyle(background: string, color: string): React.CSSProperties {
+  return {
+    background: `${background}22`,
+    border: `1px solid ${background}66`,
+    color,
+    borderRadius: "999px",
+    padding: "6px 12px",
+    cursor: "pointer",
+    fontSize: "0.78rem",
+    fontWeight: 700,
+  };
+}
 
 interface PlayerSummaryData {
   player: PlayerProfile;
@@ -99,7 +193,7 @@ interface PlayerSummaryData {
 }
 
 interface ProfileSummaryData {
-  profile: StatsProfile;
+  profile: TelemetryProfile;
   matches: number;
   rounds: number;
   wins: number;
@@ -119,20 +213,94 @@ export function DeveloperConsole({
 }: DeveloperConsoleProps) {
   const { players, updatePlayer, deletePlayer, setCurrentPlayer, currentPlayerId } = usePlayers();
   const {
-    adminRounds,
-    adminMatches,
-    adminProfiles,
     selectProfile,
     createProfile,
     updateProfile,
-    adminUpdateRound,
-    adminDeleteRound,
-    adminUpdateMatch,
-    adminDeleteMatch,
+    deleteProfile,
+    buildProfilesCsv,
+    buildSessionsCsv,
+    buildMatchesCsv,
+    buildTelemetryRoundsCsv,
+    buildPredictionsCsv,
+    buildEventsCsv,
+    sessionId,
     currentProfileId,
     currentProfile,
   } = useStats();
-  const [tab, setTab] = useState<TabKey>("data");
+  const telemetry = useTelemetryStore();
+  const adminRounds = telemetry.rounds as RoundRecord[];
+  const rawAdminMatches = telemetry.matches as MatchRecord[];
+  const adminMatches = useMemo(() => {
+    const parseNotes = (notes?: string) => {
+      if (!notes) return null as { exitReason?: string } | null;
+      try {
+        const parsed = JSON.parse(notes);
+        return parsed && typeof parsed === "object" ? (parsed as { exitReason?: string }) : null;
+      } catch {
+        return null;
+      }
+    };
+    const roundLinkedMatchIds = new Set(adminRounds.map(round => round.matchId).filter(Boolean) as string[]);
+    const incompleteZeroRound = rawAdminMatches.filter(match => {
+      const noteMeta = parseNotes(match.notes);
+      const scoreless = (match.score?.you ?? 0) === 0 && (match.score?.ai ?? 0) === 0;
+      return (
+        !roundLinkedMatchIds.has(match.id) &&
+        match.status === "active" &&
+        !match.completed &&
+        noteMeta?.exitReason !== "explicit-exit" &&
+        scoreless &&
+        match.rounds === 0
+      );
+    });
+    const latestTransientByScope = new Map<string, MatchRecord>();
+    incompleteZeroRound.forEach(match => {
+      const scopeKey = `${match.sessionId}|${match.profileId}|${match.mode}`;
+      const current = latestTransientByScope.get(scopeKey);
+      if (!current || (current.startedAt || "") < (match.startedAt || "")) {
+        latestTransientByScope.set(scopeKey, match);
+      }
+    });
+    const filtered = rawAdminMatches.filter(match => {
+      const noteMeta = parseNotes(match.notes);
+      if (match.status === "abandoned" && noteMeta?.exitReason !== "explicit-exit") {
+        return false;
+      }
+      const scoreless = (match.score?.you ?? 0) === 0 && (match.score?.ai ?? 0) === 0;
+      const isTransient =
+        !roundLinkedMatchIds.has(match.id) &&
+        match.status === "active" &&
+        !match.completed &&
+        noteMeta?.exitReason !== "explicit-exit" &&
+        scoreless &&
+        match.rounds === 0;
+      if (!isTransient) return true;
+      const scopeKey = `${match.sessionId}|${match.profileId}|${match.mode}`;
+      return latestTransientByScope.get(scopeKey)?.id === match.id;
+    });
+    return filtered;
+  }, [adminRounds, rawAdminMatches]);
+  const adminProfiles = telemetry.profiles as TelemetryProfile[];
+  const adminPredictions = telemetry.predictions as AIPredictionRecord[];
+  const adminEvents = telemetry.uiEvents as UIEventRecord[];
+  const adminSessions = telemetry.sessions;
+  const predictionMap = useMemo(
+    () => new Map(telemetry.predictions.map(prediction => [prediction.roundId, prediction])),
+    [telemetry.predictions],
+  );
+
+  useEffect(() => {
+    if (rawAdminMatches.length <= adminMatches.length) return;
+    if (adminRounds.length === 0) return;
+    if (rawAdminMatches.length <= adminRounds.length * 5) return;
+    console.warn("Developer telemetry sanity check: filtering impossible transient match inflation", {
+      rawMatches: rawAdminMatches.length,
+      displayedMatches: adminMatches.length,
+      rounds: adminRounds.length,
+    });
+  }, [adminMatches.length, adminRounds.length, rawAdminMatches.length]);
+  const [tab, setTab] = useState<TabKey>("explorer");
+  const [entityTab, setEntityTab] = useState<ExplorerEntityKey>("matches");
   const [pin, setPin] = useState("");
   const [unlockError, setUnlockError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -146,6 +314,7 @@ export function DeveloperConsole({
     profileId: null,
     mode: "",
     difficulty: "",
+    status: "",
     dateRange: { start: null, end: null },
   }));
   const [instrumentationSource, setInstrumentationSource] = useState<"selected" | "active">("selected");
@@ -156,8 +325,20 @@ export function DeveloperConsole({
   });
   const [matchSearch, setMatchSearch] = useState<MatchSearchFilters>({ player: "", profile: "", mode: "" });
   const [roundSearch, setRoundSearch] = useState<RoundSearchFilters>({ player: "", mode: "" });
+  const [predictionSearch, setPredictionSearch] = useState<PredictionSearchFilters>({
+    player: "",
+    policy: "",
+    reason: "",
+  });
+  const [eventSearch, setEventSearch] = useState<EventSearchFilters>({
+    action: "",
+    surface: "",
+  });
+  const [focusedSessionId, setFocusedSessionId] = useState<string | null>(null);
   const [focusedMatchId, setFocusedMatchId] = useState<string | null>(null);
   const [focusedRoundId, setFocusedRoundId] = useState<string | null>(null);
+  const [focusedPredictionId, setFocusedPredictionId] = useState<string | null>(null);
+  const [focusedEventId, setFocusedEventId] = useState<string | null>(null);
   const [roundMatchFilter, setRoundMatchFilter] = useState<string | null>(null);
   const [auditActionFilter, setAuditActionFilter] = useState<string>("all");
   const [overrideState, setOverrideState] = useState<
@@ -314,10 +495,10 @@ export function DeveloperConsole({
             }
           });
           relatedRounds.forEach(round => {
-            const stamp = Date.parse(round.t || "");
+            const stamp = Date.parse(round.timestamp || "");
             if (Number.isFinite(stamp) && stamp > lastPlayedMs) {
               lastPlayedMs = stamp;
-              lastPlayed = round.t;
+              lastPlayed = round.timestamp;
             }
           });
           const summary: PlayerSummaryData = {
@@ -374,6 +555,13 @@ export function DeveloperConsole({
     ? playerSummaries.find(summary => summary.player.id === selectedPlayer.id) ?? null
     : null;
   const selectedProfileSummary = selectedProfile ? profileSummaryMap.get(selectedProfile.id) ?? null : null;
+  const scopeSessionCount = useMemo(() => {
+    return adminSessions.filter(session => {
+      if (filters.playerId && session.playerId !== filters.playerId) return false;
+      if (filters.profileId && (session.profileId ?? null) !== filters.profileId) return false;
+      return true;
+    }).length;
+  }, [adminSessions, filters.playerId, filters.profileId]);
   const instrumentationSnapshot = useDevInstrumentationSnapshot();
   const instrumentationScope = useMemo(
     () =>
@@ -399,7 +587,7 @@ export function DeveloperConsole({
     [instrumentationScope],
   );
   const jumpProfileOptions = useMemo(() => {
-    if (!jumpSelection.playerId) return [] as StatsProfile[];
+    if (!jumpSelection.playerId) return [] as TelemetryProfile[];
     return adminProfiles.filter(profile => profile.playerId === jumpSelection.playerId);
   }, [jumpSelection.playerId, adminProfiles]);
   const overrideDisplay = useMemo(() => {
@@ -468,8 +656,35 @@ export function DeveloperConsole({
     return scopedProfiles.slice().sort((a, b) => a.name.localeCompare(b.name));
   }, [adminProfiles, filters.playerId]);
 
+  const sessionMap = useMemo(() => new Map(adminSessions.map(session => [session.id, session])), [adminSessions]);
+
+  const filteredSessions = useMemo(() => {
+    const { playerId, profileId, dateRange } = filters;
+    const startMs = dateRange.start ? Date.parse(`${dateRange.start}T00:00:00.000Z`) : null;
+    const endMs = dateRange.end ? Date.parse(`${dateRange.end}T23:59:59.999Z`) : null;
+
+    return adminSessions
+      .filter(session => {
+        if (playerId && session.playerId !== playerId) return false;
+        if (profileId && (session.profileId ?? null) !== profileId) return false;
+
+        const sessionStamp = Date.parse(session.startedAt || session.updatedAt || "");
+        if (startMs !== null && (!Number.isFinite(sessionStamp) || sessionStamp < startMs)) return false;
+        if (endMs !== null && (!Number.isFinite(sessionStamp) || sessionStamp > endMs)) return false;
+
+        return true;
+      })
+      .sort((a, b) => {
+        const stampA = Date.parse(a.startedAt || a.updatedAt || "");
+        const stampB = Date.parse(b.startedAt || b.updatedAt || "");
+        const normalizedA = Number.isFinite(stampA) ? stampA : 0;
+        const normalizedB = Number.isFinite(stampB) ? stampB : 0;
+        return normalizedB - normalizedA;
+      });
+  }, [adminSessions, filters]);
+
   const filteredMatches = useMemo(() => {
-    const { playerId, profileId, mode, difficulty, dateRange } = filters;
+    const { playerId, profileId, mode, difficulty, status, dateRange } = filters;
     const playerTerm = matchSearch.player.trim().toLowerCase();
     const profileTerm = matchSearch.profile.trim().toLowerCase();
     const modeTerm = matchSearch.mode.trim().toLowerCase();
@@ -482,6 +697,7 @@ export function DeveloperConsole({
         if (profileId && match.profileId !== profileId) return false;
         if (mode && match.mode !== mode) return false;
         if (difficulty && match.difficulty !== difficulty) return false;
+        if (status && match.status !== status) return false;
 
         const matchStamp = Date.parse(match.startedAt || match.endedAt || "");
         if (startMs !== null && (!Number.isFinite(matchStamp) || matchStamp < startMs)) return false;
@@ -507,7 +723,7 @@ export function DeveloperConsole({
   }, [adminMatches, filters, matchSearch, playerMap, profileMap]);
 
   const filteredRounds = useMemo(() => {
-    const { playerId, profileId, mode, difficulty, dateRange } = filters;
+    const { playerId, profileId, mode, difficulty, status, dateRange } = filters;
     const playerTerm = roundSearch.player.trim().toLowerCase();
     const modeTerm = roundSearch.mode.trim().toLowerCase();
     const startMs = dateRange.start ? Date.parse(`${dateRange.start}T00:00:00.000Z`) : null;
@@ -520,8 +736,12 @@ export function DeveloperConsole({
         if (mode && round.mode !== mode) return false;
         if (difficulty && round.difficulty !== difficulty) return false;
         if (roundMatchFilter && round.matchId !== roundMatchFilter) return false;
+        if (status) {
+          const linkedMatch = round.matchId ? matchMap.get(round.matchId) : null;
+          if (!linkedMatch || linkedMatch.status !== status) return false;
+        }
 
-        const roundStamp = Date.parse(round.t || "");
+        const roundStamp = Date.parse(round.timestamp || "");
         if (startMs !== null && (!Number.isFinite(roundStamp) || roundStamp < startMs)) return false;
         if (endMs !== null && (!Number.isFinite(roundStamp) || roundStamp > endMs)) return false;
 
@@ -533,16 +753,124 @@ export function DeveloperConsole({
         return true;
       })
       .sort((a, b) => {
-        const stampA = Date.parse(a.t || "");
-        const stampB = Date.parse(b.t || "");
+        const stampA = Date.parse(a.timestamp || "");
+        const stampB = Date.parse(b.timestamp || "");
         const normalizedA = Number.isFinite(stampA) ? stampA : 0;
         const normalizedB = Number.isFinite(stampB) ? stampB : 0;
         return normalizedB - normalizedA;
       });
-  }, [adminRounds, filters, roundSearch, roundMatchFilter, playerMap]);
+  }, [adminRounds, filters, roundSearch, roundMatchFilter, playerMap, matchMap]);
 
+  const predictionMapById = useMemo(
+    () => new Map(adminPredictions.map(prediction => [prediction.id, prediction])),
+    [adminPredictions],
+  );
+
+  const filteredPredictions = useMemo(() => {
+    const { playerId, profileId, mode, difficulty, status, dateRange } = filters;
+    const playerTerm = predictionSearch.player.trim().toLowerCase();
+    const policyTerm = predictionSearch.policy.trim().toLowerCase();
+    const reasonTerm = predictionSearch.reason.trim().toLowerCase();
+    const startMs = dateRange.start ? Date.parse(`${dateRange.start}T00:00:00.000Z`) : null;
+    const endMs = dateRange.end ? Date.parse(`${dateRange.end}T23:59:59.999Z`) : null;
+
+    return adminPredictions
+      .filter(prediction => {
+        if (playerId && prediction.playerId !== playerId) return false;
+        if (profileId && prediction.profileId !== profileId) return false;
+        if (mode && prediction.mode !== mode) return false;
+        if (difficulty && prediction.difficulty !== difficulty) return false;
+        if (roundMatchFilter && prediction.matchId !== roundMatchFilter) return false;
+        if (status) {
+          const linkedMatch = prediction.matchId ? matchMap.get(prediction.matchId) : null;
+          if (!linkedMatch || linkedMatch.status !== status) return false;
+        }
+
+        const predictionStamp = Date.parse(prediction.timestamp || "");
+        if (startMs !== null && (!Number.isFinite(predictionStamp) || predictionStamp < startMs)) return false;
+        if (endMs !== null && (!Number.isFinite(predictionStamp) || predictionStamp > endMs)) return false;
+
+        const playerName = playerMap.get(prediction.playerId)?.playerName?.toLowerCase() ?? "";
+        if (playerTerm && !playerName.includes(playerTerm)) return false;
+        if (policyTerm && !prediction.policy.toLowerCase().includes(policyTerm)) return false;
+        if (reasonTerm && !`${prediction.reason ?? ""}`.toLowerCase().includes(reasonTerm)) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const stampA = Date.parse(a.timestamp || "");
+        const stampB = Date.parse(b.timestamp || "");
+        const normalizedA = Number.isFinite(stampA) ? stampA : 0;
+        const normalizedB = Number.isFinite(stampB) ? stampB : 0;
+        return normalizedB - normalizedA;
+      });
+  }, [adminPredictions, filters, matchMap, playerMap, predictionSearch, roundMatchFilter]);
+
+  const eventMap = useMemo(() => new Map(adminEvents.map(event => [event.id, event])), [adminEvents]);
+
+  const filteredEvents = useMemo(() => {
+    const { playerId, profileId, status, dateRange } = filters;
+    const actionTerm = eventSearch.action.trim().toLowerCase();
+    const surfaceTerm = eventSearch.surface.trim().toLowerCase();
+    const startMs = dateRange.start ? Date.parse(`${dateRange.start}T00:00:00.000Z`) : null;
+    const endMs = dateRange.end ? Date.parse(`${dateRange.end}T23:59:59.999Z`) : null;
+
+    return adminEvents
+      .filter(event => {
+        if (playerId && event.playerId !== playerId) return false;
+        if (profileId && (event.profileId ?? null) !== profileId) return false;
+        if (roundMatchFilter && event.matchId !== roundMatchFilter) return false;
+        if (status) {
+          const linkedMatch = event.matchId ? matchMap.get(event.matchId) : null;
+          if (!linkedMatch || linkedMatch.status !== status) return false;
+        }
+
+        const eventStamp = Date.parse(event.timestamp || "");
+        if (startMs !== null && (!Number.isFinite(eventStamp) || eventStamp < startMs)) return false;
+        if (endMs !== null && (!Number.isFinite(eventStamp) || eventStamp > endMs)) return false;
+        if (actionTerm && !event.action.toLowerCase().includes(actionTerm)) return false;
+        if (surfaceTerm && !event.surface.toLowerCase().includes(surfaceTerm)) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const stampA = Date.parse(a.timestamp || "");
+        const stampB = Date.parse(b.timestamp || "");
+        const normalizedA = Number.isFinite(stampA) ? stampA : 0;
+        const normalizedB = Number.isFinite(stampB) ? stampB : 0;
+        return normalizedB - normalizedA;
+      });
+  }, [adminEvents, eventSearch, filters, matchMap, roundMatchFilter]);
+
+  const scopeSummaryStats = useMemo(
+    () => [
+      { label: "Players", value: filters.playerId ? 1 : players.length },
+      {
+        label: "Profiles",
+        value: filters.profileId ? 1 : filters.playerId ? adminProfiles.filter(profile => profile.playerId === filters.playerId).length : adminProfiles.length,
+      },
+      { label: "Sessions", value: filteredSessions.length },
+      { label: "Matches", value: filteredMatches.length },
+      { label: "Rounds", value: filteredRounds.length },
+      { label: "Predictions", value: filteredPredictions.length },
+      { label: "Events", value: filteredEvents.length },
+    ],
+    [
+      adminProfiles,
+      filteredEvents.length,
+      filteredSessions.length,
+      filteredMatches.length,
+      filteredPredictions.length,
+      filteredRounds.length,
+      filters.playerId,
+      filters.profileId,
+      players.length,
+    ],
+  );
+
+  const focusedSession = focusedSessionId ? sessionMap.get(focusedSessionId) ?? null : null;
   const focusedMatch = focusedMatchId ? matchMap.get(focusedMatchId) ?? null : null;
   const focusedRound = focusedRoundId ? roundMap.get(focusedRoundId) ?? null : null;
+  const focusedPrediction = focusedPredictionId ? predictionMapById.get(focusedPredictionId) ?? null : null;
+  const focusedEvent = focusedEventId ? eventMap.get(focusedEventId) ?? null : null;
 
   useEffect(() => {
     if (!open) return;
@@ -566,11 +894,14 @@ export function DeveloperConsole({
     const difficultyParam = params.get("difficulty") as AIMode | null;
     const fromParam = params.get("from");
     const toParam = params.get("to");
+    const statusParam = params.get("status") as MatchStatus | null;
+    const entityParam = params.get("entity");
     const nextFilters: ControlFilters = {
       playerId: playerParam || null,
       profileId: profileParam || null,
       mode: modeParam && MODE_OPTIONS.includes(modeParam) ? modeParam : "",
       difficulty: difficultyParam && DIFFICULTY_OPTIONS.includes(difficultyParam) ? difficultyParam : "",
+      status: statusParam && ["active", "completed", "abandoned"].includes(statusParam) ? statusParam : "",
       dateRange: {
         start: fromParam || null,
         end: toParam || null,
@@ -580,7 +911,12 @@ export function DeveloperConsole({
     const matchParam = params.get("match");
     const roundParam = params.get("round");
     const roundMatchParam = params.get("roundMatch");
+    if (entityParam && ["sessions", "matches", "rounds", "predictions", "events"].includes(entityParam)) {
+      setEntityTab(entityParam as ExplorerEntityKey);
+    }
+    const sessionParam = params.get("session");
     setFocusedMatchId(matchParam || null);
+    setFocusedSessionId(sessionParam || null);
     setFocusedRoundId(roundParam || null);
     setRoundMatchFilter(roundMatchParam || null);
     hashInitialized.current = true;
@@ -594,8 +930,11 @@ export function DeveloperConsole({
     if (filters.profileId) params.set("profile", filters.profileId);
     if (filters.mode) params.set("mode", filters.mode);
     if (filters.difficulty) params.set("difficulty", filters.difficulty);
+    if (filters.status) params.set("status", filters.status);
     if (filters.dateRange.start) params.set("from", filters.dateRange.start);
     if (filters.dateRange.end) params.set("to", filters.dateRange.end);
+    if (tab === "explorer") params.set("entity", entityTab);
+    if (focusedSessionId) params.set("session", focusedSessionId);
     if (focusedMatchId) params.set("match", focusedMatchId);
     if (roundMatchFilter) params.set("roundMatch", roundMatchFilter);
     if (focusedRoundId) params.set("round", focusedRoundId);
@@ -605,12 +944,15 @@ export function DeveloperConsole({
   }, [
     open,
     tab,
+    entityTab,
     filters.playerId,
     filters.profileId,
     filters.mode,
     filters.difficulty,
+    filters.status,
     filters.dateRange.start,
     filters.dateRange.end,
+    focusedSessionId,
     focusedMatchId,
     focusedRoundId,
     roundMatchFilter,
@@ -629,6 +971,12 @@ export function DeveloperConsole({
   }, [filters.playerId, filters.profileId, profileMap]);
 
   useEffect(() => {
+    if (focusedSessionId && !filteredSessions.some(session => session.id === focusedSessionId)) {
+      setFocusedSessionId(null);
+    }
+  }, [focusedSessionId, filteredSessions]);
+
+  useEffect(() => {
     if (focusedMatchId && !filteredMatches.some(match => match.id === focusedMatchId)) {
       setFocusedMatchId(null);
     }
@@ -639,6 +987,18 @@ export function DeveloperConsole({
       setFocusedRoundId(null);
     }
   }, [focusedRoundId, filteredRounds]);
+
+  useEffect(() => {
+    if (focusedPredictionId && !filteredPredictions.some(prediction => prediction.id === focusedPredictionId)) {
+      setFocusedPredictionId(null);
+    }
+  }, [focusedPredictionId, filteredPredictions]);
+
+  useEffect(() => {
+    if (focusedEventId && !filteredEvents.some(event => event.id === focusedEventId)) {
+      setFocusedEventId(null);
+    }
+  }, [focusedEventId, filteredEvents]);
 
   useEffect(() => {
     if (roundMatchFilter && !matchMap.has(roundMatchFilter)) {
@@ -671,6 +1031,8 @@ export function DeveloperConsole({
       setRoundMatchFilter(null);
       setFocusedMatchId(null);
       setFocusedRoundId(null);
+      setFocusedPredictionId(null);
+      setFocusedEventId(null);
     },
     [profileMap]
   );
@@ -685,6 +1047,8 @@ export function DeveloperConsole({
         }));
         setFocusedMatchId(null);
         setFocusedRoundId(null);
+        setFocusedPredictionId(null);
+        setFocusedEventId(null);
         setRoundMatchFilter(null);
         return;
       }
@@ -699,6 +1063,8 @@ export function DeveloperConsole({
       setRoundMatchFilter(null);
       setFocusedMatchId(null);
       setFocusedRoundId(null);
+      setFocusedPredictionId(null);
+      setFocusedEventId(null);
     },
     [profileMap]
   );
@@ -715,6 +1081,14 @@ export function DeveloperConsole({
     setFilters(prev => ({
       ...prev,
       difficulty: value,
+      dateRange: { ...prev.dateRange },
+    }));
+  }, []);
+
+  const handleStatusFilterChange = useCallback((value: MatchStatus | "") => {
+    setFilters(prev => ({
+      ...prev,
+      status: value,
       dateRange: { ...prev.dateRange },
     }));
   }, []);
@@ -740,8 +1114,12 @@ export function DeveloperConsole({
     setFilters({ ...FILTER_DEFAULTS, dateRange: { ...FILTER_DEFAULTS.dateRange } });
     setMatchSearch({ player: "", profile: "", mode: "" });
     setRoundSearch({ player: "", mode: "" });
+    setPredictionSearch({ player: "", policy: "", reason: "" });
+    setEventSearch({ action: "", surface: "" });
     setFocusedMatchId(null);
     setFocusedRoundId(null);
+    setFocusedPredictionId(null);
+    setFocusedEventId(null);
     setRoundMatchFilter(null);
   }, []);
 
@@ -753,13 +1131,40 @@ export function DeveloperConsole({
     setRoundSearch(prev => ({ ...prev, [field]: value }));
   }, []);
 
+  const handlePredictionSearchChange = useCallback((field: keyof PredictionSearchFilters, value: string) => {
+    setPredictionSearch(prev => ({ ...prev, [field]: value }));
+  }, []);
+
+  const handleEventSearchChange = useCallback((field: keyof EventSearchFilters, value: string) => {
+    setEventSearch(prev => ({ ...prev, [field]: value }));
+  }, []);
+
   const handleMatchRowClick = useCallback((matchId: string) => {
     setFocusedMatchId(matchId);
     setFocusedRoundId(null);
+    setFocusedPredictionId(null);
+    setFocusedEventId(null);
   }, []);
 
   const handleRoundRowClick = useCallback((roundId: string) => {
     setFocusedRoundId(roundId);
+    setFocusedMatchId(null);
+    setFocusedPredictionId(null);
+    setFocusedEventId(null);
+  }, []);
+
+  const handlePredictionRowClick = useCallback((predictionId: string) => {
+    setFocusedPredictionId(predictionId);
+    setFocusedMatchId(null);
+    setFocusedRoundId(null);
+    setFocusedEventId(null);
+  }, []);
+
+  const handleEventRowClick = useCallback((eventId: string) => {
+    setFocusedEventId(eventId);
+    setFocusedMatchId(null);
+    setFocusedRoundId(null);
+    setFocusedPredictionId(null);
   }, []);
 
   const handleViewRoundsForMatch = useCallback(
@@ -773,8 +1178,11 @@ export function DeveloperConsole({
           dateRange: { ...prev.dateRange },
         }));
       }
+      setEntityTab("rounds");
       setRoundMatchFilter(matchId);
       setFocusedRoundId(null);
+      setFocusedPredictionId(null);
+      setFocusedEventId(null);
     },
     [matchMap]
   );
@@ -872,6 +1280,102 @@ export function DeveloperConsole({
     downloadJson(filename, payload);
   }, [selectedProfile, adminMatches, adminRounds]);
 
+  const handleDownloadTelemetryCsv = useCallback(
+    async (
+      key: "profiles" | "sessions" | "matches" | "rounds" | "predictions" | "events",
+      options?: { silent?: boolean },
+    ) => {
+      const exporters = {
+        profiles: buildProfilesCsv,
+        sessions: buildSessionsCsv,
+        matches: buildMatchesCsv,
+        rounds: buildTelemetryRoundsCsv,
+        predictions: buildPredictionsCsv,
+        events: buildEventsCsv,
+      } as const;
+      const contents = exporters[key]();
+      downloadCsv(`rps-telemetry-${key}.csv`, contents);
+      telemetryService.logUIEvent({
+        sessionId,
+        timestamp: new Date().toISOString(),
+        playerId: currentPlayerId ?? undefined,
+        profileId: currentProfileId ?? null,
+        surface: "developer-console",
+        action: "telemetry-export-downloaded",
+        value: key,
+      });
+      await recordAudit({
+        action: "download-telemetry-csv",
+        target: key,
+        notes: JSON.stringify({ dataset: key }),
+      });
+      if (!options?.silent) {
+        setToastMessage(`Telemetry ${key} CSV downloaded.`);
+      }
+    },
+    [
+      buildEventsCsv,
+      buildMatchesCsv,
+      buildPredictionsCsv,
+      buildProfilesCsv,
+      buildSessionsCsv,
+      buildTelemetryRoundsCsv,
+      currentPlayerId,
+      currentProfileId,
+      recordAudit,
+      sessionId,
+    ],
+  );
+
+  const handleDownloadAllTelemetryCsvs = useCallback(async () => {
+    const keys = ["profiles", "sessions", "matches", "rounds", "predictions", "events"] as const;
+    for (const key of keys) {
+      await handleDownloadTelemetryCsv(key, { silent: true });
+    }
+    telemetryService.logUIEvent({
+      sessionId,
+      timestamp: new Date().toISOString(),
+      playerId: currentPlayerId ?? undefined,
+      profileId: currentProfileId ?? null,
+      surface: "developer-console",
+      action: "telemetry-export-all-downloaded",
+      value: keys.join(","),
+    });
+    await recordAudit({
+      action: "download-all-telemetry-csv",
+      target: "all",
+      notes: JSON.stringify({ datasets: keys }),
+    });
+    setToastMessage("All telemetry CSVs downloaded.");
+  }, [currentPlayerId, currentProfileId, handleDownloadTelemetryCsv, recordAudit, sessionId]);
+
+  const handleDownloadStructuredWorkbook = useCallback(async () => {
+    await downloadStructuredTelemetryWorkbook({
+      appPlayers: telemetry.appPlayers,
+      profiles: telemetry.profiles,
+      sessions: telemetry.sessions,
+      matches: telemetry.matches,
+      rounds: telemetry.rounds,
+      predictions: telemetry.predictions,
+      events: telemetry.uiEvents,
+    });
+    telemetryService.logUIEvent({
+      sessionId,
+      timestamp: new Date().toISOString(),
+      playerId: currentPlayerId ?? undefined,
+      profileId: currentProfileId ?? null,
+      surface: "developer-console",
+      action: "telemetry-structured-workbook-downloaded",
+      value: "xlsx",
+    });
+    await recordAudit({
+      action: "download-telemetry-workbook",
+      target: "structured-workbook",
+      notes: JSON.stringify({ format: "xlsx" }),
+    });
+    setToastMessage("Structured telemetry workbook downloaded.");
+  }, [currentPlayerId, currentProfileId, recordAudit, sessionId, telemetry]);
+
   const handleResetProfileTraining = useCallback(async () => {
     if (!selectedProfile) return;
     if (typeof window !== "undefined" && !window.confirm("Reset training progress for this profile?")) return;
@@ -913,6 +1417,21 @@ export function DeveloperConsole({
     setAuditLogs(logs);
   }, []);
 
+  useEffect(() => {
+    if (!open || ready) return;
+    const attempt = tryAutomationUnlock();
+    if (!attempt.attempted) return;
+    if (!attempt.success) {
+      console.error("Developer automation unlock failed", attempt.diagnostics);
+      setUnlockError(`Automation unlock failed: ${attempt.reason}`);
+      return;
+    }
+    setUnlockError(null);
+    ensureAuditLoaded().catch(err => {
+      console.error("Developer automation unlock audit load failed", err, getSecureUnlockDiagnostics());
+    });
+  }, [open, ready, ensureAuditLoaded]);
+
   const handleUnlock = useCallback(async (event: React.FormEvent) => {
     event.preventDefault();
     setUnlockError(null);
@@ -926,7 +1445,7 @@ export function DeveloperConsole({
         await ensureAuditLoaded();
       }
     } catch (err) {
-      console.error(err);
+      console.error("Developer unlock failed", err, getSecureUnlockDiagnostics());
       setUnlockError("Unable to unlock store");
     } finally {
       setLoading(false);
@@ -942,13 +1461,26 @@ export function DeveloperConsole({
     if (!selectedPlayer) return;
     if (typeof window !== "undefined") {
       const confirmed = window.confirm(
-        "Delete this player and remove all of their profiles, matches, and rounds?"
+        "Delete this player and permanently remove all associated profiles, sessions, matches, rounds, predictions, UI events, and model state from telemetry?"
       );
       if (!confirmed) return;
     }
     await handlePlayerDelete(selectedPlayer.id);
     handleSelectPlayer(null);
   }, [selectedPlayer, handlePlayerDelete, handleSelectPlayer]);
+
+  const handleDeleteSelectedProfile = useCallback(async () => {
+    if (!selectedProfile) return;
+    if (typeof window !== "undefined") {
+      const confirmed = window.confirm(
+        "Delete this profile and permanently remove all associated sessions, matches, rounds, predictions, UI events, and model state from telemetry?",
+      );
+      if (!confirmed) return;
+    }
+    deleteProfile(selectedProfile.id);
+    await recordAudit({ action: "delete-profile", target: selectedProfile.id });
+    handleSelectProfile(null);
+  }, [deleteProfile, handleSelectProfile, recordAudit, selectedProfile]);
 
   const handleTimingFieldChange = useCallback((mode: "challenge" | "practice", field: TimingField, raw: string) => {
     const nextValue = Number.parseFloat(raw);
@@ -1444,6 +1976,7 @@ export function DeveloperConsole({
                 onClearProfile={() => handleSelectProfile(null)}
                 onClearMode={() => handleModeFilterChange("")}
                 onClearDifficulty={() => handleDifficultyFilterChange("")}
+                onClearStatus={() => handleStatusFilterChange("")}
                 onClearDateRange={clearDateRange}
                 onClearMatchScope={() => setRoundMatchFilter(null)}
                 roundMatchFilter={roundMatchFilter}
@@ -1457,6 +1990,7 @@ export function DeveloperConsole({
                 onProfileChange={handleSelectProfile}
                 onModeChange={handleModeFilterChange}
                 onDifficultyChange={handleDifficultyFilterChange}
+                onStatusChange={handleStatusFilterChange}
                 onDateChange={handleDateRangeChange}
                 onClearAll={clearAllFilters}
               />
@@ -1472,93 +2006,177 @@ export function DeveloperConsole({
                 gap: "16px",
               }}
             >
-              {tab === "overview" && (
-                <div style={{ display: "grid", gap: "16px" }}>
-                  <div style={{ display: "grid", gap: "12px", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-                    <StatCard label="Players" value={players.length} />
-                    <StatCard label="Profiles" value={adminProfiles.length} />
-                    <StatCard label="Matches" value={overview.totalMatches} />
-                    <StatCard label="Rounds" value={overview.totalRounds} />
-                  </div>
-                  <OverviewTable
-                    snapshotSavedAt={snapshotSavedAt}
-                    summaries={playerSummaries}
-                    onSelectPlayer={handleSelectPlayer}
-                  />
-                </div>
-              )}
-
-              {tab === "data" && (
+              {tab === "explorer" && (
                 <div
                   style={{
                     display: "grid",
                     gap: "16px",
-                    gridTemplateColumns: "minmax(220px, 260px) minmax(220px, 260px) 1fr",
+                    gridTemplateColumns: "280px minmax(0, 1fr)",
                     alignItems: "start",
                   }}
                 >
-                  <PlayersPanel summaries={playerSummaries} selectedPlayerId={filters.playerId} onSelect={handleSelectPlayer} />
-                  <ProfilesPanel
+                  <ScopeExplorer
+                    playerSummaries={playerSummaries}
                     profiles={profilesForList}
-                    summaries={profileSummaryMap}
-                    selectedProfileId={filters.profileId}
-                    onSelect={handleSelectProfile}
+                    profileSummaryMap={profileSummaryMap}
                     playerMap={playerMap}
+                    selectedPlayerId={filters.playerId}
+                    selectedProfileId={filters.profileId}
+                    onSelectPlayer={handleSelectPlayer}
+                    onSelectProfile={handleSelectProfile}
                   />
-                  <div style={{ display: "flex", flexDirection: "column", gap: "16px", minHeight: 0 }}>
-                    <ContextSummary
+                  <div style={{ display: "grid", gap: "16px", minHeight: 0 }}>
+                    <SummaryStrip stats={scopeSummaryStats} />
+                    <ExplorerEntityTabs
+                      entityTab={entityTab}
+                      counts={{
+                        sessions: filteredSessions.length,
+                        matches: filteredMatches.length,
+                        rounds: filteredRounds.length,
+                        predictions: filteredPredictions.length,
+                        events: filteredEvents.length,
+                      }}
+                      onChange={setEntityTab}
+                    />
+                    {entityTab === "sessions" && (
+                      <SessionsSection
+                        sessions={filteredSessions}
+                        selectedSessionId={focusedSessionId}
+                        playerMap={playerMap}
+                        profileMap={profileMap}
+                        onRowClick={setFocusedSessionId}
+                        onSelectPlayer={handleSelectPlayer}
+                        onSelectProfile={handleSelectProfile}
+                        onClearFilters={clearAllFilters}
+                      />
+                    )}
+                    {entityTab === "matches" && (
+                      <MatchesSection
+                        matches={filteredMatches}
+                        selectedMatchId={focusedMatchId}
+                        playerMap={playerMap}
+                        profileMap={profileMap}
+                        search={matchSearch}
+                        onSearchChange={handleMatchSearchChange}
+                        onRowClick={handleMatchRowClick}
+                        onSelectPlayer={handleSelectPlayer}
+                        onSelectProfile={handleSelectProfile}
+                        focusedMatch={null}
+                        onViewRounds={handleViewRoundsForMatch}
+                        onClearFilters={clearAllFilters}
+                      />
+                    )}
+                    {entityTab === "rounds" && (
+                      <RoundsSection
+                        rounds={filteredRounds}
+                        selectedRoundId={focusedRoundId}
+                        playerMap={playerMap}
+                        profileMap={profileMap}
+                        matchMap={matchMap}
+                        predictionMap={predictionMap}
+                        search={roundSearch}
+                        onSearchChange={handleRoundSearchChange}
+                        onRowClick={handleRoundRowClick}
+                        onSelectPlayer={handleSelectPlayer}
+                        onSelectProfile={handleSelectProfile}
+                        onSelectMatch={matchId => {
+                          setEntityTab("matches");
+                          handleMatchRowClick(matchId);
+                        }}
+                        focusedRound={null}
+                        roundMatchFilter={roundMatchFilter}
+                        onClearMatchFilter={() => setRoundMatchFilter(null)}
+                        onClearFilters={clearAllFilters}
+                      />
+                    )}
+                    {entityTab === "predictions" && (
+                      <PredictionsSection
+                        predictions={filteredPredictions}
+                        selectedPredictionId={focusedPredictionId}
+                        playerMap={playerMap}
+                        profileMap={profileMap}
+                        matchMap={matchMap}
+                        search={predictionSearch}
+                        onSearchChange={handlePredictionSearchChange}
+                        onRowClick={handlePredictionRowClick}
+                        onSelectPlayer={handleSelectPlayer}
+                        onSelectProfile={handleSelectProfile}
+                        onOpenMatch={matchId => {
+                          if (!matchId) return;
+                          setEntityTab("matches");
+                          handleMatchRowClick(matchId);
+                        }}
+                        onOpenRound={roundId => {
+                          setEntityTab("rounds");
+                          handleRoundRowClick(roundId);
+                        }}
+                        onClearFilters={clearAllFilters}
+                      />
+                    )}
+                    {entityTab === "events" && (
+                      <EventsSection
+                        events={filteredEvents}
+                        selectedEventId={focusedEventId}
+                        playerMap={playerMap}
+                        profileMap={profileMap}
+                        matchMap={matchMap}
+                        search={eventSearch}
+                        onSearchChange={handleEventSearchChange}
+                        onRowClick={handleEventRowClick}
+                        onSelectPlayer={handleSelectPlayer}
+                        onSelectProfile={handleSelectProfile}
+                        onOpenMatch={matchId => {
+                          if (!matchId) return;
+                          setEntityTab("matches");
+                          handleMatchRowClick(matchId);
+                        }}
+                        onClearFilters={clearAllFilters}
+                      />
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: "16px",
+                      minHeight: 0,
+                      gridColumn: "2",
+                    }}
+                  >
+                    <ScopeInspector
+                      entityTab={entityTab}
                       player={selectedPlayer}
                       playerStats={selectedPlayerSummary}
                       profile={selectedProfile}
                       profileStats={selectedProfileSummary}
+                      sessionId={sessionId}
+                      focusedSession={focusedSession}
+                      focusedMatch={focusedMatch}
+                      focusedRound={focusedRound}
+                      focusedPrediction={focusedPrediction}
+                      focusedEvent={focusedEvent}
+                      playerMap={playerMap}
+                      profileMap={profileMap}
+                      matchMap={matchMap}
                       onExportPlayer={handleExportPlayer}
                       onDeletePlayer={handleDeleteSelectedPlayer}
                       onCreateProfile={handleCreateProfileForPlayer}
                       onExportProfile={handleExportProfile}
+                      onDeleteProfile={handleDeleteSelectedProfile}
                       onResetProfile={handleResetProfileTraining}
                       onRenameProfile={handleRenameProfile}
+                      onViewRoundsForFocusedMatch={() => focusedMatch && handleViewRoundsForMatch(focusedMatch.id)}
                     />
-                    {selectedPlayer ? (
-                      <>
-                        <MatchesSection
-                          matches={filteredMatches}
-                          selectedMatchId={focusedMatchId}
-                          playerMap={playerMap}
-                          profileMap={profileMap}
-                          search={matchSearch}
-                          onSearchChange={handleMatchSearchChange}
-                          onRowClick={handleMatchRowClick}
-                          onSelectPlayer={handleSelectPlayer}
-                          onSelectProfile={handleSelectProfile}
-                          focusedMatch={focusedMatch}
-                          onViewRounds={handleViewRoundsForMatch}
-                          onClearFilters={clearAllFilters}
-                        />
-                        <RoundsSection
-                          rounds={filteredRounds}
-                          selectedRoundId={focusedRoundId}
-                          playerMap={playerMap}
-                          profileMap={profileMap}
-                          matchMap={matchMap}
-                          search={roundSearch}
-                          onSearchChange={handleRoundSearchChange}
-                          onRowClick={handleRoundRowClick}
-                          onSelectPlayer={handleSelectPlayer}
-                          onSelectProfile={handleSelectProfile}
-                          onSelectMatch={handleMatchRowClick}
-                          focusedRound={focusedRound}
-                          roundMatchFilter={roundMatchFilter}
-                          onClearMatchFilter={() => setRoundMatchFilter(null)}
-                          onClearFilters={clearAllFilters}
-                        />
-                      </>
-                    ) : (
-                      <EmptyState
-                        players={playerSummaries}
-                        onSelectPlayer={handleSelectPlayer}
-                        onClearFilters={clearAllFilters}
-                      />
-                    )}
+                    <TelemetryExportsSection
+                      profileCount={telemetry.profiles.length}
+                      sessionCount={telemetry.sessions.length}
+                      matchCount={telemetry.matches.length}
+                      roundCount={telemetry.rounds.length}
+                      predictionCount={telemetry.predictions.length}
+                      eventCount={telemetry.uiEvents.length}
+                      onDownloadWorkbook={handleDownloadStructuredWorkbook}
+                      onDownloadDataset={handleDownloadTelemetryCsv}
+                      onDownloadAll={handleDownloadAllTelemetryCsvs}
+                    />
                   </div>
                 </div>
               )}
@@ -1721,8 +2339,10 @@ export function DeveloperConsole({
 }
 
 function StatCard({ label, value }: { label: string; value: number }) {
+  const testId = `developer-stat-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
   return (
     <div
+      data-testid={testId}
       style={{
         background: "rgba(15,25,45,0.8)",
         borderRadius: "12px",
@@ -1808,7 +2428,7 @@ function OverviewTable({ snapshotSavedAt, summaries, onSelectPlayer }: OverviewT
 }
 interface ContextHeaderProps {
   player: PlayerProfile | null;
-  profile: StatsProfile | null;
+  profile: TelemetryProfile | null;
   filters: ControlFilters;
   matchCount: number;
   roundCount: number;
@@ -1816,10 +2436,11 @@ interface ContextHeaderProps {
   onClearProfile: () => void;
   onClearMode: () => void;
   onClearDifficulty: () => void;
+  onClearStatus: () => void;
   onClearDateRange: () => void;
   onClearMatchScope: () => void;
   roundMatchFilter: string | null;
-  focusedMatch: MatchSummary | null;
+  focusedMatch: MatchRecord | null;
 }
 
 function ContextHeader({
@@ -1832,6 +2453,7 @@ function ContextHeader({
   onClearProfile,
   onClearMode,
   onClearDifficulty,
+  onClearStatus,
   onClearDateRange,
   onClearMatchScope,
   roundMatchFilter,
@@ -1849,6 +2471,9 @@ function ContextHeader({
   }
   if (filters.difficulty) {
     chips.push({ key: "difficulty", label: `Difficulty: ${capitalize(filters.difficulty)}`, onClear: onClearDifficulty });
+  }
+  if (filters.status) {
+    chips.push({ key: "status", label: `Status: ${capitalize(filters.status)}`, onClear: onClearStatus });
   }
   if (filters.dateRange.start || filters.dateRange.end) {
     chips.push({ key: "dates", label: `Dates: ${formatDateRange(filters.dateRange)}`, onClear: onClearDateRange });
@@ -1926,12 +2551,13 @@ function ContextChip({ label, onClear }: ContextChipProps) {
 
 interface FilterBarProps {
   playerOptions: PlayerSummaryData[];
-  profileOptions: StatsProfile[];
+  profileOptions: TelemetryProfile[];
   filters: ControlFilters;
   onPlayerChange: (playerId: string | null) => void;
   onProfileChange: (profileId: string | null) => void;
   onModeChange: (mode: Mode | "") => void;
   onDifficultyChange: (difficulty: AIMode | "") => void;
+  onStatusChange: (status: MatchStatus | "") => void;
   onDateChange: (field: "start" | "end", value: string) => void;
   onClearAll: () => void;
 }
@@ -1944,6 +2570,7 @@ function FilterBar({
   onProfileChange,
   onModeChange,
   onDifficultyChange,
+  onStatusChange,
   onDateChange,
   onClearAll,
 }: FilterBarProps) {
@@ -2044,6 +2671,26 @@ function FilterBar({
                 {capitalize(difficulty)}
               </option>
             ))}
+          </select>
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "0.75rem" }}>
+          <span style={{ opacity: 0.6 }}>Status</span>
+          <select
+            value={filters.status}
+            onChange={e => onStatusChange(e.target.value as MatchStatus | "")}
+            style={{
+              minWidth: "140px",
+              padding: "6px 10px",
+              borderRadius: "8px",
+              border: "1px solid rgba(255,255,255,0.2)",
+              background: "rgba(9,14,26,0.85)",
+              color: "inherit",
+            }}
+          >
+            <option value="">Any status</option>
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+            <option value="abandoned">Abandoned</option>
           </select>
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "0.75rem" }}>
@@ -2178,7 +2825,7 @@ function PlayersPanel({ summaries, selectedPlayerId, onSelect }: PlayersPanelPro
 }
 
 interface ProfilesPanelProps {
-  profiles: StatsProfile[];
+  profiles: TelemetryProfile[];
   summaries: Map<string, ProfileSummaryData>;
   selectedProfileId: string | null;
   onSelect: (profileId: string | null) => void;
@@ -2265,8 +2912,9 @@ function ProfilesPanel({ profiles, summaries, selectedProfileId, onSelect, playe
 interface ContextSummaryProps {
   player: PlayerProfile | null;
   playerStats: PlayerSummaryData | null;
-  profile: StatsProfile | null;
+  profile: TelemetryProfile | null;
   profileStats: ProfileSummaryData | null;
+  sessionId: string;
   onExportPlayer: () => void;
   onDeletePlayer: () => void;
   onCreateProfile: () => void;
@@ -2280,6 +2928,7 @@ function ContextSummary({
   playerStats,
   profile,
   profileStats,
+  sessionId,
   onExportPlayer,
   onDeletePlayer,
   onCreateProfile,
@@ -2305,6 +2954,10 @@ function ContextSummary({
               <p style={{ margin: 0, fontSize: "0.75rem", opacity: 0.7 }}>Grade {player.grade}</p>
             </div>
             <CopyIdButton id={player.id} />
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", opacity: 0.72, fontSize: "0.72rem" }}>
+            <span>Player ID: {player.id}</span>
+            <span>Session ID: {sessionId}</span>
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", fontSize: "0.8rem", opacity: 0.85 }}>
             <span>Profiles: {playerStats?.profiles ?? 0}</span>
@@ -2374,6 +3027,12 @@ function ContextSummary({
             </div>
             <CopyIdButton id={profile.id} />
           </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", opacity: 0.72, fontSize: "0.72rem" }}>
+            <span>Profile ID: {profile.id}</span>
+            <span>Player ID: {profile.playerId}</span>
+            <span>Parent: {profile.previousProfileId ?? "-"}</span>
+            <span>Child: {profile.nextProfileId ?? "-"}</span>
+          </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", fontSize: "0.8rem", opacity: 0.85 }}>
             <span>Mode mix: {formatModeMix(profileStats?.modeCounts ?? ({} as Record<Mode, number>))}</span>
             <span>Win rate: {formatWinRate(profileStats?.winRate ?? null)}</span>
@@ -2425,17 +3084,479 @@ function ContextSummary({
     </div>
   );
 }
+
+interface TelemetryExportsSectionProps {
+  profileCount: number;
+  sessionCount: number;
+  matchCount: number;
+  roundCount: number;
+  predictionCount: number;
+  eventCount: number;
+  onDownloadWorkbook: () => void | Promise<void>;
+  onDownloadDataset: (
+    key: "profiles" | "sessions" | "matches" | "rounds" | "predictions" | "events",
+  ) => void | Promise<void>;
+  onDownloadAll: () => void | Promise<void>;
+}
+
+function TelemetryExportsSection({
+  profileCount,
+  sessionCount,
+  matchCount,
+  roundCount,
+  predictionCount,
+  eventCount,
+  onDownloadWorkbook,
+  onDownloadDataset,
+  onDownloadAll,
+}: TelemetryExportsSectionProps) {
+  const datasets = [
+    { key: "profiles", label: "Profiles", count: profileCount },
+    { key: "sessions", label: "Sessions", count: sessionCount },
+    { key: "matches", label: "Matches", count: matchCount },
+    { key: "rounds", label: "Rounds", count: roundCount },
+    { key: "predictions", label: "Predictions", count: predictionCount },
+    { key: "events", label: "Events", count: eventCount },
+  ] as const;
+
+  return (
+    <div
+      data-testid="telemetry-export-panel"
+      style={{
+        background: "rgba(15,25,45,0.8)",
+        borderRadius: "12px",
+        padding: "16px",
+        display: "grid",
+        gap: "12px",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+        <div>
+          <h3 style={{ margin: 0 }}>Structured telemetry exports</h3>
+          <p style={{ margin: "4px 0 0", fontSize: "0.75rem", opacity: 0.72 }}>
+            Download one polished workbook for review, or keep using the raw per-entity CSV datasets for low-level inspection.
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            data-testid="download-structured-telemetry-workbook"
+            onClick={() => void onDownloadWorkbook()}
+            style={{
+              background: "rgba(34,197,94,0.22)",
+              border: "1px solid rgba(34,197,94,0.48)",
+              color: "#bbf7d0",
+              borderRadius: "999px",
+              padding: "7px 16px",
+              cursor: "pointer",
+              fontSize: "0.8rem",
+              fontWeight: 600,
+            }}
+          >
+            Download workbook (.xlsx)
+          </button>
+          <button
+            type="button"
+            data-testid="download-all-telemetry-csvs"
+            onClick={() => void onDownloadAll()}
+            style={{
+              background: "rgba(59,130,246,0.22)",
+              border: "1px solid rgba(59,130,246,0.48)",
+              color: "#bfdbfe",
+              borderRadius: "999px",
+              padding: "7px 16px",
+              cursor: "pointer",
+              fontSize: "0.8rem",
+              fontWeight: 600,
+            }}
+          >
+            Download all CSVs
+          </button>
+        </div>
+      </div>
+      <div style={{ display: "grid", gap: "8px", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
+        {datasets.map(dataset => (
+          <button
+            key={dataset.key}
+            type="button"
+            data-testid={`download-telemetry-${dataset.key}-csv`}
+            onClick={() => void onDownloadDataset(dataset.key)}
+            style={{
+              background: "rgba(255,255,255,0.05)",
+              border: "1px solid rgba(255,255,255,0.08)",
+              color: "inherit",
+              borderRadius: "10px",
+              padding: "12px",
+              display: "grid",
+              gap: "4px",
+              textAlign: "left",
+              cursor: "pointer",
+            }}
+          >
+            <span style={{ fontSize: "0.78rem", opacity: 0.72, textTransform: "uppercase", letterSpacing: "0.12em" }}>
+              {dataset.label}
+            </span>
+            <strong style={{ fontSize: "1.15rem" }}>{dataset.count}</strong>
+            <span style={{ fontSize: "0.75rem", opacity: 0.75 }}>Download CSV</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface ScopeExplorerProps {
+  playerSummaries: PlayerSummaryData[];
+  profiles: TelemetryProfile[];
+  profileSummaryMap: Map<string, ProfileSummaryData>;
+  playerMap: Map<string, PlayerProfile>;
+  selectedPlayerId: string | null;
+  selectedProfileId: string | null;
+  onSelectPlayer: (playerId: string | null) => void;
+  onSelectProfile: (profileId: string | null) => void;
+}
+
+function ScopeExplorer({
+  playerSummaries,
+  profiles,
+  profileSummaryMap,
+  playerMap,
+  selectedPlayerId,
+  selectedProfileId,
+  onSelectPlayer,
+  onSelectProfile,
+}: ScopeExplorerProps) {
+  return (
+    <div
+      style={{
+        background: "linear-gradient(180deg, rgba(15,25,45,0.92), rgba(9,14,26,0.96))",
+        borderRadius: "18px",
+        padding: "16px",
+        display: "grid",
+        gap: "16px",
+        border: "1px solid rgba(148,163,184,0.12)",
+        minHeight: 0,
+      }}
+    >
+      <div style={{ display: "grid", gap: "4px" }}>
+        <span style={{ fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.18em", opacity: 0.58 }}>
+          Scope
+        </span>
+        <h3 style={{ margin: 0, fontSize: "1rem" }}>Player and profile drill-down</h3>
+        <p style={{ margin: 0, fontSize: "0.78rem", lineHeight: 1.6, opacity: 0.68 }}>
+          Select a player first, then drill into one profile to scope the explorer.
+        </p>
+      </div>
+
+      <div style={{ display: "grid", gap: "10px", minHeight: 0 }}>
+        <button
+          type="button"
+          onClick={() => {
+            onSelectPlayer(null);
+            onSelectProfile(null);
+          }}
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            background: !selectedPlayerId && !selectedProfileId ? "rgba(37,99,235,0.2)" : "rgba(255,255,255,0.04)",
+            border: !selectedPlayerId && !selectedProfileId ? "1px solid rgba(59,130,246,0.4)" : "1px solid rgba(255,255,255,0.08)",
+            color: "inherit",
+            borderRadius: "12px",
+            padding: "12px 14px",
+            cursor: "pointer",
+          }}
+        >
+          <span style={{ fontWeight: 700 }}>All players / all profiles</span>
+          <span style={{ fontSize: "0.78rem", opacity: 0.68 }}>{playerSummaries.length} players</span>
+        </button>
+
+        <div style={{ display: "grid", gap: "10px", overflowY: "auto", maxHeight: "68vh", paddingRight: "2px" }}>
+          {playerSummaries.map(summary => {
+            const selected = summary.player.id === selectedPlayerId;
+            const relatedProfiles = profiles.filter(profile => profile.playerId === summary.player.id);
+            return (
+              <div
+                key={summary.player.id}
+                style={{
+                  background: selected ? "rgba(37,99,235,0.14)" : "rgba(255,255,255,0.03)",
+                  border: selected ? "1px solid rgba(59,130,246,0.35)" : "1px solid rgba(255,255,255,0.08)",
+                  borderRadius: "14px",
+                  padding: "12px",
+                  display: "grid",
+                  gap: "10px",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => onSelectPlayer(summary.player.id)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "inherit",
+                    textAlign: "left",
+                    padding: 0,
+                    display: "grid",
+                    gap: "6px",
+                    cursor: "pointer",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center" }}>
+                    <div>
+                      <strong style={{ fontSize: "0.95rem" }}>{summary.player.playerName}</strong>
+                      <div style={{ fontSize: "0.74rem", opacity: 0.66 }}>Grade {summary.player.grade}</div>
+                    </div>
+                    <CopyIdButton id={summary.player.id} />
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", fontSize: "0.72rem", opacity: 0.72 }}>
+                    <span>{summary.profiles} profiles</span>
+                    <span>{summary.matches} matches</span>
+                    <span>{summary.rounds} rounds</span>
+                  </div>
+                </button>
+
+                {(selected || (!selectedPlayerId && relatedProfiles.length <= 2)) && (
+                  <div style={{ display: "grid", gap: "6px", paddingLeft: "8px", borderLeft: "1px solid rgba(255,255,255,0.08)" }}>
+                    {relatedProfiles.length === 0 ? (
+                      <span style={{ fontSize: "0.74rem", opacity: 0.56 }}>No profiles yet.</span>
+                    ) : (
+                      relatedProfiles.map(profile => {
+                        const profileSelected = profile.id === selectedProfileId;
+                        const summaryData = profileSummaryMap.get(profile.id);
+                        return (
+                          <button
+                            key={profile.id}
+                            type="button"
+                            onClick={() => onSelectProfile(profile.id)}
+                            style={{
+                              background: profileSelected ? "rgba(59,130,246,0.2)" : "rgba(255,255,255,0.02)",
+                              border: profileSelected ? "1px solid rgba(96,165,250,0.36)" : "1px solid rgba(255,255,255,0.08)",
+                              color: "inherit",
+                              borderRadius: "10px",
+                              padding: "9px 10px",
+                              textAlign: "left",
+                              cursor: "pointer",
+                              display: "grid",
+                              gap: "4px",
+                            }}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center" }}>
+                              <span style={{ fontWeight: 700, fontSize: "0.84rem" }}>{profile.name}</span>
+                              <CopyIdButton id={profile.id} />
+                            </div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", fontSize: "0.7rem", opacity: 0.7 }}>
+                              <span>{summaryData?.matches ?? 0} matches</span>
+                              <span>{summaryData?.rounds ?? 0} rounds</span>
+                              <span>Win rate {formatWinRate(summaryData?.winRate ?? null)}</span>
+                            </div>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SummaryStrip({ stats }: { stats: { label: string; value: number }[] }) {
+  return (
+    <div style={{ display: "grid", gap: "10px", gridTemplateColumns: "repeat(auto-fit, minmax(118px, 1fr))" }}>
+      {stats.map(item => (
+        <StatCard key={item.label} label={item.label} value={item.value} />
+      ))}
+    </div>
+  );
+}
+
+function ExplorerEntityTabs({
+  entityTab,
+  counts,
+  onChange,
+}: {
+  entityTab: ExplorerEntityKey;
+  counts: Record<ExplorerEntityKey, number>;
+  onChange: (key: ExplorerEntityKey) => void;
+}) {
+  const options: { key: ExplorerEntityKey; label: string }[] = [
+    { key: "sessions", label: "Sessions" },
+    { key: "matches", label: "Matches" },
+    { key: "rounds", label: "Rounds" },
+    { key: "predictions", label: "Predictions" },
+    { key: "events", label: "Events" },
+  ];
+  return (
+    <div
+      style={{
+        background: "rgba(15,25,45,0.78)",
+        borderRadius: "16px",
+        padding: "8px",
+        display: "flex",
+        gap: "8px",
+        flexWrap: "wrap",
+        border: "1px solid rgba(148,163,184,0.1)",
+      }}
+    >
+      {options.map(option => (
+        <button
+          key={option.key}
+          type="button"
+          onClick={() => onChange(option.key)}
+          style={{
+            background: entityTab === option.key ? "linear-gradient(135deg, rgba(37,99,235,0.92), rgba(29,78,216,0.92))" : "transparent",
+            border: entityTab === option.key ? "1px solid rgba(96,165,250,0.4)" : "1px solid rgba(255,255,255,0.08)",
+            color: "white",
+            borderRadius: "12px",
+            padding: "10px 14px",
+            cursor: "pointer",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "8px",
+            fontWeight: 700,
+            fontSize: "0.82rem",
+          }}
+        >
+          <span>{option.label}</span>
+          <span style={{ opacity: 0.76 }}>{counts[option.key]}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+interface SessionsSectionProps {
+  sessions: GameSession[];
+  selectedSessionId: string | null;
+  playerMap: Map<string, PlayerProfile>;
+  profileMap: Map<string, TelemetryProfile>;
+  onRowClick: (sessionId: string) => void;
+  onSelectPlayer: (playerId: string | null) => void;
+  onSelectProfile: (profileId: string | null) => void;
+  onClearFilters: () => void;
+}
+
+function SessionsSection({
+  sessions,
+  selectedSessionId,
+  playerMap,
+  profileMap,
+  onRowClick,
+  onSelectPlayer,
+  onSelectProfile,
+  onClearFilters,
+}: SessionsSectionProps) {
+  return (
+    <div
+      style={{
+        background: "rgba(15,25,45,0.8)",
+        borderRadius: "12px",
+        padding: "16px",
+        display: "grid",
+        gap: "12px",
+      }}
+    >
+      <div>
+        <h3 style={{ margin: 0 }}>Sessions</h3>
+        <p style={{ margin: "4px 0 0", fontSize: "0.75rem", opacity: 0.68 }}>
+          Play-shell sessions recorded in telemetry, including lifecycle state and linked player/profile scope.
+        </p>
+      </div>
+      <div style={{ maxHeight: "340px", overflow: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+          <thead style={{ position: "sticky", top: 0, background: "rgba(9,14,26,0.95)" }}>
+            <tr style={{ textAlign: "left", opacity: 0.7 }}>
+              <th style={{ padding: "8px 12px" }}>Started</th>
+              <th style={{ padding: "8px 12px" }}>Status</th>
+              <th style={{ padding: "8px 12px" }}>Player</th>
+              <th style={{ padding: "8px 12px" }}>Profile</th>
+              <th style={{ padding: "8px 12px" }}>Updated</th>
+              <th style={{ padding: "8px 12px" }}>Ended</th>
+              <th style={{ padding: "8px 12px" }}>Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sessions.length === 0 ? (
+              <tr>
+                <td colSpan={7} style={{ padding: "12px", textAlign: "center", opacity: 0.7 }}>
+                  No sessions for this filter.
+                  <button onClick={onClearFilters} style={inlineClearButtonStyle}>
+                    Clear filters
+                  </button>
+                </td>
+              </tr>
+            ) : (
+              sessions.map(session => {
+                const selected = session.id === selectedSessionId;
+                return (
+                  <tr
+                    key={session.id}
+                    onClick={() => onRowClick(session.id)}
+                    style={{
+                      borderTop: "1px solid rgba(255,255,255,0.05)",
+                      background: selected ? "rgba(37,99,235,0.25)" : undefined,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <td style={{ padding: "8px 12px" }}>{formatDateTime(session.startedAt)}</td>
+                    <td style={{ padding: "8px 12px" }}>{capitalize(session.status)}</td>
+                    <td style={{ padding: "8px 12px" }}>
+                      <button
+                        type="button"
+                        onClick={event => {
+                          event.stopPropagation();
+                          onSelectPlayer(session.playerId);
+                        }}
+                        style={linkButtonStyle}
+                      >
+                        {playerMap.get(session.playerId)?.playerName ?? session.playerId}
+                      </button>
+                    </td>
+                    <td style={{ padding: "8px 12px" }}>
+                      {session.profileId ? (
+                        <button
+                          type="button"
+                          onClick={event => {
+                            event.stopPropagation();
+                            onSelectProfile(session.profileId ?? null);
+                          }}
+                          style={linkButtonStyle}
+                        >
+                          {profileMap.get(session.profileId)?.name ?? session.profileId}
+                        </button>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td style={{ padding: "8px 12px" }}>{formatDateTime(session.updatedAt)}</td>
+                    <td style={{ padding: "8px 12px" }}>{session.endedAt ? formatDateTime(session.endedAt) : "-"}</td>
+                    <td style={{ padding: "8px 12px" }}>{session.source}</td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 interface MatchesSectionProps {
-  matches: MatchSummary[];
+  matches: MatchRecord[];
   selectedMatchId: string | null;
   playerMap: Map<string, PlayerProfile>;
-  profileMap: Map<string, StatsProfile>;
+  profileMap: Map<string, TelemetryProfile>;
   search: MatchSearchFilters;
   onSearchChange: (field: keyof MatchSearchFilters, value: string) => void;
   onRowClick: (matchId: string) => void;
   onSelectPlayer: (playerId: string | null) => void;
   onSelectProfile: (profileId: string | null) => void;
-  focusedMatch: MatchSummary | null;
+  focusedMatch: MatchRecord | null;
   onViewRounds: (matchId: string) => void;
   onClearFilters: () => void;
 }
@@ -2627,6 +3748,12 @@ function MatchesSection({
             <strong>Match details</strong>
             <CopyIdButton id={focusedMatch.id} />
           </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", opacity: 0.72, fontSize: "0.72rem" }}>
+            <span>Match ID: {focusedMatch.id}</span>
+            <span>Session ID: {focusedMatch.sessionId}</span>
+            <span>Profile ID: {focusedMatch.profileId}</span>
+            <span>Player ID: {focusedMatch.playerId}</span>
+          </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", opacity: 0.85 }}>
             <span>Score: {formatScore(focusedMatch.score)}</span>
             <span>Rounds: {focusedMatch.rounds}</span>
@@ -2656,18 +3783,19 @@ function MatchesSection({
   );
 }
 interface RoundsSectionProps {
-  rounds: RoundLog[];
+  rounds: RoundRecord[];
   selectedRoundId: string | null;
   playerMap: Map<string, PlayerProfile>;
-  profileMap: Map<string, StatsProfile>;
-  matchMap: Map<string, MatchSummary>;
+  profileMap: Map<string, TelemetryProfile>;
+  matchMap: Map<string, MatchRecord>;
+  predictionMap: Map<string, { id: string; matchId?: string; sessionId: string }>;
   search: RoundSearchFilters;
   onSearchChange: (field: keyof RoundSearchFilters, value: string) => void;
   onRowClick: (roundId: string) => void;
   onSelectPlayer: (playerId: string | null) => void;
   onSelectProfile: (profileId: string | null) => void;
   onSelectMatch: (matchId: string) => void;
-  focusedRound: RoundLog | null;
+  focusedRound: RoundRecord | null;
   roundMatchFilter: string | null;
   onClearMatchFilter: () => void;
   onClearFilters: () => void;
@@ -2679,6 +3807,7 @@ function RoundsSection({
   playerMap,
   profileMap,
   matchMap,
+  predictionMap,
   search,
   onSearchChange,
   onRowClick,
@@ -2835,7 +3964,7 @@ function RoundsSection({
                         {round.id.slice(0, 8)}
                       </button>
                     </td>
-                    <td style={{ padding: "8px 12px" }}>{formatDateTime(round.t)}</td>
+                    <td style={{ padding: "8px 12px" }}>{formatDateTime(round.timestamp)}</td>
                     <td style={{ padding: "8px 12px" }}>{capitalize(round.mode)}</td>
                     <td style={{ padding: "8px 12px" }}>{capitalize(round.difficulty)}</td>
                     <td style={{ padding: "8px 12px" }}>{formatMove(round.player)}</td>
@@ -2885,6 +4014,12 @@ function RoundsSection({
             <strong>Round details</strong>
             <CopyIdButton id={focusedRound.id} />
           </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", opacity: 0.72, fontSize: "0.72rem" }}>
+            <span>Round ID: {focusedRound.id}</span>
+            <span>Session ID: {focusedRound.sessionId}</span>
+            <span>Match ID: {focusedRound.matchId ?? "—"}</span>
+            <span>Prediction ID: {predictionMap.get(focusedRound.id)?.id ?? `pred-${focusedRound.id}`}</span>
+          </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", opacity: 0.85 }}>
             <span>Player: {playerMap.get(focusedRound.playerId)?.playerName ?? focusedRound.playerId}</span>
             <span>Profile: {profileMap.get(focusedRound.profileId)?.name ?? focusedRound.profileId}</span>
@@ -2898,6 +4033,568 @@ function RoundsSection({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+interface PredictionsSectionProps {
+  predictions: AIPredictionRecord[];
+  selectedPredictionId: string | null;
+  playerMap: Map<string, PlayerProfile>;
+  profileMap: Map<string, TelemetryProfile>;
+  matchMap: Map<string, MatchRecord>;
+  search: PredictionSearchFilters;
+  onSearchChange: (field: keyof PredictionSearchFilters, value: string) => void;
+  onRowClick: (predictionId: string) => void;
+  onSelectPlayer: (playerId: string | null) => void;
+  onSelectProfile: (profileId: string | null) => void;
+  onOpenMatch: (matchId: string | null | undefined) => void;
+  onOpenRound: (roundId: string) => void;
+  onClearFilters: () => void;
+}
+
+function PredictionsSection({
+  predictions,
+  selectedPredictionId,
+  playerMap,
+  profileMap,
+  matchMap,
+  search,
+  onSearchChange,
+  onRowClick,
+  onSelectPlayer,
+  onSelectProfile,
+  onOpenMatch,
+  onOpenRound,
+  onClearFilters,
+}: PredictionsSectionProps) {
+  return (
+    <div
+      style={{
+        background: "rgba(15,25,45,0.8)",
+        borderRadius: "12px",
+        padding: "16px",
+        display: "grid",
+        gap: "12px",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+        <div>
+          <h3 style={{ margin: 0 }}>Predictions</h3>
+          <p style={{ margin: "4px 0 0", fontSize: "0.75rem", opacity: 0.68 }}>
+            Canonical challenge predictions generated from telemetry rounds.
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: "8px", fontSize: "0.75rem", opacity: 0.7, flexWrap: "wrap" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <span>Player</span>
+            <input
+              value={search.player}
+              onChange={e => onSearchChange("player", e.target.value)}
+              placeholder="Search"
+              style={searchInputStyle}
+            />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <span>Policy</span>
+            <input
+              value={search.policy}
+              onChange={e => onSearchChange("policy", e.target.value)}
+              placeholder="Search"
+              style={searchInputStyle}
+            />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <span>Reason</span>
+            <input
+              value={search.reason}
+              onChange={e => onSearchChange("reason", e.target.value)}
+              placeholder="Search"
+              style={searchInputStyle}
+            />
+          </label>
+        </div>
+      </div>
+      <div style={{ maxHeight: "420px", overflow: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+          <thead style={{ position: "sticky", top: 0, background: "rgba(9,14,26,0.95)" }}>
+            <tr style={{ textAlign: "left", opacity: 0.7 }}>
+              <th style={{ padding: "8px 12px" }}>Time</th>
+              <th style={{ padding: "8px 12px" }}>Player</th>
+              <th style={{ padding: "8px 12px" }}>Profile</th>
+              <th style={{ padding: "8px 12px" }}>Policy</th>
+              <th style={{ padding: "8px 12px" }}>Confidence</th>
+              <th style={{ padding: "8px 12px" }}>Predicted</th>
+              <th style={{ padding: "8px 12px" }}>Counter</th>
+              <th style={{ padding: "8px 12px" }}>Round</th>
+            </tr>
+          </thead>
+          <tbody>
+            {predictions.length === 0 ? (
+              <tr>
+                <td colSpan={8} style={{ padding: "12px", textAlign: "center", opacity: 0.7 }}>
+                  No predictions for this filter.
+                  <button onClick={onClearFilters} style={inlineClearButtonStyle}>
+                    Clear filters
+                  </button>
+                </td>
+              </tr>
+            ) : (
+              predictions.map(prediction => {
+                const selected = prediction.id === selectedPredictionId;
+                return (
+                  <tr
+                    key={prediction.id}
+                    onClick={() => onRowClick(prediction.id)}
+                    style={{
+                      borderTop: "1px solid rgba(255,255,255,0.05)",
+                      background: selected ? "rgba(37,99,235,0.25)" : undefined,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <td style={{ padding: "8px 12px" }}>{formatDateTime(prediction.timestamp)}</td>
+                    <td style={{ padding: "8px 12px" }}>
+                      <button
+                        type="button"
+                        onClick={event => {
+                          event.stopPropagation();
+                          onSelectPlayer(prediction.playerId);
+                        }}
+                        style={linkButtonStyle}
+                      >
+                        {playerMap.get(prediction.playerId)?.playerName ?? prediction.playerId}
+                      </button>
+                    </td>
+                    <td style={{ padding: "8px 12px" }}>
+                      <button
+                        type="button"
+                        onClick={event => {
+                          event.stopPropagation();
+                          onSelectProfile(prediction.profileId);
+                        }}
+                        style={linkButtonStyle}
+                      >
+                        {profileMap.get(prediction.profileId)?.name ?? prediction.profileId}
+                      </button>
+                    </td>
+                    <td style={{ padding: "8px 12px" }}>{capitalize(prediction.policy)}</td>
+                    <td style={{ padding: "8px 12px" }}>{formatConfidence(prediction.confidence)}</td>
+                    <td style={{ padding: "8px 12px" }}>{formatMove(prediction.predictedPlayerMove ?? null)}</td>
+                    <td style={{ padding: "8px 12px" }}>{formatMove(prediction.counterMoveChosen ?? null)}</td>
+                    <td style={{ padding: "8px 12px" }}>
+                      <button
+                        type="button"
+                        onClick={event => {
+                          event.stopPropagation();
+                          onOpenRound(prediction.roundId);
+                        }}
+                        style={linkButtonStyle}
+                      >
+                        {prediction.roundId.slice(0, 8)}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+      {selectedPredictionId && (
+        <div style={{ fontSize: "0.75rem", opacity: 0.68 }}>
+          {(() => {
+            const selectedPrediction = predictions.find(item => item.id === selectedPredictionId) ?? null;
+            if (!selectedPrediction) return null;
+            const linkedMatch = selectedPrediction.matchId ? matchMap.get(selectedPrediction.matchId) : null;
+            return (
+              <>
+                Linked match:{" "}
+                <button type="button" onClick={() => onOpenMatch(linkedMatch?.id)} style={linkButtonStyle}>
+                  {linkedMatch ? formatMatchLabel(linkedMatch) : selectedPrediction.matchId ?? "None"}
+                </button>
+              </>
+            );
+          })()}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface EventsSectionProps {
+  events: UIEventRecord[];
+  selectedEventId: string | null;
+  playerMap: Map<string, PlayerProfile>;
+  profileMap: Map<string, TelemetryProfile>;
+  matchMap: Map<string, MatchRecord>;
+  search: EventSearchFilters;
+  onSearchChange: (field: keyof EventSearchFilters, value: string) => void;
+  onRowClick: (eventId: string) => void;
+  onSelectPlayer: (playerId: string | null) => void;
+  onSelectProfile: (profileId: string | null) => void;
+  onOpenMatch: (matchId: string | null | undefined) => void;
+  onClearFilters: () => void;
+}
+
+function EventsSection({
+  events,
+  selectedEventId,
+  playerMap,
+  profileMap,
+  matchMap,
+  search,
+  onSearchChange,
+  onRowClick,
+  onSelectPlayer,
+  onSelectProfile,
+  onOpenMatch,
+  onClearFilters,
+}: EventsSectionProps) {
+  return (
+    <div
+      style={{
+        background: "rgba(15,25,45,0.8)",
+        borderRadius: "12px",
+        padding: "16px",
+        display: "grid",
+        gap: "12px",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+        <div>
+          <h3 style={{ margin: 0 }}>UI Events</h3>
+          <p style={{ margin: "4px 0 0", fontSize: "0.75rem", opacity: 0.68 }}>
+            Player, session, match, restore, and developer events captured in telemetry.
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: "8px", fontSize: "0.75rem", opacity: 0.7, flexWrap: "wrap" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <span>Action</span>
+            <input
+              value={search.action}
+              onChange={e => onSearchChange("action", e.target.value)}
+              placeholder="Search"
+              style={searchInputStyle}
+            />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <span>Surface</span>
+            <input
+              value={search.surface}
+              onChange={e => onSearchChange("surface", e.target.value)}
+              placeholder="Search"
+              style={searchInputStyle}
+            />
+          </label>
+        </div>
+      </div>
+      <div style={{ maxHeight: "420px", overflow: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+          <thead style={{ position: "sticky", top: 0, background: "rgba(9,14,26,0.95)" }}>
+            <tr style={{ textAlign: "left", opacity: 0.7 }}>
+              <th style={{ padding: "8px 12px" }}>Time</th>
+              <th style={{ padding: "8px 12px" }}>Action</th>
+              <th style={{ padding: "8px 12px" }}>Surface</th>
+              <th style={{ padding: "8px 12px" }}>Player</th>
+              <th style={{ padding: "8px 12px" }}>Profile</th>
+              <th style={{ padding: "8px 12px" }}>Match</th>
+              <th style={{ padding: "8px 12px" }}>Detail</th>
+            </tr>
+          </thead>
+          <tbody>
+            {events.length === 0 ? (
+              <tr>
+                <td colSpan={7} style={{ padding: "12px", textAlign: "center", opacity: 0.7 }}>
+                  No events for this filter.
+                  <button onClick={onClearFilters} style={inlineClearButtonStyle}>
+                    Clear filters
+                  </button>
+                </td>
+              </tr>
+            ) : (
+              events.map(event => {
+                const selected = event.id === selectedEventId;
+                return (
+                  <tr
+                    key={event.id}
+                    onClick={() => onRowClick(event.id)}
+                    style={{
+                      borderTop: "1px solid rgba(255,255,255,0.05)",
+                      background: selected ? "rgba(37,99,235,0.25)" : undefined,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <td style={{ padding: "8px 12px" }}>{formatDateTime(event.timestamp)}</td>
+                    <td style={{ padding: "8px 12px" }}>{event.action}</td>
+                    <td style={{ padding: "8px 12px" }}>{event.surface}</td>
+                    <td style={{ padding: "8px 12px" }}>
+                      {event.playerId ? (
+                        <button
+                          type="button"
+                          onClick={actionEvent => {
+                            actionEvent.stopPropagation();
+                            onSelectPlayer(event.playerId ?? null);
+                          }}
+                          style={linkButtonStyle}
+                        >
+                          {playerMap.get(event.playerId)?.playerName ?? event.playerId}
+                        </button>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td style={{ padding: "8px 12px" }}>
+                      {event.profileId ? (
+                        <button
+                          type="button"
+                          onClick={actionEvent => {
+                            actionEvent.stopPropagation();
+                            onSelectProfile(event.profileId ?? null);
+                          }}
+                          style={linkButtonStyle}
+                        >
+                          {profileMap.get(event.profileId)?.name ?? event.profileId}
+                        </button>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td style={{ padding: "8px 12px" }}>
+                      {event.matchId ? (
+                        <button
+                          type="button"
+                          onClick={actionEvent => {
+                            actionEvent.stopPropagation();
+                            onOpenMatch(event.matchId);
+                          }}
+                          style={linkButtonStyle}
+                        >
+                          {matchMap.get(event.matchId)?.id.slice(0, 8) ?? event.matchId.slice(0, 8)}
+                        </button>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td style={{ padding: "8px 12px", maxWidth: "22rem", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {event.detail ?? event.value ?? "-"}
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+interface ScopeInspectorProps {
+  entityTab: ExplorerEntityKey;
+  player: PlayerProfile | null;
+  playerStats: PlayerSummaryData | null;
+  profile: TelemetryProfile | null;
+  profileStats: ProfileSummaryData | null;
+  sessionId: string;
+  focusedSession: GameSession | null;
+  focusedMatch: MatchRecord | null;
+  focusedRound: RoundRecord | null;
+  focusedPrediction: AIPredictionRecord | null;
+  focusedEvent: UIEventRecord | null;
+  playerMap: Map<string, PlayerProfile>;
+  profileMap: Map<string, TelemetryProfile>;
+  matchMap: Map<string, MatchRecord>;
+  onExportPlayer: () => void;
+  onDeletePlayer: () => void;
+  onCreateProfile: () => void;
+  onExportProfile: () => void;
+  onDeleteProfile: () => void;
+  onResetProfile: () => void;
+  onRenameProfile: () => void;
+  onViewRoundsForFocusedMatch: () => void;
+}
+
+function ScopeInspector({
+  entityTab,
+  player,
+  playerStats,
+  profile,
+  profileStats,
+  sessionId,
+  focusedSession,
+  focusedMatch,
+  focusedRound,
+  focusedPrediction,
+  focusedEvent,
+  playerMap,
+  profileMap,
+  matchMap,
+  onExportPlayer,
+  onDeletePlayer,
+  onCreateProfile,
+  onExportProfile,
+  onDeleteProfile,
+  onResetProfile,
+  onRenameProfile,
+  onViewRoundsForFocusedMatch,
+}: ScopeInspectorProps) {
+  const activeDetail =
+    entityTab === "sessions"
+      ? focusedSession
+      : entityTab === "matches"
+      ? focusedMatch
+      : entityTab === "rounds"
+      ? focusedRound
+      : entityTab === "predictions"
+      ? focusedPrediction
+      : focusedEvent;
+
+  return (
+    <div
+      style={{
+        background: "linear-gradient(180deg, rgba(15,25,45,0.92), rgba(9,14,26,0.96))",
+        borderRadius: "18px",
+        padding: "16px",
+        display: "grid",
+        gap: "16px",
+        border: "1px solid rgba(148,163,184,0.12)",
+      }}
+    >
+      <div style={{ display: "grid", gap: "6px" }}>
+        <span style={{ fontSize: "0.7rem", textTransform: "uppercase", letterSpacing: "0.18em", opacity: 0.58 }}>
+          Inspector
+        </span>
+        <h3 style={{ margin: 0, fontSize: "1rem" }}>Selected scope and record</h3>
+      </div>
+
+      {player ? (
+        <div style={inspectorBlockStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center" }}>
+            <div>
+              <strong>{player.playerName}</strong>
+              <div style={{ fontSize: "0.74rem", opacity: 0.66 }}>Grade {player.grade}</div>
+            </div>
+            <CopyIdButton id={player.id} />
+          </div>
+          <div style={inspectorMetaRowStyle}>
+            <span>Profiles {playerStats?.profiles ?? 0}</span>
+            <span>Matches {playerStats?.matches ?? 0}</span>
+            <span>Rounds {playerStats?.rounds ?? 0}</span>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+            <button onClick={onExportPlayer} style={pillActionButtonStyle("#2563eb", "#bfdbfe")}>Export player</button>
+            <button onClick={onCreateProfile} style={pillActionButtonStyle("#16a34a", "#bbf7d0")}>New profile</button>
+            <button onClick={onDeletePlayer} style={pillActionButtonStyle("#b91c1c", "#fecaca")}>Delete player</button>
+          </div>
+        </div>
+      ) : (
+        <div style={emptyInspectorStyle}>No player selected. Use the scope rail to drill into telemetry.</div>
+      )}
+
+      {profile && (
+        <div style={inspectorBlockStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center" }}>
+            <div>
+              <strong>{profile.name}</strong>
+              <div style={{ fontSize: "0.74rem", opacity: 0.66 }}>Session {sessionId}</div>
+            </div>
+            <CopyIdButton id={profile.id} />
+          </div>
+          <div style={inspectorMetaRowStyle}>
+            <span>Matches {profileStats?.matches ?? 0}</span>
+            <span>Rounds {profileStats?.rounds ?? 0}</span>
+            <span>Win rate {formatWinRate(profileStats?.winRate ?? null)}</span>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+            <button onClick={onExportProfile} style={pillActionButtonStyle("#2563eb", "#bfdbfe")}>Export profile</button>
+            <button onClick={onRenameProfile} style={pillActionButtonStyle("#475569", "#e2e8f0")}>Rename</button>
+            <button onClick={onResetProfile} style={pillActionButtonStyle("#b45309", "#fde68a")}>Reset training</button>
+            <button onClick={onDeleteProfile} style={pillActionButtonStyle("#b91c1c", "#fecaca")}>Delete profile</button>
+          </div>
+        </div>
+      )}
+
+      <div style={inspectorBlockStyle}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: "10px", alignItems: "center" }}>
+          <strong>Focused {entityTab.slice(0, -1)}</strong>
+          {!activeDetail && <span style={{ fontSize: "0.74rem", opacity: 0.58 }}>Nothing selected</span>}
+        </div>
+        {entityTab === "sessions" && focusedSession && (
+          <div style={{ display: "grid", gap: "8px", fontSize: "0.8rem" }}>
+            <CopyIdButton id={focusedSession.id} />
+            <div style={inspectorMetaRowStyle}>
+              <span>Status {capitalize(focusedSession.status)}</span>
+              <span>Source {focusedSession.source}</span>
+            </div>
+            <div style={{ fontSize: "0.75rem", opacity: 0.74 }}>
+              Started {formatDateTime(focusedSession.startedAt)} | Updated {formatDateTime(focusedSession.updatedAt)}
+            </div>
+            <div style={{ fontSize: "0.75rem", opacity: 0.74 }}>
+              Ended {focusedSession.endedAt ? formatDateTime(focusedSession.endedAt) : "-"} | Active match {focusedSession.activeMatchId ?? "-"}
+            </div>
+          </div>
+        )}
+        {entityTab === "matches" && focusedMatch && (
+          <div style={{ display: "grid", gap: "8px", fontSize: "0.8rem" }}>
+            <CopyIdButton id={focusedMatch.id} />
+            <div style={inspectorMetaRowStyle}>
+              <span>Status {capitalize(focusedMatch.status)}</span>
+              <span>Mode {capitalize(focusedMatch.mode)}</span>
+              <span>Score {formatScore(focusedMatch.score)}</span>
+            </div>
+            <div style={{ fontSize: "0.75rem", opacity: 0.74 }}>
+              Started {formatDateTime(focusedMatch.startedAt)} | Ended {formatDateTime(focusedMatch.endedAt)}
+            </div>
+            <button onClick={onViewRoundsForFocusedMatch} style={pillActionButtonStyle("#2563eb", "#bfdbfe")}>
+              View linked rounds
+            </button>
+          </div>
+        )}
+        {entityTab === "rounds" && focusedRound && (
+          <div style={{ display: "grid", gap: "8px", fontSize: "0.8rem" }}>
+            <CopyIdButton id={focusedRound.id} />
+            <div style={inspectorMetaRowStyle}>
+              <span>Round {focusedRound.roundNumber}</span>
+              <span>{capitalize(focusedRound.outcome)}</span>
+              <span>Conf {formatConfidence(focusedRound.confidence)}</span>
+            </div>
+            <div style={{ fontSize: "0.75rem", opacity: 0.74 }}>
+              {formatMove(focusedRound.player)} vs {formatMove(focusedRound.ai)} | {focusedRound.reason || focusedRound.heuristic?.reason || "-"}
+            </div>
+          </div>
+        )}
+        {entityTab === "predictions" && focusedPrediction && (
+          <div style={{ display: "grid", gap: "8px", fontSize: "0.8rem" }}>
+            <CopyIdButton id={focusedPrediction.id} />
+            <div style={inspectorMetaRowStyle}>
+              <span>{capitalize(focusedPrediction.policy)}</span>
+              <span>{formatConfidence(focusedPrediction.confidence)}</span>
+              <span>{formatMove(focusedPrediction.predictedPlayerMove ?? null)}</span>
+            </div>
+            <div style={{ fontSize: "0.75rem", opacity: 0.74 }}>
+              Counter {formatMove(focusedPrediction.counterMoveChosen ?? null)} | Reason {focusedPrediction.reason || "-"}
+            </div>
+          </div>
+        )}
+        {entityTab === "events" && focusedEvent && (
+          <div style={{ display: "grid", gap: "8px", fontSize: "0.8rem" }}>
+            <CopyIdButton id={focusedEvent.id} />
+            <div style={inspectorMetaRowStyle}>
+              <span>{focusedEvent.action}</span>
+              <span>{focusedEvent.surface}</span>
+            </div>
+            <div style={{ fontSize: "0.75rem", opacity: 0.74 }}>
+              Player {focusedEvent.playerId ? playerMap.get(focusedEvent.playerId)?.playerName ?? focusedEvent.playerId : "-"} | Profile{" "}
+              {focusedEvent.profileId ? profileMap.get(focusedEvent.profileId)?.name ?? focusedEvent.profileId : "-"}
+            </div>
+            {focusedEvent.matchId && (
+              <div style={{ fontSize: "0.75rem", opacity: 0.74 }}>
+                Match {matchMap.get(focusedEvent.matchId)?.id ?? focusedEvent.matchId}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -3047,9 +4744,9 @@ function AuditSection({ logs, actions, actionFilter, onActionFilterChange, resol
 }
 interface ResolveMaps {
   playerMap: Map<string, PlayerProfile>;
-  profileMap: Map<string, StatsProfile>;
-  matchMap: Map<string, MatchSummary>;
-  roundMap: Map<string, RoundLog>;
+  profileMap: Map<string, TelemetryProfile>;
+  matchMap: Map<string, MatchRecord>;
+  roundMap: Map<string, RoundRecord>;
 }
 
 function resolveAuditTarget(
@@ -3157,17 +4854,18 @@ function capitalize(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function formatScore(score: MatchSummary["score"]) {
+function formatScore(score: MatchRecord["score"]) {
   return `${score.you}–${score.ai}`;
 }
 
-function formatMatchLabel(match: MatchSummary | null) {
+function formatMatchLabel(match: MatchRecord | null) {
   if (!match) return null;
   const date = formatDate(match.startedAt);
   return `${date} • ${capitalize(match.mode)} · ${capitalize(match.difficulty)}`;
 }
 
-function formatMove(move: string) {
+function formatMove(move: string | null | undefined) {
+  if (!move) return "-";
   return capitalize(move);
 }
 
@@ -3187,6 +4885,19 @@ function makeSlug(value: string) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 64) || "record";
+}
+
+function downloadCsv(filename: string, contents: string) {
+  if (typeof window === "undefined") return;
+  const blob = new Blob([contents], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 function downloadJson(filename: string, payload: unknown) {

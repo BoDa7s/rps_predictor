@@ -1,19 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
-import { usePlayers } from "../../players";
-import { getActiveStatsProfileForPlayer, useStats } from "../../stats";
-import {
-  buildPlayPath,
-  buildPostOnboardingDestination,
-  persistWelcomePreference,
-  sanitizeReturnTo,
-} from "../../playEntry";
+import { buildPlayPath, sanitizeReturnTo } from "../../playEntry";
+import { usePlayAppFacade } from "../../routes/usePlayAppFacade";
 
 export default function RestorePlayerPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { players, currentPlayer, setCurrentPlayer } = usePlayers();
-  const { adminProfiles } = useStats();
+  const { players, currentPlayer, restorePlayer } = usePlayAppFacade();
   const returnTo = useMemo(() => sanitizeReturnTo(searchParams.get("returnTo")), [searchParams]);
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(currentPlayer?.id ?? players[0]?.id ?? null);
 
@@ -30,10 +23,6 @@ export default function RestorePlayerPage() {
   const selectedPlayer = useMemo(
     () => players.find(player => player.id === selectedPlayerId) ?? null,
     [players, selectedPlayerId],
-  );
-  const selectedStatsProfile = useMemo(
-    () => (selectedPlayerId ? getActiveStatsProfileForPlayer(adminProfiles, selectedPlayerId) : null),
-    [adminProfiles, selectedPlayerId],
   );
 
   if (!players.length) {
@@ -97,15 +86,7 @@ export default function RestorePlayerPage() {
             disabled={!selectedPlayerId}
             onClick={() => {
               if (!selectedPlayerId) return;
-              setCurrentPlayer(selectedPlayerId);
-              persistWelcomePreference("skip");
-              navigate(
-                buildPostOnboardingDestination({
-                  returnTo,
-                  profile: selectedStatsProfile,
-                }),
-                { replace: true },
-              );
+              navigate(restorePlayer(selectedPlayerId, returnTo), { replace: true });
             }}
             className="play-shell-button play-shell-button-accent rounded-xl px-4 py-2 text-sm font-semibold disabled:opacity-50"
           >

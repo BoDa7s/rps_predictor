@@ -12,9 +12,6 @@ import {
   useStats,
 } from "../stats";
 
-const THEME_PREFERENCE_STORAGE_KEY = "rps_theme_pref_v1";
-const THEME_COLOR_STORAGE_KEY = "rps_theme_colors_v1";
-
 type PartialThemeColorPreferences = Partial<Record<ThemeMode, Partial<ThemeModeColors>>>;
 
 interface PlayThemeContextValue {
@@ -26,19 +23,6 @@ interface PlayThemeContextValue {
 }
 
 const PlayThemeContext = createContext<PlayThemeContextValue | null>(null);
-
-function parseStoredThemeColors(raw: string | null): ThemeColorPreferences | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as PartialThemeColorPreferences;
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-    return migrateLegacyThemeColorPreferences(mergeThemeColorPreferences(DEFAULT_THEME_COLOR_PREFERENCES, parsed));
-  } catch {
-    return null;
-  }
-}
 
 function mergeThemeColorPreferences(
   base: ThemeColorPreferences,
@@ -158,25 +142,10 @@ function deriveThemeCssVariables(mode: ThemeMode, colors: ThemeModeColors): Reco
 
 export default function PlayThemeProvider({ children }: { children: React.ReactNode }) {
   const { currentProfile, updateProfile } = useStats();
-  const [fallbackThemePreference, setFallbackThemePreference] = useState<ThemePreference>(() => {
-    if (typeof window === "undefined") return "system";
-    try {
-      const stored = window.localStorage.getItem(THEME_PREFERENCE_STORAGE_KEY);
-      return stored === "dark" || stored === "light" || stored === "system" ? stored : "system";
-    } catch {
-      return "system";
-    }
-  });
-  const [fallbackThemeColors, setFallbackThemeColors] = useState<ThemeColorPreferences>(() => {
-    const defaults = cloneProfilePreferences(DEFAULT_PROFILE_PREFERENCES).themeColors;
-    if (typeof window === "undefined") return defaults;
-    try {
-      const stored = window.localStorage.getItem(THEME_COLOR_STORAGE_KEY);
-      return parseStoredThemeColors(stored) ?? defaults;
-    } catch {
-      return defaults;
-    }
-  });
+  const [fallbackThemePreference, setFallbackThemePreference] = useState<ThemePreference>("system");
+  const [fallbackThemeColors, setFallbackThemeColors] = useState<ThemeColorPreferences>(() =>
+    cloneProfilePreferences(DEFAULT_PROFILE_PREFERENCES).themeColors,
+  );
   const systemPrefersDark = useMediaQuery("(prefers-color-scheme: dark)");
 
   const themePreference: ThemePreference = currentProfile?.preferences.theme ?? fallbackThemePreference;
@@ -199,16 +168,6 @@ export default function PlayThemeProvider({ children }: { children: React.ReactN
       return prevSerialized === nextSerialized ? prev : cloned;
     });
   }, [currentProfile?.preferences, currentProfile?.preferences.themeColors]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(THEME_PREFERENCE_STORAGE_KEY, themePreference);
-      window.localStorage.setItem(THEME_COLOR_STORAGE_KEY, JSON.stringify(fallbackThemeColors));
-    } catch {
-      /* noop */
-    }
-  }, [fallbackThemeColors, themePreference]);
 
   const mergedThemeColors = useMemo(() => {
     const withFallback = mergeThemeColorPreferences(DEFAULT_THEME_COLOR_PREFERENCES, fallbackThemeColors);

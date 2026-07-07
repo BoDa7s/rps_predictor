@@ -12,7 +12,6 @@ import { playOutcomeToneClasses } from "../../components/play/playOutcomeTone";
 import { useChallengeRuntime } from "../../hooks/useChallengeRuntime";
 import {
   PLAY_DASHBOARD_PATH,
-  buildTrainingStartPath,
   profileNeedsTraining,
 } from "../../playEntry";
 import { useStats } from "../../stats";
@@ -37,7 +36,7 @@ export default function ChallengeGamePage() {
   });
 
   if (profileNeedsTraining(currentProfile)) {
-    return <Navigate to={buildTrainingStartPath()} replace />;
+    return <Navigate to={PLAY_DASHBOARD_PATH} replace />;
   }
 
   if (!currentProfile?.predictorDefault) {
@@ -131,6 +130,15 @@ export default function ChallengeGamePage() {
                 statColumns={3}
                 compact
                 density={viewport.density}
+                actions={
+                  <button
+                    type="button"
+                    onClick={runtime.exitMatch}
+                    className="inline-flex items-center justify-center rounded-full border border-rose-400/50 bg-rose-500/15 px-3.5 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-rose-200 transition hover:bg-rose-500/25"
+                  >
+                    Exit Match
+                  </button>
+                }
               />
             </div>
 

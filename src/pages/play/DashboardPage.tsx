@@ -1,11 +1,7 @@
 import React from "react";
-import { Navigate, useNavigate } from "react-router-dom";
-import {
-  buildChallengeStartPath,
-  buildTrainingStartPath,
-  profileNeedsTraining,
-} from "../../playEntry";
-import { useStats } from "../../stats";
+import { useNavigate } from "react-router-dom";
+import { buildChallengeStartPath, buildTrainingStartPath } from "../../playEntry";
+import { usePlayAppFacade } from "../../routes/usePlayAppFacade";
 
 type ModeTileProps = {
   title: string;
@@ -85,15 +81,10 @@ function ModeTile({
 
 export default function DashboardPage() {
   const navigate = useNavigate();
-  const { currentProfile } = useStats();
-
-  if (profileNeedsTraining(currentProfile)) {
-    return <Navigate to={buildTrainingStartPath()} replace />;
-  }
-
-  const predictorReady = Boolean(currentProfile?.predictorDefault);
-  const challengeBestOf = currentProfile?.preferences.gameplay.bestOf ?? 5;
-  const challengeDifficulty = currentProfile?.preferences.gameplay.aiDifficulty ?? "normal";
+  const { currentTelemetryProfile, trainingRequired, challengeAllowed } = usePlayAppFacade();
+  const predictorReady = challengeAllowed;
+  const challengeBestOf = currentTelemetryProfile?.preferences.bestOf ?? 5;
+  const challengeDifficulty = currentTelemetryProfile?.preferences.aiDifficulty ?? "normal";
   const challengeDifficultyLabel =
     challengeDifficulty.charAt(0).toUpperCase() + challengeDifficulty.slice(1);
 
@@ -110,7 +101,7 @@ export default function DashboardPage() {
           <div className="grid gap-4 sm:gap-5">
             <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-center gap-2 text-xs font-semibold uppercase tracking-[0.24em] text-[color:var(--app-text-muted)]">
               <span className="rounded-full border border-[color:var(--app-border)] bg-[color:color-mix(in_srgb,var(--app-accent-soft)_28%,transparent)] px-3 py-1">
-                Training complete
+                {trainingRequired ? "Training in progress" : "Training complete"}
               </span>
             </div>
 
@@ -135,10 +126,16 @@ export default function DashboardPage() {
                 subtitle="Live match"
                 detail={`Launch the predictor match flow using Best of ${challengeBestOf} with ${challengeDifficultyLabel} difficulty.`}
                 tone="challenge"
-                badge={predictorReady ? challengeDifficultyLabel : "Locked"}
+                badge={predictorReady ? challengeDifficultyLabel : trainingRequired ? "Training required" : "Locked"}
                 actionLabel={predictorReady ? "Launch challenge" : "Challenge locked"}
                 disabled={!predictorReady}
-                disabledReason={!predictorReady ? "Enable the AI predictor in the current profile before challenge can start." : undefined}
+                disabledReason={
+                  !predictorReady
+                    ? trainingRequired
+                      ? "Finish training before challenge can start."
+                      : "Enable the AI predictor in the current profile before challenge can start."
+                    : undefined
+                }
                 onLaunch={() => navigate(buildChallengeStartPath())}
               />
             </div>

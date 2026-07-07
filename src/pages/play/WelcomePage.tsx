@@ -1,27 +1,15 @@
 import React, { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { usePlayers } from "../../players";
-import { getActiveStatsProfileForPlayer, useStats } from "../../stats";
-import {
-  PLAY_WELCOME_SLIDES,
-  buildPlayPath,
-  buildPostOnboardingDestination,
-  persistWelcomePreference,
-  sanitizeReturnTo,
-} from "../../playEntry";
+import { PLAY_WELCOME_SLIDES, buildPlayPath, sanitizeReturnTo } from "../../playEntry";
+import { usePlayAppFacade } from "../../routes/usePlayAppFacade";
 
 export default function WelcomePage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { players, currentPlayer } = usePlayers();
-  const { adminProfiles } = useStats();
+  const { playerCount, currentPlayer, completeOnboarding } = usePlayAppFacade();
   const [slideIndex, setSlideIndex] = useState(0);
   const returnTo = useMemo(() => sanitizeReturnTo(searchParams.get("returnTo")), [searchParams]);
-  const hasLocalProfiles = players.length > 0;
-  const currentStatsProfile = useMemo(
-    () => (currentPlayer ? getActiveStatsProfileForPlayer(adminProfiles, currentPlayer.id) : null),
-    [adminProfiles, currentPlayer],
-  );
+  const hasLocalProfiles = playerCount > 0;
   const isLastSlide = slideIndex >= PLAY_WELCOME_SLIDES.length - 1;
   const progress = ((slideIndex + 1) / PLAY_WELCOME_SLIDES.length) * 100;
 
@@ -96,14 +84,7 @@ export default function WelcomePage() {
                     <button
                       type="button"
                       onClick={() => {
-                        persistWelcomePreference("skip");
-                        navigate(
-                          buildPostOnboardingDestination({
-                            returnTo,
-                            profile: currentStatsProfile,
-                          }),
-                          { replace: true },
-                        );
+                        navigate(completeOnboarding(returnTo), { replace: true });
                       }}
                       className="play-shell-button play-shell-button-muted rounded-full px-5 py-2.5 text-sm font-semibold"
                     >

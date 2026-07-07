@@ -2,6 +2,13 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { AIMode, BestOf, Mode, Move, Outcome } from "./gameTypes";
 import { normalizeHexColor } from "./colorUtils";
 import { usePlayers } from "./players";
+import type { MatchRecord, RoundRecord, PlayerProfile as TelemetryProfileRecord } from "./telemetry";
+import {
+  getTelemetryProfilePreferences,
+  resolveTelemetryProfileSelectionForPlayer,
+  telemetryService,
+  useTelemetryStore,
+} from "./telemetry";
 
 export type SerializedExpertState =
   | { type: "FrequencyExpert"; window: number; alpha: number }
@@ -330,8 +337,15 @@ interface StatsContextValue {
   selectProfile: (id: string) => void;
   createProfile: (playerIdOverride?: string) => StatsProfile | null;
   updateProfile: (id: string, patch: StatsProfileUpdate) => void;
+  deleteProfile: (id: string) => void;
   forkProfileVersion: (id: string) => StatsProfile | null;
   exportRoundsCsv: () => string;
+  buildProfilesCsv: () => string;
+  buildSessionsCsv: () => string;
+  buildMatchesCsv: () => string;
+  buildTelemetryRoundsCsv: () => string;
+  buildPredictionsCsv: () => string;
+  buildEventsCsv: () => string;
   getModelStateForProfile: (profileId: string) => StoredPredictorModelState | null;
   saveModelStateForProfile: (profileId: string, state: StoredPredictorModelState) => void;
   clearModelStateForProfile: (profileId: string) => void;
@@ -346,14 +360,8 @@ interface StatsContextValue {
 
 const StatsContext = createContext<StatsContextValue | null>(null);
 
-const ROUND_KEY = "rps_stats_rounds_v1";
-const MATCH_KEY = "rps_stats_matches_v1";
-const PROFILE_KEY = "rps_stats_profiles_v1";
-const CURRENT_PROFILE_KEY = "rps_current_stats_profile_v1";
-const MODEL_STATE_KEY = "rps_predictor_models_v1";
 const MAX_ROUNDS = 1000;
 const PRIMARY_BASE = "primary";
-const PRACTICE_LEGACY_TYPE = "Practice Legacy" as const;
 
 function formatLineageBaseName(index: number): string {
   const normalizedIndex = Number.isFinite(index) ? Math.max(1, Math.floor(index)) : 1;
@@ -418,168 +426,6 @@ export function getActiveStatsProfileForPlayer(profiles: StatsProfile[], playerI
   return getOrderedStatsProfilesForPlayer(profiles, playerId)[0] ?? null;
 }
 
-function loadFromStorage<T>(key: string): T[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (err) {
-    console.warn("Failed to read stats", err);
-    return [];
-  }
-}
-
-function saveToStorage(key: string, value: unknown) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch (err) {
-    console.warn("Failed to persist stats", err);
-  }
-}
-
-function loadModelStates(): StoredPredictorModelState[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(MODEL_STATE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .map((item: StoredPredictorModelState | any): StoredPredictorModelState | null => {
-        if (!item || typeof item !== "object") return null;
-        const profileId = typeof item.profileId === "string" ? item.profileId : null;
-        const modelVersion = Number.isFinite(item.modelVersion) ? Math.floor(item.modelVersion) : null;
-        const updatedAt = typeof item.updatedAt === "string" ? item.updatedAt : null;
-        const roundsSeen = Number.isFinite(item.roundsSeen) ? Number(item.roundsSeen) : 0;
-        const state = item.state && typeof item.state === "object" ? item.state : null;
-        if (!profileId || modelVersion == null || !state) return null;
-        const eta = Number.isFinite(state.eta) ? Number(state.eta) : 1.6;
-        const weights = Array.isArray(state.weights)
-          ? state.weights.map((value: unknown) => (Number.isFinite(value) ? Number(value) : 1))
-          : [];
-        const experts = Array.isArray(state.experts) ? state.experts : [];
-        return {
-          profileId,
-          modelVersion,
-          updatedAt: updatedAt ?? new Date(0).toISOString(),
-          roundsSeen,
-          state: {
-            eta,
-            weights,
-            experts: experts as SerializedExpertState[],
-          },
-        } satisfies StoredPredictorModelState;
-      })
-      .filter((entry): entry is StoredPredictorModelState => entry !== null);
-  } catch (err) {
-    console.warn("Failed to read predictor model state", err);
-    return [];
-  }
-}
-
-function saveModelStates(states: StoredPredictorModelState[]) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(MODEL_STATE_KEY, JSON.stringify(states));
-  } catch (err) {
-    console.warn("Failed to persist predictor model state", err);
-  }
-}
-
-function migrateMatchRecords(matches: MatchSummary[]): { matches: MatchSummary[]; changed: boolean } {
-  let changed = false;
-  const migrated = matches.map(match => {
-    if (match.mode === "practice") {
-      if (match.leaderboardType !== PRACTICE_LEGACY_TYPE) {
-        changed = true;
-        return { ...match, leaderboardType: PRACTICE_LEGACY_TYPE } satisfies MatchSummary;
-      }
-      return match;
-    }
-    if (match.mode === "challenge" && match.leaderboardType && match.leaderboardType !== "Challenge") {
-      changed = true;
-      return { ...match, leaderboardType: "Challenge" } satisfies MatchSummary;
-    }
-    return match;
-  });
-  return { matches: migrated, changed };
-}
-
-function loadProfiles(): StatsProfile[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(PROFILE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map((item: StatsProfile | any) => {
-      const fallbackName = typeof item?.name === "string" ? item.name : PRIMARY_BASE;
-      const baseName = normalizeBaseName(typeof item?.baseName === "string" ? item.baseName : fallbackName);
-      const version = (() => {
-        if (typeof item?.version === "number" && Number.isFinite(item.version)) {
-          return Math.max(1, Math.floor(item.version));
-        }
-        const match = fallbackName.match(/ v(\d+)$/i);
-        if (match) {
-          const parsed = Number.parseInt(match[1], 10);
-          if (Number.isFinite(parsed) && parsed > 0) return parsed;
-        }
-        return 1;
-      })();
-      return {
-        id: typeof item?.id === "string" ? item.id : makeId("profile"),
-        playerId: typeof item?.playerId === "string" ? item.playerId : "",
-        baseName,
-        version,
-        name: makeProfileDisplayName(baseName, version),
-        createdAt: typeof item?.createdAt === "string" ? item.createdAt : new Date().toISOString(),
-        trainingCount: typeof item?.trainingCount === "number" ? item.trainingCount : 0,
-        trained: Boolean(item?.trained),
-        predictorDefault: item?.predictorDefault !== undefined ? Boolean(item.predictorDefault) : false,
-        seenPostTrainingCTA: item?.seenPostTrainingCTA !== undefined ? Boolean(item.seenPostTrainingCTA) : false,
-        previousProfileId: typeof item?.previousProfileId === "string" ? item.previousProfileId : null,
-        nextProfileId: typeof item?.nextProfileId === "string" ? item.nextProfileId : null,
-        preferences: normalizePreferences(item?.preferences),
-      } satisfies StatsProfile;
-    });
-  } catch (err) {
-    console.warn("Failed to read stats profiles", err);
-    return [];
-  }
-}
-
-function saveProfiles(profiles: StatsProfile[]) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(PROFILE_KEY, JSON.stringify(profiles));
-  } catch (err) {
-    console.warn("Failed to persist stats profiles", err);
-  }
-}
-
-function loadCurrentProfileId(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return localStorage.getItem(CURRENT_PROFILE_KEY);
-  } catch (err) {
-    console.warn("Failed to read current stats profile", err);
-    return null;
-  }
-}
-
-function saveCurrentProfileId(id: string | null) {
-  if (typeof window === "undefined") return;
-  try {
-    if (id) localStorage.setItem(CURRENT_PROFILE_KEY, id);
-    else localStorage.removeItem(CURRENT_PROFILE_KEY);
-  } catch (err) {
-    console.warn("Failed to persist current stats profile", err);
-  }
-}
-
 function makeId(prefix: string) {
   if (typeof crypto !== "undefined" && (crypto as any).randomUUID) {
     return prefix + "-" + (crypto as any).randomUUID();
@@ -587,64 +433,144 @@ function makeId(prefix: string) {
   return prefix + "-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
 }
 
+function telemetryRoundToRoundLog(round: RoundRecord): RoundLog {
+  return {
+    id: round.id,
+    sessionId: round.sessionId,
+    matchId: round.matchId,
+    playerId: round.playerId,
+    profileId: round.profileId,
+    t: round.timestamp,
+    mode: round.mode as Mode,
+    bestOf: round.bestOf,
+    difficulty: round.difficulty,
+    player: round.player,
+    ai: round.ai,
+    outcome: round.outcome,
+    policy: round.policy,
+    mixer: round.mixer,
+    heuristic: round.heuristic,
+    streakAI: round.streakAI,
+    streakYou: round.streakYou,
+    reason: round.reason,
+    confidence: round.confidence,
+    confidenceBucket: round.confidenceBucket,
+    decisionTimeMs: round.decisionTimeMs,
+  };
+}
+
+function telemetryMatchToMatchSummary(match: MatchRecord): MatchSummary {
+  return {
+    id: match.id,
+    clientId: match.sourceMatchId ? match.id : undefined,
+    sessionId: match.sessionId,
+    playerId: match.playerId,
+    profileId: match.profileId,
+    startedAt: match.startedAt,
+    endedAt: match.endedAt,
+    mode: match.mode as Mode,
+    bestOf: match.bestOf,
+    difficulty: match.difficulty,
+    score: match.score,
+    rounds: match.roundsPlayed || match.rounds,
+    aiWinRate: match.aiWinRate,
+    youSwitchedRate: match.youSwitchedRate,
+    notes: match.notes,
+    leaderboardScore: match.leaderboardScore,
+    leaderboardMaxStreak: match.leaderboardMaxStreak,
+    leaderboardRoundCount: match.leaderboardRoundCount,
+    leaderboardTimerBonus: match.leaderboardTimerBonus,
+    leaderboardBeatConfidenceBonus: match.leaderboardBeatConfidenceBonus,
+    leaderboardType: match.leaderboardType,
+  };
+}
+
+function telemetryProfileToStatsProfile(
+  profile: TelemetryProfileRecord,
+  storedPreferences: unknown,
+): StatsProfile {
+  const preferences = normalizePreferences(getTelemetryProfilePreferences(profile, storedPreferences));
+  const baseName = normalizeBaseName(profile.baseName ?? profile.name);
+  const version =
+    typeof profile.version === "number" && Number.isFinite(profile.version) ? Math.max(1, Math.floor(profile.version)) : 1;
+  return {
+    id: profile.id,
+    playerId: profile.playerId,
+    name: makeProfileDisplayName(baseName, version),
+    createdAt: profile.createdAt,
+    trainingCount: profile.trainingCount,
+    trained: profile.trained,
+    predictorDefault: profile.predictorDefault,
+    seenPostTrainingCTA: profile.seenPostTrainingCTA,
+    baseName,
+    version,
+    previousProfileId: profile.previousProfileId ?? null,
+    nextProfileId: profile.nextProfileId ?? null,
+    preferences,
+  };
+}
+
 export function StatsProvider({ children }: { children: React.ReactNode }) {
-  const [allRounds, setAllRounds] = useState<RoundLog[]>(() => loadFromStorage<RoundLog>(ROUND_KEY));
-  const [allMatches, setAllMatches] = useState<MatchSummary[]>(() => {
-    const loaded = loadFromStorage<MatchSummary>(MATCH_KEY);
-    const { matches, changed } = migrateMatchRecords(loaded);
-    if (changed) {
-      saveToStorage(MATCH_KEY, matches);
-    }
-    return matches;
-  });
-  const [profiles, setProfiles] = useState<StatsProfile[]>(() => loadProfiles());
-  const [currentProfileId, setCurrentProfileId] = useState<string | null>(() => loadCurrentProfileId());
-  const [roundsDirty, setRoundsDirty] = useState(false);
-  const [matchesDirty, setMatchesDirty] = useState(false);
-  const [profilesDirty, setProfilesDirty] = useState(false);
-  const [modelStates, setModelStates] = useState<StoredPredictorModelState[]>(() => loadModelStates());
-  const [modelStatesDirty, setModelStatesDirty] = useState(false);
-  const sessionIdRef = useRef<string>("");
-  const { currentPlayerId, currentPlayer } = usePlayers();
+  const telemetry = useTelemetryStore();
+  const [sessionRuntime, setSessionRuntime] = useState(() => ({
+    id: makeId("sess"),
+    startedAt: new Date().toISOString(),
+  }));
+  const sessionIdRef = useRef<string>(sessionRuntime.id);
+  const sessionStartedAtRef = useRef<string>(sessionRuntime.startedAt);
+  const sessionEventLoggedRef = useRef(false);
+  const sessionStartedRef = useRef(false);
+  const sessionEndedRef = useRef(false);
+  const sessionPlayerIdRef = useRef<string | null>(null);
+  const sessionProfileIdRef = useRef<string | null>(null);
+  const sessionScopeRef = useRef<string | null>(null);
+  const knownPlayerIdsRef = useRef<Set<string>>(new Set());
+  const knownPlayerIdsInitializedRef = useRef(false);
+  const { players, currentPlayerId } = usePlayers();
+  const profiles = useMemo(
+    () =>
+      telemetry.profiles.map(profile =>
+        telemetryProfileToStatsProfile(profile, telemetry.store.profilePreferencesById[profile.id]),
+      ),
+    [telemetry.profiles, telemetry.store.profilePreferencesById],
+  );
+  const currentProfileId = telemetry.currentProfileId;
+  const currentTelemetryProfileSelection = useMemo(
+    () => resolveTelemetryProfileSelectionForPlayer(telemetry.profiles, currentPlayerId, currentProfileId),
+    [currentPlayerId, currentProfileId, telemetry.profiles],
+  );
+  const modelStates = useMemo<StoredPredictorModelState[]>(
+    () =>
+      telemetry.modelStates.map(state => ({
+        profileId: state.profileId,
+        modelVersion: state.modelVersion,
+        updatedAt: state.updatedAt,
+        roundsSeen: state.roundsSeen,
+        state: {
+          eta: state.state.eta,
+          weights: [...state.state.weights],
+          experts: state.state.experts as SerializedExpertState[],
+        },
+      })),
+    [telemetry.modelStates],
+  );
 
-  if (!sessionIdRef.current) {
-    sessionIdRef.current = makeId("sess");
-  }
+  useEffect(() => {
+    sessionIdRef.current = sessionRuntime.id;
+    sessionStartedAtRef.current = sessionRuntime.startedAt;
+  }, [sessionRuntime.id, sessionRuntime.startedAt]);
 
-  const sessionId = sessionIdRef.current;
+  const sessionId = sessionRuntime.id;
   const playerProfiles = useMemo(() => {
-    if (!currentPlayerId) return [] as StatsProfile[];
-    const filtered = profiles.filter(p => p.playerId === currentPlayerId);
-    const normalized = filtered.map(profile => {
-      const baseName = normalizeBaseName(profile.baseName ?? profile.name);
-      const rawVersion = profile.version;
-      const version = typeof rawVersion === "number" && Number.isFinite(rawVersion) ? Math.max(1, Math.floor(rawVersion)) : 1;
-      return {
-        ...profile,
-        baseName,
-        version,
-        name: makeProfileDisplayName(baseName, version),
-      } satisfies StatsProfile;
-    });
-    normalized.sort((a, b) => {
-      const indexDiff = getLineageIndex(a.baseName) - getLineageIndex(b.baseName);
-      if (indexDiff !== 0) return indexDiff;
-      const versionDiff = (b.version ?? 1) - (a.version ?? 1);
-      if (versionDiff !== 0) return versionDiff;
-      if (getLineageIndex(a.baseName) === Number.MAX_SAFE_INTEGER) {
-        const baseCompare = a.baseName.localeCompare(b.baseName);
-        if (baseCompare !== 0) return baseCompare;
-      }
-      return (a.createdAt || "").localeCompare(b.createdAt || "");
-    });
-    return normalized;
-  }, [profiles, currentPlayerId]);
+    return currentTelemetryProfileSelection.orderedProfiles.map(profile =>
+      telemetryProfileToStatsProfile(profile, telemetry.store.profilePreferencesById[profile.id]),
+    );
+  }, [currentTelemetryProfileSelection.orderedProfiles, telemetry.store.profilePreferencesById]);
 
   useEffect(() => {
     if (!currentPlayerId) {
       if (currentProfileId) {
-        setCurrentProfileId(null);
-        saveCurrentProfileId(null);
+        telemetryService.setCurrentProfile(null);
       }
       return;
     }
@@ -665,115 +591,159 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         nextProfileId: null,
         preferences: cloneProfilePreferences(),
       };
-      setProfiles(prev => prev.concat(defaultProfile));
-      setProfilesDirty(true);
-      setCurrentProfileId(defaultProfile.id);
-      saveCurrentProfileId(defaultProfile.id);
+      telemetryService.upsertPlayerProfile(
+        players.find(player => player.id === currentPlayerId),
+        defaultProfile,
+      );
+      telemetryService.setCurrentProfile(defaultProfile.id);
+      telemetryService.logUIEvent({
+        sessionId,
+        timestamp: new Date().toISOString(),
+        playerId: currentPlayerId,
+        profileId: defaultProfile.id,
+        surface: "play-shell",
+        action: "profile-created",
+        detail: "default-profile",
+      });
       return;
     }
-    const belongs = currentProfileId && playerProfiles.some(p => p.id === currentProfileId);
-    if (!belongs) {
-      const fallback = playerProfiles[0];
-      if (fallback && fallback.id !== currentProfileId) {
-        setCurrentProfileId(fallback.id);
-        saveCurrentProfileId(fallback.id);
-      }
+    if (currentTelemetryProfileSelection.activeProfileId !== currentProfileId) {
+      telemetryService.setCurrentProfile(currentTelemetryProfileSelection.activeProfileId);
     }
-  }, [currentPlayerId, currentProfileId, playerProfiles]);
+  }, [currentPlayerId, currentProfileId, currentTelemetryProfileSelection.activeProfileId, playerProfiles.length, players, sessionId]);
 
   const currentProfile = useMemo(() => {
-    if (!currentProfileId) return playerProfiles[0] ?? null;
-    return playerProfiles.find(p => p.id === currentProfileId) ?? playerProfiles[0] ?? null;
-  }, [currentProfileId, playerProfiles]);
+    const activeProfile = currentTelemetryProfileSelection.activeProfile;
+    if (!activeProfile) return null;
+    return telemetryProfileToStatsProfile(activeProfile, telemetry.store.profilePreferencesById[activeProfile.id]);
+  }, [currentTelemetryProfileSelection.activeProfile, telemetry.store.profilePreferencesById]);
+
+  const endCurrentSession = useCallback((detail: string) => {
+    if (!sessionEventLoggedRef.current) return;
+    if (sessionEndedRef.current) return;
+    sessionEndedRef.current = true;
+    const endedAt = new Date().toISOString();
+    telemetryService.logUIEvent({
+      sessionId: sessionIdRef.current,
+      timestamp: endedAt,
+      playerId: sessionPlayerIdRef.current ?? undefined,
+      profileId: sessionProfileIdRef.current ?? null,
+      surface: "play-shell",
+      action: "session-ended",
+      detail,
+    });
+    telemetryService.endSession(sessionIdRef.current, endedAt);
+  }, []);
 
   useEffect(() => {
-    if (!roundsDirty) return;
-    const timer = window.setTimeout(() => {
-      saveToStorage(ROUND_KEY, allRounds);
-      setRoundsDirty(false);
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [roundsDirty, allRounds]);
+    const nextScope = currentPlayerId && currentProfile?.id ? `${currentPlayerId}:${currentProfile.id}` : null;
+    if (sessionScopeRef.current === nextScope) {
+      sessionPlayerIdRef.current = currentPlayerId ?? null;
+      sessionProfileIdRef.current = currentProfile?.id ?? null;
+      return;
+    }
+
+    if (sessionScopeRef.current) {
+      endCurrentSession("scope-changed");
+    }
+
+    sessionScopeRef.current = nextScope;
+    sessionPlayerIdRef.current = currentPlayerId ?? null;
+    sessionProfileIdRef.current = currentProfile?.id ?? null;
+    sessionEventLoggedRef.current = false;
+    sessionStartedRef.current = false;
+    sessionEndedRef.current = false;
+    setSessionRuntime({
+      id: makeId("sess"),
+      startedAt: new Date().toISOString(),
+    });
+  }, [currentPlayerId, currentProfile?.id, endCurrentSession]);
 
   useEffect(() => {
-    if (!matchesDirty) return;
-    const timer = window.setTimeout(() => {
-      saveToStorage(MATCH_KEY, allMatches);
-      setMatchesDirty(false);
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [matchesDirty, allMatches]);
+    if (!knownPlayerIdsInitializedRef.current) {
+      knownPlayerIdsRef.current = new Set(players.map(player => player.id));
+      knownPlayerIdsInitializedRef.current = true;
+      return;
+    }
+
+    const nextPlayerIds = new Set(players.map(player => player.id));
+    players.forEach(player => {
+      if (knownPlayerIdsRef.current.has(player.id)) return;
+      telemetryService.logUIEvent({
+        sessionId,
+        timestamp: new Date().toISOString(),
+        playerId: player.id,
+        profileId: null,
+        surface: "player-setup",
+        action: "player-created",
+        value: player.playerName,
+        meta: {
+          grade: player.grade,
+          hasSchool: Boolean(player.school),
+          hasPriorExperience: Boolean(player.priorExperience),
+        },
+      });
+    });
+    knownPlayerIdsRef.current = nextPlayerIds;
+  }, [players, sessionId]);
 
   useEffect(() => {
-    if (!profilesDirty) return;
-    const timer = window.setTimeout(() => {
-      saveProfiles(profiles);
-      setProfilesDirty(false);
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [profilesDirty, profiles]);
+    if (!currentPlayerId || !currentProfile) return;
+    if (sessionId !== sessionIdRef.current) return;
+    if (sessionEndedRef.current || sessionStartedRef.current) return;
+    telemetryService.startSession({
+      id: sessionId,
+      playerId: currentPlayerId,
+      profileId: currentProfile.id,
+      startedAt: sessionStartedAtRef.current,
+      initialRoute: "/play",
+      activeMatchId: null,
+    });
+    sessionPlayerIdRef.current = currentPlayerId;
+    sessionProfileIdRef.current = currentProfile.id;
+    sessionStartedRef.current = true;
+    if (!sessionEventLoggedRef.current) {
+      telemetryService.logUIEvent({
+        sessionId,
+        timestamp: sessionStartedAtRef.current,
+        playerId: currentPlayerId,
+        profileId: currentProfile.id,
+        surface: "play-shell",
+        action: "session-started",
+      });
+      sessionEventLoggedRef.current = true;
+    }
+  }, [currentPlayerId, currentProfile?.id, sessionId]);
 
   useEffect(() => {
-    if (!modelStatesDirty) return;
-    const timer = window.setTimeout(() => {
-      saveModelStates(modelStates);
-      setModelStatesDirty(false);
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [modelStatesDirty, modelStates]);
-
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const flush = () => {
-      if (!modelStatesDirty) return;
-      saveModelStates(modelStates);
-      setModelStatesDirty(false);
-    };
+    if (typeof document === "undefined" || typeof window === "undefined") return;
     const handleVisibility = () => {
       if (document.visibilityState === "hidden") {
-        flush();
+        endCurrentSession("visibility-hidden");
       }
     };
-    const handleBeforeUnload = () => {
-      flush();
-    };
+    const handleBeforeUnload = () => endCurrentSession("beforeunload");
     document.addEventListener("visibilitychange", handleVisibility);
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => {
+      endCurrentSession("provider-unmount");
       document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, [modelStatesDirty, modelStates]);
-
-  useEffect(() => {
-    if (!currentPlayerId) return;
-    const fallbackProfile = playerProfiles[0];
-    if (!fallbackProfile) return;
-    if (allRounds.some(r => r.playerId === currentPlayerId && !r.profileId)) {
-      setAllRounds(prev => prev.map(r => {
-        if (r.playerId === currentPlayerId && !r.profileId) {
-          return { ...r, profileId: fallbackProfile.id };
-        }
-        return r;
-      }));
-      setRoundsDirty(true);
-    }
-    if (allMatches.some(m => m.playerId === currentPlayerId && !m.profileId)) {
-      setAllMatches(prev => prev.map(m => {
-        if (m.playerId === currentPlayerId && !m.profileId) {
-          return { ...m, profileId: fallbackProfile.id };
-        }
-        return m;
-      }));
-      setMatchesDirty(true);
-    }
-  }, [currentPlayerId, playerProfiles, allRounds, allMatches]);
+  }, [endCurrentSession]);
 
   const selectProfile = useCallback((id: string) => {
     if (!playerProfiles.some(p => p.id === id)) return;
-    setCurrentProfileId(id);
-    saveCurrentProfileId(id);
-  }, [playerProfiles]);
+    telemetryService.setCurrentProfile(id);
+    telemetryService.logUIEvent({
+      sessionId,
+      timestamp: new Date().toISOString(),
+      playerId: currentPlayerId ?? undefined,
+      profileId: id,
+      surface: "play-shell",
+      action: "profile-selected",
+    });
+  }, [currentPlayerId, playerProfiles, sessionId]);
 
   const getModelStateForProfile = useCallback(
     (profileId: string): StoredPredictorModelState | null => {
@@ -784,23 +754,23 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
 
   const saveModelStateForProfile = useCallback(
     (profileId: string, state: StoredPredictorModelState) => {
-      setModelStates(prev => {
-        const filtered = prev.filter(entry => entry.profileId !== profileId);
-        return filtered.concat({ ...state, profileId });
+      telemetryService.upsertPredictorModelState({
+        profileId,
+        modelVersion: state.modelVersion,
+        updatedAt: state.updatedAt,
+        roundsSeen: state.roundsSeen,
+        state: {
+          eta: state.state.eta,
+          weights: [...state.state.weights],
+          experts: state.state.experts,
+        },
       });
-      setModelStatesDirty(true);
     },
     [],
   );
 
   const clearModelStateForProfile = useCallback((profileId: string) => {
-    setModelStates(prev => {
-      const next = prev.filter(entry => entry.profileId !== profileId);
-      if (next.length !== prev.length) {
-        setModelStatesDirty(true);
-      }
-      return next;
-    });
+    telemetryService.deletePredictorModelState(profileId);
   }, []);
 
   const createProfile = useCallback(
@@ -836,36 +806,50 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
         nextProfileId: null,
         preferences: cloneProfilePreferences(),
       };
-      setProfiles(prev => prev.concat(profile));
-      setProfilesDirty(true);
+      telemetryService.upsertPlayerProfile(
+        players.find(player => player.id === targetPlayerId),
+        profile,
+      );
+      telemetryService.logUIEvent({
+        sessionId,
+        timestamp: new Date().toISOString(),
+        playerId: targetPlayerId,
+        profileId: profile.id,
+        surface: "play-shell",
+        action: "profile-created",
+      });
       if (!playerIdOverride || playerIdOverride === currentPlayerId) {
-        setCurrentProfileId(profile.id);
-        saveCurrentProfileId(profile.id);
+        telemetryService.setCurrentProfile(profile.id);
       }
       return profile;
     },
-    [currentPlayerId, profiles]
+    [currentPlayerId, profiles, players, sessionId]
   );
 
   const updateProfile = useCallback((id: string, patch: StatsProfileUpdate) => {
-    setProfiles(prev => prev.map(p => {
-      if (p.id !== id) return p;
-      const next = { ...p, ...patch };
-      if (patch.preferences) {
-        next.preferences = cloneProfilePreferences(patch.preferences);
-      }
-      if (patch.baseName || patch.version) {
-        const baseName = normalizeBaseName(patch.baseName ?? next.baseName);
-        const rawVersion = patch.version ?? next.version ?? 1;
-        const version =
-          typeof rawVersion === "number" && Number.isFinite(rawVersion) ? Math.max(1, Math.floor(rawVersion)) : 1;
-        next.baseName = baseName;
-        next.version = version;
-        next.name = makeProfileDisplayName(baseName, version);
-      }
-      return next;
-    }));
-    setProfilesDirty(true);
+    const current = profiles.find(profile => profile.id === id);
+    if (!current) return;
+    const next = { ...current, ...patch };
+    if (patch.preferences) {
+      next.preferences = cloneProfilePreferences(patch.preferences);
+    }
+    if (patch.baseName || patch.version) {
+      const baseName = normalizeBaseName(patch.baseName ?? next.baseName);
+      const rawVersion = patch.version ?? next.version ?? 1;
+      const version =
+        typeof rawVersion === "number" && Number.isFinite(rawVersion) ? Math.max(1, Math.floor(rawVersion)) : 1;
+      next.baseName = baseName;
+      next.version = version;
+      next.name = makeProfileDisplayName(baseName, version);
+    }
+    telemetryService.upsertPlayerProfile(
+      players.find(player => player.id === next.playerId),
+      next,
+    );
+  }, [players, profiles]);
+
+  const deleteProfile = useCallback((id: string) => {
+    telemetryService.deleteProfile(id);
   }, []);
 
   const forkProfileVersion = useCallback((id: string) => {
@@ -894,24 +878,33 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       nextProfileId: null,
       preferences: cloneProfilePreferences(source.preferences),
     };
-    setProfiles(prev => {
-      const updated = prev.map(p => {
-        if (p.id !== source.id) return p;
-        return {
-          ...p,
-          baseName,
-          version: sourceVersion,
-          name: makeProfileDisplayName(baseName, sourceVersion),
-          nextProfileId: newProfile.id,
-        };
-      });
-      return updated.concat(newProfile);
+    const updatedSource: StatsProfile = {
+      ...source,
+      baseName,
+      version: sourceVersion,
+      name: makeProfileDisplayName(baseName, sourceVersion),
+      nextProfileId: newProfile.id,
+    };
+    telemetryService.upsertPlayerProfile(
+      players.find(player => player.id === currentPlayerId),
+      updatedSource,
+    );
+    telemetryService.upsertPlayerProfile(
+      players.find(player => player.id === currentPlayerId),
+      newProfile,
+    );
+    telemetryService.logUIEvent({
+      sessionId,
+      timestamp: new Date().toISOString(),
+      playerId: currentPlayerId,
+      profileId: newProfile.id,
+      surface: "play-shell",
+      action: "profile-forked",
+      detail: source.id,
     });
-    setProfilesDirty(true);
-    setCurrentProfileId(newProfile.id);
-    saveCurrentProfileId(newProfile.id);
+    telemetryService.setCurrentProfile(newProfile.id);
     return newProfile;
-  }, [currentPlayerId, profiles]);
+  }, [currentPlayerId, profiles, players, sessionId]);
 
   const logRound = useCallback((round: Omit<RoundLog, "id" | "sessionId" | "playerId" | "profileId">) => {
     if (!currentPlayerId || !currentProfile) return null;
@@ -922,116 +915,154 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
       playerId: currentPlayerId,
       profileId: currentProfile.id,
     };
-    setAllRounds(prev => {
-      const next = prev.concat(entry);
-      const trimStart = Math.max(0, next.length - MAX_ROUNDS);
-      return trimStart ? next.slice(trimStart) : next;
-    });
-    setRoundsDirty(true);
+    telemetryService.logRound(entry);
     return entry;
   }, [sessionId, currentPlayerId, currentProfile]);
 
   const logMatch = useCallback((match: Omit<MatchSummary, "id" | "sessionId" | "playerId" | "profileId">) => {
     if (!currentPlayerId || !currentProfile) return null;
+    const canonicalMatchId = match.clientId ?? makeId("m");
     const entry: MatchSummary = {
       ...match,
-      id: makeId("m"),
+      id: canonicalMatchId,
       sessionId,
       playerId: currentPlayerId,
       profileId: currentProfile.id,
     };
-    setAllMatches(prev => prev.concat(entry));
-    setMatchesDirty(true);
+    telemetryService.logMatch(entry);
     return entry;
   }, [sessionId, currentPlayerId, currentProfile]);
 
+  const telemetryRoundLogs = useMemo(() => telemetry.rounds.map(telemetryRoundToRoundLog), [telemetry.rounds]);
+  const telemetryMatchSummaries = useMemo(() => telemetry.matches.map(telemetryMatchToMatchSummary), [telemetry.matches]);
+
   const rounds = useMemo(() => {
     if (!currentPlayerId || !currentProfile) return [] as RoundLog[];
-    return allRounds.filter(r => r.playerId === currentPlayerId && (r.profileId ?? currentProfile.id) === currentProfile.id);
-  }, [allRounds, currentPlayerId, currentProfile]);
+    return telemetryRoundLogs.filter(r => r.playerId === currentPlayerId && (r.profileId ?? currentProfile.id) === currentProfile.id);
+  }, [currentPlayerId, currentProfile, telemetryRoundLogs]);
 
   const matches = useMemo(() => {
     if (!currentPlayerId || !currentProfile) return [] as MatchSummary[];
-    return allMatches.filter(m => m.playerId === currentPlayerId && (m.profileId ?? currentProfile.id) === currentProfile.id);
-  }, [allMatches, currentPlayerId, currentProfile]);
+    return telemetryMatchSummaries.filter(m => m.playerId === currentPlayerId && (m.profileId ?? currentProfile.id) === currentProfile.id);
+  }, [currentPlayerId, currentProfile, telemetryMatchSummaries]);
 
   const adminUpdateRound = useCallback((id: string, patch: Partial<RoundLog>) => {
-    setAllRounds(prev => prev.map(r => (r.id === id ? { ...r, ...patch } : r)));
-    setRoundsDirty(true);
-  }, []);
+    const current = telemetryService.getStore().roundsById[id];
+    if (!current) return;
+    const next = {
+      ...current,
+      timestamp: patch.t ?? current.timestamp,
+      matchId: patch.matchId ?? current.matchId,
+      playerId: patch.playerId ?? current.playerId,
+      profileId: patch.profileId ?? current.profileId,
+      mode: (patch.mode ?? current.mode) as Mode,
+      bestOf: patch.bestOf ?? current.bestOf,
+      difficulty: patch.difficulty ?? current.difficulty,
+      player: patch.player ?? current.player,
+      ai: patch.ai ?? current.ai,
+      outcome: patch.outcome ?? current.outcome,
+      policy: patch.policy ?? current.policy,
+      confidence: patch.confidence ?? current.confidence,
+      confidenceBucket: patch.confidenceBucket ?? current.confidenceBucket,
+      reason: patch.reason ?? current.reason,
+      decisionTimeMs: patch.decisionTimeMs ?? current.decisionTimeMs,
+      streakAI: patch.streakAI ?? current.streakAI,
+      streakYou: patch.streakYou ?? current.streakYou,
+      mixer: patch.mixer ?? current.mixer,
+      heuristic: patch.heuristic ?? current.heuristic,
+      predictionId: (patch.mode ?? current.mode) === "challenge" ? current.predictionId : undefined,
+    };
+    telemetryService.upsertRound(next);
+    telemetryService.logUIEvent({
+      sessionId,
+      timestamp: new Date().toISOString(),
+      surface: "developer-console",
+      action: "admin-round-updated",
+      roundId: id,
+    });
+  }, [sessionId]);
 
   const adminDeleteRound = useCallback((id: string) => {
-    setAllRounds(prev => prev.filter(r => r.id !== id));
-    setRoundsDirty(true);
-  }, []);
+    telemetryService.deleteRound(id);
+    telemetryService.logUIEvent({
+      sessionId,
+      timestamp: new Date().toISOString(),
+      surface: "developer-console",
+      action: "admin-round-deleted",
+      roundId: id,
+    });
+  }, [sessionId]);
 
   const adminUpdateMatch = useCallback((id: string, patch: Partial<MatchSummary>) => {
-    setAllMatches(prev => prev.map(m => (m.id === id ? { ...m, ...patch } : m)));
-    setMatchesDirty(true);
-  }, []);
+    const current = telemetryService.getStore().matchesById[id];
+    if (!current) return;
+    const nextScore = patch.score ?? current.score;
+    const nextEndedAt = patch.endedAt ?? current.endedAt;
+    const nextWinner: MatchRecord["winner"] =
+      nextScore.you > nextScore.ai ? "player" : nextScore.ai > nextScore.you ? "ai" : "tie";
+    const nextStatus: MatchRecord["status"] = nextEndedAt ? "completed" : "active";
+    const next = {
+      ...current,
+      startedAt: patch.startedAt ?? current.startedAt,
+      endedAt: nextEndedAt,
+      mode: ((patch.mode ?? current.mode) as Mode),
+      bestOf: patch.bestOf ?? current.bestOf,
+      difficulty: patch.difficulty ?? current.difficulty,
+      score: nextScore,
+      rounds: patch.rounds ?? current.rounds,
+      roundsPlayed: patch.rounds ?? current.roundsPlayed,
+      aiWinRate: patch.aiWinRate ?? current.aiWinRate,
+      youSwitchedRate: patch.youSwitchedRate ?? current.youSwitchedRate,
+      notes: patch.notes ?? current.notes,
+      leaderboardScore: patch.leaderboardScore ?? current.leaderboardScore,
+      leaderboardMaxStreak: patch.leaderboardMaxStreak ?? current.leaderboardMaxStreak,
+      leaderboardRoundCount: patch.leaderboardRoundCount ?? current.leaderboardRoundCount,
+      leaderboardTimerBonus: patch.leaderboardTimerBonus ?? current.leaderboardTimerBonus,
+      leaderboardBeatConfidenceBonus: patch.leaderboardBeatConfidenceBonus ?? current.leaderboardBeatConfidenceBonus,
+      leaderboardType: patch.leaderboardType ?? current.leaderboardType,
+      winner: nextWinner,
+      completed: Boolean(nextEndedAt),
+      status: nextStatus,
+    };
+    telemetryService.upsertMatch(next);
+    telemetryService.logUIEvent({
+      sessionId,
+      timestamp: new Date().toISOString(),
+      surface: "developer-console",
+      action: "admin-match-updated",
+      matchId: id,
+    });
+  }, [sessionId]);
 
   const adminDeleteMatch = useCallback((id: string) => {
-    setAllMatches(prev => prev.filter(m => m.id !== id));
-    setMatchesDirty(true);
-  }, []);
+    telemetryService.deleteMatch(id);
+    telemetryService.logUIEvent({
+      sessionId,
+      timestamp: new Date().toISOString(),
+      surface: "developer-console",
+      action: "admin-match-deleted",
+      matchId: id,
+    });
+  }, [sessionId]);
 
   const exportRoundsCsv = useCallback(() => {
-    const headers = [
-      "playerId",
-      "playerName",
-      "grade",
-      "school",
-      "priorExperience",
-      "profileName",
-      "timestamp",
-      "mode",
-      "bestOf",
-      "difficulty",
-      "player",
-      "ai",
-      "outcome",
-      "policy",
-      "confidence",
-      "decisionTimeMs",
-      "streakAI",
-      "streakYou",
-    ];
-    const lines = [headers.join(",")];
-    const playerName = currentPlayer?.playerName ?? "";
-    const grade = currentPlayer?.grade ?? "";
-    const school = currentPlayer?.school ?? "";
-    const prior = currentPlayer?.priorExperience ?? "";
-    const profileName = currentProfile?.name ?? "";
-    rounds.forEach(r => {
-      lines.push([
-        r.playerId,
-        JSON.stringify(playerName),
-        grade,
-        JSON.stringify(school ?? ""),
-        JSON.stringify(prior ?? ""),
-        JSON.stringify(profileName),
-        r.t,
-        r.mode,
-        r.bestOf,
-        r.difficulty,
-        r.player,
-        r.ai,
-        r.outcome,
-        r.policy,
-        r.confidence.toFixed(2),
-        r.decisionTimeMs ?? "",
-        r.streakAI,
-        r.streakYou,
-      ].join(","));
+    return telemetryService.buildLegacyRoundsCsv({
+      playerId: currentPlayerId,
+      profileId: currentProfile?.id ?? null,
     });
-    return lines.join("\n");
-  }, [rounds, currentPlayer, currentProfile]);
+  }, [currentPlayerId, currentProfile]);
+  const buildProfilesCsv = useCallback(() => telemetryService.buildProfilesCsv(), []);
+  const buildSessionsCsv = useCallback(() => telemetryService.buildSessionsCsv(), []);
+  const buildMatchesCsv = useCallback(() => telemetryService.buildMatchesCsv(), []);
+  const buildTelemetryRoundsCsv = useCallback(() => telemetryService.buildRoundsCsv(), []);
+  const buildPredictionsCsv = useCallback(() => telemetryService.buildPredictionsCsv(), []);
+  const buildEventsCsv = useCallback(() => telemetryService.buildEventsCsv(), []);
 
   const value = useMemo<StatsContextValue>(() => ({
     rounds,
     matches,
     sessionId,
-    currentProfileId: currentProfile?.id ?? null,
+    currentProfileId,
     currentProfile: currentProfile ?? null,
     profiles: playerProfiles,
     logRound,
@@ -1039,13 +1070,20 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     selectProfile,
     createProfile,
     updateProfile,
+    deleteProfile,
     forkProfileVersion,
     exportRoundsCsv,
+    buildProfilesCsv,
+    buildSessionsCsv,
+    buildMatchesCsv,
+    buildTelemetryRoundsCsv,
+    buildPredictionsCsv,
+    buildEventsCsv,
     getModelStateForProfile,
     saveModelStateForProfile,
     clearModelStateForProfile,
-    adminRounds: allRounds,
-    adminMatches: allMatches,
+    adminRounds: telemetryRoundLogs,
+    adminMatches: telemetryMatchSummaries,
     adminProfiles: profiles,
     adminUpdateRound,
     adminDeleteRound,
@@ -1062,13 +1100,20 @@ export function StatsProvider({ children }: { children: React.ReactNode }) {
     selectProfile,
     createProfile,
     updateProfile,
+    deleteProfile,
     forkProfileVersion,
     exportRoundsCsv,
+    buildProfilesCsv,
+    buildSessionsCsv,
+    buildMatchesCsv,
+    buildTelemetryRoundsCsv,
+    buildPredictionsCsv,
+    buildEventsCsv,
     getModelStateForProfile,
     saveModelStateForProfile,
     clearModelStateForProfile,
-    allRounds,
-    allMatches,
+    telemetryRoundLogs,
+    telemetryMatchSummaries,
     profiles,
     adminUpdateRound,
     adminDeleteRound,

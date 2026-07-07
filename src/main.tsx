@@ -9,6 +9,9 @@ import {
 import { router } from "./router";
 import "./index.css";
 
+// Active app entry point.
+// The old monolithic App.tsx shell has been archived under .old-app-archive/
+// and is no longer part of the compiled runtime source tree.
 function AppBootstrap() {
   if (typeof window !== "undefined" && shouldRedirectToOfficialSite(window.location)) {
     return <OfficialSiteRedirectPage destination={getOfficialSiteRedirectUrl(window.location)} />;

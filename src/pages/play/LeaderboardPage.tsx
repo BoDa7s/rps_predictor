@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { AIMode, Mode } from "../../gameTypes";
+import { AIMode } from "../../gameTypes";
 import {
   aggregateLeaderboardEntries,
   collectLeaderboardEntries,
@@ -8,11 +8,11 @@ import {
   type LeaderboardPlayerInfo,
 } from "../../leaderboardData";
 import { usePlayers } from "../../players";
-import { useStats } from "../../stats";
+import { useTelemetryStore } from "../../telemetry";
 
-const MODE_LABELS: Record<Mode, string> = {
+const MODE_LABELS: Record<"challenge" | "training", string> = {
   challenge: "Challenge",
-  practice: "Practice",
+  training: "Training",
 };
 
 const DIFFICULTY_LABELS: Record<AIMode, string> = {
@@ -29,7 +29,7 @@ function formatDate(value: string) {
 
 export default function LeaderboardPage() {
   const { players, currentPlayer } = usePlayers();
-  const { adminMatches, adminRounds } = useStats();
+  const telemetry = useTelemetryStore();
 
   const playersById = useMemo(() => {
     const map = new Map<string, LeaderboardPlayerInfo>();
@@ -42,11 +42,11 @@ export default function LeaderboardPage() {
     return map;
   }, [players]);
 
-  const roundsByMatchId = useMemo(() => groupRoundsByMatch(adminRounds), [adminRounds]);
+  const roundsByMatchId = useMemo(() => groupRoundsByMatch(telemetry.rounds), [telemetry.rounds]);
 
   const { entries, hasPracticeLegacy } = useMemo(
-    () => collectLeaderboardEntries({ matches: adminMatches, roundsByMatchId, playersById }),
-    [adminMatches, playersById, roundsByMatchId],
+    () => collectLeaderboardEntries({ matches: telemetry.matches, roundsByMatchId, playersById }),
+    [playersById, roundsByMatchId, telemetry.matches],
   );
 
   const rows = useMemo(() => aggregateLeaderboardEntries(entries), [entries]);
@@ -82,7 +82,7 @@ export default function LeaderboardPage() {
 
         <article className="rounded-3xl border border-white/10 bg-white/[0.04] p-6">
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-cyan-200/75">Ranked Sessions</p>
-          <div className="mt-3 text-4xl font-semibold tracking-[-0.05em] text-white">{totalChallengeRuns}</div>
+          <div data-testid="leaderboard-ranked-sessions" className="mt-3 text-4xl font-semibold tracking-[-0.05em] text-white">{totalChallengeRuns}</div>
           <p className="mt-3 text-sm leading-7 text-slate-300">
             {totalRankedPlayers} ranked player{totalRankedPlayers === 1 ? "" : "s"} with challenge data available.
           </p>
@@ -123,7 +123,7 @@ export default function LeaderboardPage() {
                       </div>
                     </td>
                     <td className="px-3 py-4 font-semibold text-white">{row.score.toLocaleString()} pts</td>
-                    <td className="px-3 py-4">{MODE_LABELS[row.mode]}</td>
+                    <td className="px-3 py-4">{MODE_LABELS[row.mode as keyof typeof MODE_LABELS] ?? row.mode}</td>
                     <td className="px-3 py-4">{DIFFICULTY_LABELS[row.difficulty]}</td>
                     <td className="px-3 py-4">{row.streak > 0 ? row.streak : "-"}</td>
                     <td className="px-3 py-4 text-slate-400">{formatDate(row.endedAt)}</td>
@@ -136,7 +136,7 @@ export default function LeaderboardPage() {
 
         {hasPracticeLegacy && (
           <p className="mt-4 text-xs text-slate-400">
-            Practice runs are archived as Practice Legacy and excluded from these rankings.
+            Training runs are excluded from these rankings.
           </p>
         )}
       </section>

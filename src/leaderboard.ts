@@ -1,5 +1,5 @@
-import { AIMode } from "./gameTypes";
-import { RoundLog } from "./stats";
+import { AIMode, Mode } from "./gameTypes";
+import type { TelemetryMode } from "./telemetry";
 
 export interface MatchScoreBreakdown {
   total: number;
@@ -8,6 +8,15 @@ export interface MatchScoreBreakdown {
   timerBonus: number;
   beatConfidenceBonus: number;
 }
+
+type ScoreRoundLike = {
+  mode: Mode | TelemetryMode;
+  difficulty: AIMode;
+  outcome: "win" | "lose" | "tie";
+  decisionTimeMs?: number;
+  confidence: number;
+  streakYou?: number;
+};
 
 const DIFFICULTY_MULTIPLIER: Record<AIMode, number> = {
   fair: 1,
@@ -22,7 +31,7 @@ function clampDecisionTime(decisionTimeMs?: number): number {
   return Math.max(0, decisionTimeMs);
 }
 
-export function computeMatchScore(rounds: RoundLog[]): MatchScoreBreakdown | null {
+export function computeMatchScore(rounds: ScoreRoundLike[]): MatchScoreBreakdown | null {
   let total = 0;
   let countedRounds = 0;
   let maxStreak = 0;
@@ -30,7 +39,7 @@ export function computeMatchScore(rounds: RoundLog[]): MatchScoreBreakdown | nul
   let beatConfidenceTotal = 0;
 
   for (const round of rounds) {
-    if (round.mode !== "challenge" && round.mode !== "practice") continue;
+    if (round.mode !== "challenge" && round.mode !== "practice" && round.mode !== ("training" as Mode | TelemetryMode)) continue;
     countedRounds += 1;
     const base = round.outcome === "win" ? 100 : round.outcome === "tie" ? 25 : 0;
     const multiplier = DIFFICULTY_MULTIPLIER[round.difficulty] ?? 1;
