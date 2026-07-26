@@ -1,0 +1,9 @@
+{
+    "schemaVersion":  1,
+    "operationsRepository":  "BoDa7s/Agent-Operations",
+    "policyVersion":  "1.1.0",
+    "localOperationsPath":  "C:\\Users\\Adam-\\OneDrive\\Documents\\Git\\Operations\\Agent-Operations",
+    "projectPolicy":  "projects/rps-predictor.json",
+    "localInstructions":  "docs/PROJECT-OPERATIONS.md",
+    "handoff":  "docs/AGENT-HANDOFF.md"
+}
