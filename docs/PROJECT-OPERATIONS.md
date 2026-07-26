@@ -3,7 +3,7 @@
 - Project ID: `rps-predictor`
 - Repository: `BoDa7s/rps_predictor`
 - Expected default branch: `main`
-- Shared policy version: `1.2.0`
+- Shared policy version: `1.3.0`
 
 ## Project rules
 
@@ -12,6 +12,8 @@
 - Run relevant runtime telemetry checks for gameplay or data changes.
 - Run Playwright and inspect screenshots for layout changes.
 - Treat telemetry as the canonical gameplay data source.
+- Every managed-project task must discover and update its structured session in
+  the private Agent-Operations issue ledger.
 
 Add verified repository-specific architecture, rollback, and manual acceptance
 details here. Do not duplicate the entire shared contract.

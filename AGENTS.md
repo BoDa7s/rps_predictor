@@ -1,5 +1,14 @@
 # RPS Predictor Agent Guide
 
+## 0. Shared Agent Operations
+
+Before project work, read `.agent-operations.json` and the private
+`BoDa7s/Agent-Operations` contract. Read `SESSION-LEDGER.md`, query matching
+open `agent-session` issues, and resume or create the structured session.
+Checkpoint meaningful progress, failures, external changes, owner waits, and
+closeout so Codex, ChatGPT MCP, Claude, or Copilot can continue. Verify current
+repository and runtime state rather than trusting prior session claims.
+
 ## 1. Title & Purpose
 Single-player Rock-Paper-Scissors predictor built with React, TypeScript, and Vite; this guide orients contributors and CI agents.
 
