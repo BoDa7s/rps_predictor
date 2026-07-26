@@ -11,6 +11,12 @@ approval, secret, testing, and release boundaries. If the shared contract is
 unavailable, report that onboarding cannot be verified and stop substantive
 repository work.
 
+Before local mutation, create or reuse the generic Claude worktree under the
+configured active root. Remote-connector-only work is exempt. When work is
+complete, ask the owner to leave, archive, or delete it. Never clean it up
+automatically.
+
 Read the shared `SESSION-LEDGER.md`, query matching open `agent-session`
 issues, and resume or create the structured session. Checkpoint work so Codex,
 ChatGPT MCP, Claude, or Copilot can continue after interruption.
+
