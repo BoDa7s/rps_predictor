@@ -10,7 +10,13 @@ unavailable, say that onboarding cannot be verified and stop substantive
 repository work. Do not introduce credentials, publication, or deployment
 behavior outside the approved workflow.
 
+Remote connector changes and suggestions do not require a local worktree.
+Before any local mutation, create or reuse the generic Copilot worktree under
+the configured active root. When work is complete, ask the owner to leave,
+archive, or delete it. Never clean it up automatically.
+
 Before managed-project work, read the shared `SESSION-LEDGER.md`, query matching
 open `agent-session` issues, and resume or create the structured session.
 Checkpoint progress, failures, external changes, owner waits, and closeout so
 other agent platforms can continue.
+

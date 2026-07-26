@@ -3,7 +3,7 @@
 - Project ID: `rps-predictor`
 - Repository: `BoDa7s/rps_predictor`
 - Expected default branch: `main`
-- Shared policy version: `1.4.0`
+- Shared policy version: `1.5.0`
 
 ## Project rules
 
@@ -14,6 +14,8 @@
 - Treat telemetry as the canonical gameplay data source.
 - Every managed-project task must discover and update its structured session in
   the private Agent-Operations issue ledger.
+- Local repository mutations must use the configured isolated agent worktree;
+  remote-connector-only changes are exempt.
 
 Add verified repository-specific architecture, rollback, and manual acceptance
 details here. Do not duplicate the entire shared contract.
