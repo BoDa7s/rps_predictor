@@ -14,6 +14,11 @@ Checkpoint meaningful progress, failures, external changes, owner waits, and
 closeout so Codex, ChatGPT MCP, Claude, or Copilot can continue. Verify current
 repository and runtime state rather than trusting prior session claims.
 
+Before local mutation, create or reuse the generic platform worktree under the
+active root configured in the shared `local-worktrees.json`. Remote-connector-only
+work is exempt. At completion, ask the owner to leave, archive, or delete the
+worktree; never clean it up automatically.
+
 ## 1. Title & Purpose
 Single-player Rock-Paper-Scissors predictor built with React, TypeScript, and Vite; this guide orients contributors and CI agents.
 
