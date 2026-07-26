@@ -2,6 +2,11 @@
 
 ## 0. Shared Agent Operations
 
+Before reading project source, run the shared read-only onboarding check.
+If this repository is unregistered or its bootstrap is missing, inconsistent,
+or outdated, stop, identify the exact conditions, and ask the owner to
+authorize onboarding before substantive work.
+
 Before project work, read `.agent-operations.json` and the private
 `BoDa7s/Agent-Operations` contract. Read `SESSION-LEDGER.md`, query matching
 open `agent-session` issues, and resume or create the structured session.

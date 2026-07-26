@@ -3,7 +3,7 @@
 - Project ID: `rps-predictor`
 - Repository: `BoDa7s/rps_predictor`
 - Expected default branch: `main`
-- Shared policy version: `1.3.0`
+- Shared policy version: `1.4.0`
 
 ## Project rules
 
