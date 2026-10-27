@@ -1,24 +1,5 @@
 # RPS Predictor Agent Guide
 
-## 0. Shared Agent Operations
-
-Before reading project source, run the shared read-only onboarding check.
-If this repository is unregistered or its bootstrap is missing, inconsistent,
-or outdated, stop, identify the exact conditions, and ask the owner to
-authorize onboarding before substantive work.
-
-Before project work, read `.agent-operations.json` and the private
-`BoDa7s/Agent-Operations` contract. Read `SESSION-LEDGER.md`, query matching
-open `agent-session` issues, and resume or create the structured session.
-Checkpoint meaningful progress, failures, external changes, owner waits, and
-closeout so Codex, ChatGPT MCP, Claude, or Copilot can continue. Verify current
-repository and runtime state rather than trusting prior session claims.
-
-Before local mutation, create or reuse the generic platform worktree under the
-active root configured in the shared `local-worktrees.json`. Remote-connector-only
-work is exempt. At completion, ask the owner to leave, archive, or delete the
-worktree; never clean it up automatically.
-
 ## 1. Title & Purpose
 Single-player Rock-Paper-Scissors predictor built with React, TypeScript, and Vite; this guide orients contributors and CI agents.
 
